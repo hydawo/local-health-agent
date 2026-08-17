@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+#
+# Blocks commits that contain health data (plan §5).
+#
+# The .gitignore already covers the usual paths. This exists for the cases it
+# misses: a file staged with `git add -f`, an export copied somewhere
+# unexpected, a consent record, a stray index. Someone forking this repo to work
+# on it should not be able to publish their own health data by accident.
+#
+# Install:  ./scripts/install-hooks.sh
+# Bypass:   git commit --no-verify   (it is a convenience, not a guarantee)
+
+set -euo pipefail
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+fixtures_prefix="tests/fixtures/"
+problems=()
+
+flag() { problems+=("$1"$'\n''      '"$2"); }
+
+while IFS= read -r file; do
+    # Synthetic fixtures are the one place health-shaped files belong.
+    case "$file" in "$fixtures_prefix"*) continue ;; esac
+
+    base=$(basename "$file")
+    case "$file" in
+        *export.xml|*export_cda.xml|*export.zip)
+            flag "$file" "looks like an Apple Health export" ;;
+        *.index/*|*/health.db|health.db|*.db-wal|*.db-shm)
+            flag "$file" "looks like a generated index (rebuild it instead)" ;;
+        *cloud_consent.json)
+            flag "$file" "is a personal consent record" ;;
+        */apple_health_export/*|*/clinical-records/*|*/workout-routes/*)
+            flag "$file" "is inside an Apple Health export folder" ;;
+        records/*|*/records/*)
+            flag "$file" "is inside a records folder (medical records)" ;;
+        notes/*|*/notes/*)
+            flag "$file" "is inside a notes folder (personal notes)" ;;
+        HealthData/*|*/HealthData/*)
+            flag "$file" "is inside a HealthData folder" ;;
+        *.lance|*/vectors/*)
+            flag "$file" "looks like a generated vector index" ;;
+    esac
+
+    # A committed PDF is worth a second look wherever it lives: bloodwork is the
+    # single most likely thing to be staged by accident.
+    case "$base" in
+        *.pdf) flag "$file" "is a PDF — if this is bloodwork, do not commit it" ;;
+    esac
+done <<< "$staged"
+
+# Content check: an Apple Health export has an unmistakable signature, so catch
+# one that was renamed.
+while IFS= read -r file; do
+    case "$file" in "$fixtures_prefix"*) continue ;; esac
+    [ -f "$file" ] || continue
+    case "$file" in
+        *.xml|*.txt|*.dat)
+            if head -c 4096 -- "$file" 2>/dev/null | grep -q "HKQuantityTypeIdentifier\|<!DOCTYPE HealthData"; then
+                flag "$file" "contains HealthKit records"
+            fi ;;
+    esac
+done <<< "$staged"
+
+if [ ${#problems[@]} -eq 0 ]; then
+    exit 0
+fi
+
+cat >&2 <<'EOF'
+
+  COMMIT BLOCKED — this looks like health data
+  ────────────────────────────────────────────────────────────────────
+
+EOF
+for problem in "${problems[@]}"; do
+    printf '    %s\n' "$problem" >&2
+done
+cat >&2 <<'EOF'
+
+  Your health data belongs in your data folder, not in this repository.
+  Test data belongs in tests/fixtures/ and must be synthetic — invented
+  values in the real format, never anything derived from real records.
+
+  Unstage:              git restore --staged <file>
+  Genuinely intended:   git commit --no-verify
+
+EOF
+exit 1

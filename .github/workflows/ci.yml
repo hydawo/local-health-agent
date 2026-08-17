@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both, because the OS-level network sandbox differs: Linux has
+        # `unshare`, macOS has `sandbox-exec`. The offline proof should hold on
+        # each, not just on whichever one the author uses.
+        os: [ubuntu-latest, macos-latest]
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Tesseract (OCR path)
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update && sudo apt-get install -y tesseract-ocr
+          else
+            brew install tesseract
+          fi
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Test suite
+        run: pytest -q
+
+      # Called out as its own step so a privacy regression is visible in the
+      # job list rather than buried in the suite's output (plan §9).
+      - name: Prove the local tier makes no network calls
+        run: pytest tests/test_no_network.py -v
+
+      - name: offline-check (end-to-end proof)
+        run: health-agent offline-check
+
+  # The eval set's tool-layer half runs here. The agent half needs a local
+  # model and is run by hand at milestone boundaries — see tests/eval_results.md.
+  accuracy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - name: Eval set
+        run: pytest tests/test_eval.py -v
+
+  no-health-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the tree for health data
+        run: |
+          # The same rules as the pre-commit hook, applied to what actually
+          # landed — a contributor can bypass a hook, but not this.
+          if git ls-files | grep -vE '^tests/fixtures/' \
+             | grep -E '(^|/)(export\.xml|export_cda\.xml|export\.zip|health\.db|cloud_consent\.json)$|(^|/)(records|notes|HealthData|\.index)/|\.lance$'; then
+            echo "::error::health-data-shaped paths are tracked in this repo"
+            exit 1
+          fi
+          # An Apple Health export renamed to something innocuous. Scoped to
+          # data-shaped files: source and tests legitimately mention HealthKit
+          # identifiers, and flagging those would train people to ignore this.
+          if git grep -lI --cached -e 'HKQuantityTypeIdentifier' -e '<!DOCTYPE HealthData' \
+             -- '*.xml' '*.txt' '*.csv' '*.json' '*.dat' '*.log' \
+                ':!tests/fixtures/*' | grep .; then
+            echo "::error::a tracked data file contains HealthKit records"
+            exit 1
+          fi
+          echo "No health data tracked."

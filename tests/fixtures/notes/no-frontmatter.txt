@@ -1,0 +1,8 @@
+Plain text note with no frontmatter and no date anywhere in the filename.
+
+This one exists so the ingester has to cope with the simplest possible input:
+no YAML block, no headings, no tags, nothing to parse. It should still be
+stored, chunked, and searchable, and it should be reported as undated rather
+than given a date guessed from the file's modification time.
+
+Walked most of the way home instead of taking the train. Felt fine afterwards.

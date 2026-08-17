@@ -1,0 +1,59 @@
+# --- Health data: never commit ------------------------------------------------
+# The data folder lives outside the repo by default (~/HealthData). These
+# patterns exist so a fork that keeps data alongside the code still can't commit
+# it. A pre-commit hook enforcing the same thing is milestone 9 (plan §5).
+#
+# Anchored to the repo root on purpose: an unanchored `records/` or `export.xml`
+# would also swallow tests/fixtures/, and synthetic fixtures must stay committed.
+/HealthData/
+/health_data/
+/data/
+/records/
+/notes/
+/healthkit/
+/export.xml
+/export.zip
+/export_cda.xml
+/apple_health_export/
+
+# Generated index, wherever it ends up
+.index/
+*.db
+*.db-wal
+*.db-shm
+
+# Real exports and clinical documents anywhere in the tree
+**/apple_health_export/
+**/clinical-records/
+**/workout-routes/
+*.dcm
+
+# --- Python -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# --- Planning documents -------------------------------------------------------
+# The build plan and the positioning writeup are working documents, not part of
+# the public repo described in plan §7. Ignored rather than deleted: they are
+# still the source of truth for why the code is shaped the way it is. Remove
+# these two lines and commit them if you want them published.
+/local-health-agent-plan.md
+/background-and-differentiation.md
+
+# --- Generated demo media -----------------------------------------------------
+# `demo/demo.tape` is the reviewable source; its output is not committed.
+docs/demo.gif
+docs/demo-last-frame.png
+
+# --- Editors / OS -------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/

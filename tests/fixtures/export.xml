@@ -1,0 +1,142 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE HealthData [
+<!-- HealthKit Export Version: 14 -->
+<!-- SYNTHETIC FIXTURE. Every value below is invented. See fixtures/README.md. -->
+<!ELEMENT HealthData (ExportDate,Me,(Record|Correlation|Workout|ActivitySummary)*)>
+<!ATTLIST HealthData
+  locale CDATA #REQUIRED
+>
+<!ELEMENT ExportDate EMPTY>
+<!ATTLIST ExportDate
+  value CDATA #REQUIRED
+>
+<!ELEMENT Me EMPTY>
+<!ATTLIST Me
+  HKCharacteristicTypeIdentifierDateOfBirth   CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierBiologicalSex CDATA #REQUIRED
+  HKCharacteristicTypeIdentifierBloodType     CDATA #REQUIRED
+>
+<!ELEMENT Record ((MetadataEntry|HeartRateVariabilityMetadataList)*)>
+<!ATTLIST Record
+  type          CDATA #REQUIRED
+  unit          CDATA #IMPLIED
+  value         CDATA #IMPLIED
+  sourceName    CDATA #REQUIRED
+  sourceVersion CDATA #IMPLIED
+  device        CDATA #IMPLIED
+  creationDate  CDATA #IMPLIED
+  startDate     CDATA #REQUIRED
+  endDate       CDATA #REQUIRED
+>
+<!-- Note: Any Records that appear as children of a correlation also appear as top-level records in this document. -->
+<!ELEMENT Correlation ((MetadataEntry|Record)*)>
+<!ATTLIST Correlation
+  type          CDATA #REQUIRED
+  sourceName    CDATA #REQUIRED
+  startDate     CDATA #REQUIRED
+  endDate       CDATA #REQUIRED
+>
+<!ELEMENT Workout ((MetadataEntry|WorkoutStatistics)*)>
+<!ATTLIST Workout
+  workoutActivityType   CDATA #REQUIRED
+  duration              CDATA #IMPLIED
+  durationUnit          CDATA #IMPLIED
+  totalDistance         CDATA #IMPLIED
+  totalDistanceUnit     CDATA #IMPLIED
+  totalEnergyBurned     CDATA #IMPLIED
+  totalEnergyBurnedUnit CDATA #IMPLIED
+  sourceName            CDATA #REQUIRED
+  startDate             CDATA #REQUIRED
+  endDate               CDATA #REQUIRED
+>
+<!ELEMENT WorkoutStatistics EMPTY>
+<!ATTLIST WorkoutStatistics
+  type      CDATA #REQUIRED
+  startDate CDATA #REQUIRED
+  endDate   CDATA #REQUIRED
+  average   CDATA #IMPLIED
+  minimum   CDATA #IMPLIED
+  maximum   CDATA #IMPLIED
+  sum       CDATA #IMPLIED
+  unit      CDATA #IMPLIED
+>
+<!ELEMENT ActivitySummary EMPTY>
+<!ATTLIST ActivitySummary
+  dateComponents         CDATA #IMPLIED
+  activeEnergyBurned     CDATA #IMPLIED
+  activeEnergyBurnedGoal CDATA #IMPLIED
+  activeEnergyBurnedUnit CDATA #IMPLIED
+  appleExerciseTime      CDATA #IMPLIED
+  appleExerciseTimeGoal  CDATA #IMPLIED
+  appleStandHours        CDATA #IMPLIED
+  appleStandHoursGoal    CDATA #IMPLIED
+>
+<!ELEMENT MetadataEntry EMPTY>
+<!ATTLIST MetadataEntry
+  key   CDATA #REQUIRED
+  value CDATA #REQUIRED
+>
+]>
+<HealthData locale="en_US">
+ <ExportDate value="2026-03-16 09:00:00 -0400"/>
+ <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01" HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexNotSet" HKCharacteristicTypeIdentifierBloodType="HKBloodTypeNotSet"/>
+
+ <!-- Resting heart rate: one sample per day, 2026-03-01 .. 2026-03-07.
+      Values 58, 60, 62, 59, 61, 57, 63 -> sum 420, mean exactly 60.0 -->
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" device="&lt;&lt;HKDevice: 0x0000, name:Apple Watch, manufacturer:Apple Inc., model:Watch, hardware:Watch0,0, software:10.2&gt;&gt;" unit="count/min" creationDate="2026-03-01 08:05:00 -0500" startDate="2026-03-01 08:00:00 -0500" endDate="2026-03-01 08:00:00 -0500" value="58"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-02 08:05:00 -0500" startDate="2026-03-02 08:00:00 -0500" endDate="2026-03-02 08:00:00 -0500" value="60"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-03 08:05:00 -0500" startDate="2026-03-03 08:00:00 -0500" endDate="2026-03-03 08:00:00 -0500" value="62"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-04 08:05:00 -0500" startDate="2026-03-04 08:00:00 -0500" endDate="2026-03-04 08:00:00 -0500" value="59"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-05 08:05:00 -0500" startDate="2026-03-05 08:00:00 -0500" endDate="2026-03-05 08:00:00 -0500" value="61"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-06 08:05:00 -0500" startDate="2026-03-06 08:00:00 -0500" endDate="2026-03-06 08:00:00 -0500" value="57"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" sourceVersion="10.2" unit="count/min" creationDate="2026-03-07 08:05:00 -0500" startDate="2026-03-07 08:00:00 -0500" endDate="2026-03-07 08:00:00 -0500" value="63"/>
+
+ <!-- Steps on 2026-03-02 from TWO sources, the multi-source double-counting case.
+      Watch: 1000 + 2000 + 3000 = 6000.  Phone: 2500 + 3000 = 5500.
+      combine=max -> 6000, combine=sum -> 11500. -->
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Watch" sourceVersion="10.2" unit="count" creationDate="2026-03-02 09:10:00 -0500" startDate="2026-03-02 09:00:00 -0500" endDate="2026-03-02 09:10:00 -0500" value="1000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Watch" sourceVersion="10.2" unit="count" creationDate="2026-03-02 12:35:00 -0500" startDate="2026-03-02 12:30:00 -0500" endDate="2026-03-02 12:45:00 -0500" value="2000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Watch" sourceVersion="10.2" unit="count" creationDate="2026-03-02 18:20:00 -0500" startDate="2026-03-02 18:00:00 -0500" endDate="2026-03-02 18:20:00 -0500" value="3000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Phone" sourceVersion="18.1" unit="count" creationDate="2026-03-02 09:12:00 -0500" startDate="2026-03-02 09:00:00 -0500" endDate="2026-03-02 09:10:00 -0500" value="2500"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Phone" sourceVersion="18.1" unit="count" creationDate="2026-03-02 18:25:00 -0500" startDate="2026-03-02 18:00:00 -0500" endDate="2026-03-02 18:20:00 -0500" value="3000"/>
+
+ <!-- Steps on 2026-03-03 from ONE source: 4000 + 4500 = 8500 either way. -->
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Watch" sourceVersion="10.2" unit="count" creationDate="2026-03-03 10:05:00 -0500" startDate="2026-03-03 10:00:00 -0500" endDate="2026-03-03 10:20:00 -0500" value="4000"/>
+ <Record type="HKQuantityTypeIdentifierStepCount" sourceName="Fixture Watch" sourceVersion="10.2" unit="count" creationDate="2026-03-03 17:05:00 -0500" startDate="2026-03-03 17:00:00 -0500" endDate="2026-03-03 17:30:00 -0500" value="4500"/>
+
+ <!-- Sleep spanning midnight, night of 2026-03-04 into 2026-03-05.
+      InBed 30m on 03-04; Core 2h + Deep 45m + REM 45m on 03-05. -->
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-04 22:30:00 -0500" endDate="2026-03-04 23:00:00 -0500" value="HKCategoryValueSleepAnalysisInBed"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-05 00:00:00 -0500" endDate="2026-03-05 02:00:00 -0500" value="HKCategoryValueSleepAnalysisAsleepCore"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-05 02:00:00 -0500" endDate="2026-03-05 02:45:00 -0500" value="HKCategoryValueSleepAnalysisAsleepDeep"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-05 02:45:00 -0500" endDate="2026-03-05 03:30:00 -0500" value="HKCategoryValueSleepAnalysisAsleepREM"/>
+
+ <!-- HRV: 45, 55, 50 ms -> mean exactly 50.0 -->
+ <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Fixture Watch" sourceVersion="10.2" unit="ms" creationDate="2026-03-01 08:10:00 -0500" startDate="2026-03-01 08:10:00 -0500" endDate="2026-03-01 08:10:00 -0500" value="45">
+  <MetadataEntry key="HKAlgorithmVersion" value="2"/>
+ </Record>
+ <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Fixture Watch" sourceVersion="10.2" unit="ms" creationDate="2026-03-02 08:10:00 -0500" startDate="2026-03-02 08:10:00 -0500" endDate="2026-03-02 08:10:00 -0500" value="55"/>
+ <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Fixture Watch" sourceVersion="10.2" unit="ms" creationDate="2026-03-03 08:10:00 -0500" startDate="2026-03-03 08:10:00 -0500" endDate="2026-03-03 08:10:00 -0500" value="50"/>
+
+ <!-- Body mass, one before and one after the 2026-03-08 DST change:
+      the offset shifts from -0500 to -0400 mid-file, as it does in a real export. -->
+ <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Fixture Scale" sourceVersion="3" unit="lb" creationDate="2026-03-01 07:30:00 -0500" startDate="2026-03-01 07:30:00 -0500" endDate="2026-03-01 07:30:00 -0500" value="180.0"/>
+ <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Fixture Scale" sourceVersion="3" unit="lb" creationDate="2026-03-09 07:30:00 -0400" startDate="2026-03-09 07:30:00 -0400" endDate="2026-03-09 07:30:00 -0400" value="179.0"/>
+
+ <!-- Blood pressure: the top-level pair. The identical records also appear inside
+      the Correlation below and must NOT be counted twice. -->
+ <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Fixture Cuff" sourceVersion="1" unit="mmHg" creationDate="2026-03-07 20:00:00 -0500" startDate="2026-03-07 20:00:00 -0500" endDate="2026-03-07 20:00:00 -0500" value="118"/>
+ <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Fixture Cuff" sourceVersion="1" unit="mmHg" creationDate="2026-03-07 20:00:00 -0500" startDate="2026-03-07 20:00:00 -0500" endDate="2026-03-07 20:00:00 -0500" value="76"/>
+ <Correlation type="HKCorrelationTypeIdentifierBloodPressure" sourceName="Fixture Cuff" startDate="2026-03-07 20:00:00 -0500" endDate="2026-03-07 20:00:00 -0500">
+  <Record type="HKQuantityTypeIdentifierBloodPressureSystolic" sourceName="Fixture Cuff" sourceVersion="1" unit="mmHg" creationDate="2026-03-07 20:00:00 -0500" startDate="2026-03-07 20:00:00 -0500" endDate="2026-03-07 20:00:00 -0500" value="118"/>
+  <Record type="HKQuantityTypeIdentifierBloodPressureDiastolic" sourceName="Fixture Cuff" sourceVersion="1" unit="mmHg" creationDate="2026-03-07 20:00:00 -0500" startDate="2026-03-07 20:00:00 -0500" endDate="2026-03-07 20:00:00 -0500" value="76"/>
+ </Correlation>
+
+ <Workout workoutActivityType="HKWorkoutActivityTypeRunning" duration="30" durationUnit="min" totalDistance="5" totalDistanceUnit="km" totalEnergyBurned="300" totalEnergyBurnedUnit="kcal" sourceName="Fixture Watch" startDate="2026-03-06 17:00:00 -0500" endDate="2026-03-06 17:30:00 -0500">
+  <MetadataEntry key="HKIndoorWorkout" value="0"/>
+  <WorkoutStatistics type="HKQuantityTypeIdentifierHeartRate" startDate="2026-03-06 17:00:00 -0500" endDate="2026-03-06 17:30:00 -0500" average="150" minimum="110" maximum="175" unit="count/min"/>
+ </Workout>
+
+ <ActivitySummary dateComponents="2026-03-01" activeEnergyBurned="420" activeEnergyBurnedGoal="500" activeEnergyBurnedUnit="kcal" appleExerciseTime="25" appleExerciseTimeGoal="30" appleStandHours="11" appleStandHoursGoal="12"/>
+ <ActivitySummary dateComponents="2026-03-02" activeEnergyBurned="530" activeEnergyBurnedGoal="500" activeEnergyBurnedUnit="kcal" appleExerciseTime="41" appleExerciseTimeGoal="30" appleStandHours="12" appleStandHoursGoal="12"/>
+</HealthData>

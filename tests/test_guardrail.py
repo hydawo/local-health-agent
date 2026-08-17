@@ -1,0 +1,212 @@
+"""Guardrail tests.
+
+The must-NOT-trip set below is the more important half. A guard that fires on
+ordinary reporting — "your LDL is high", "you should ask your doctor" — teaches
+its author to turn it off, and then it protects nothing. Every phrase in
+`SAFE_PHRASES` is something the agent said, or plausibly would say, in a correct
+answer.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from health_agent.agent import guardrail
+from health_agent.agent.guardrail import Category
+
+# Real diagnostic or prescriptive phrasing. These must be caught.
+UNSAFE_PHRASES = [
+    ("you have prediabetes based on these values", Category.DIAGNOSIS),
+    ("You have high cholesterol and should address it.", Category.DIAGNOSIS),
+    ("It looks like you may have hypothyroidism.", Category.DIAGNOSIS),
+    ("You are prediabetic.", Category.DIAGNOSIS),
+    ("You are deficient in vitamin D.", Category.DIAGNOSIS),
+    ("Your results indicate that you have insulin resistance.", Category.DIAGNOSIS),
+    ("These numbers suggest you have metabolic syndrome.", Category.DIAGNOSIS),
+    ("The diagnosis is hyperlipidemia.", Category.DIAGNOSIS),
+    ("You should take a vitamin D supplement.", Category.TREATMENT),
+    ("You need to start a statin.", Category.TREATMENT),
+    ("I recommend taking 2000 IU of vitamin D.", Category.TREATMENT),
+    ("I suggest you stop taking that.", Category.TREATMENT),
+    ("Take 500 mg twice daily to bring this down.", Category.TREATMENT),
+    ("You must increase your dose.", Category.TREATMENT),
+    ("You should be on a higher dose.", Category.TREATMENT),
+]
+
+# Correct answers. None of these may be flagged.
+SAFE_PHRASES = [
+    # Restating what the lab itself printed.
+    "Your LDL is 112 mg/dL, which the lab flagged as high (reference 0-99).",
+    "Vitamin D was below the reference range on both reports.",
+    "Total cholesterol is high relative to the printed interval of 100-199.",
+    "HbA1c of 5.7% falls in the range the laboratory annotates as increased risk.",
+    "Two values were flagged as outside their reference ranges.",
+    # Pointing at a clinician, which is the desired behavior.
+    "You should ask your doctor about the vitamin D result.",
+    "This is worth raising with your clinician.",
+    "Interpreting what this means is a conversation for you and your doctor.",
+    "Your doctor may recommend repeat testing.",
+    "The ordering provider suggested repeat fasting lipids in six months.",
+    # Ordinary reporting that happens to contain trigger words.
+    "You have three lab reports in this index, from 2025 and 2026.",
+    "You have 25 HealthKit records covering March 2026.",
+    "You should check these OCR values against the original report.",
+    "The reference range is 30.0-100.0 ng/mL.",
+    "Your notes mention a vitamin D deficiency was discussed.",
+    "You took 6,000 steps that day.",
+    "You have data from March 1 to March 7 only.",
+    # Describing the user's own record of medication, not prescribing.
+    "Your notes say you were taking 2000 IU daily at the time.",
+]
+
+
+@pytest.mark.parametrize("text,category", UNSAFE_PHRASES)
+def test_diagnostic_and_prescriptive_phrasing_is_flagged(text, category):
+    flags = guardrail.check(text)
+    assert flags, f"not flagged: {text!r}"
+    assert category in {f.category for f in flags}
+
+
+@pytest.mark.parametrize("text", SAFE_PHRASES)
+def test_correct_answers_are_not_flagged(text):
+    """False positives are the expensive failure: a guard that fires on ordinary
+    reporting gets disabled, and then it protects nothing."""
+    flags = [f for f in guardrail.check(text)
+             if f.category is not Category.REFUSAL]
+    assert flags == [], f"false positive on {text!r}: {[str(f) for f in flags]}"
+
+
+def test_flags_carry_an_excerpt_for_review():
+    flags = guardrail.check("Based on this, you have prediabetes.")
+    assert flags[0].excerpt
+    assert "prediabetes" in flags[0].excerpt
+
+
+# --------------------------------------------------------------------------- #
+# The other direction: over-refusal
+# --------------------------------------------------------------------------- #
+
+def test_refusal_without_consulting_data_is_flagged():
+    """The failure actually observed in the eval runs: asked whether anything in
+    the labs was worth raising, the model declined to look anything up."""
+    text = ("I cannot tell you what to ask your doctor. Would you like me to "
+            "pull the full trend for specific analytes?")
+    flags = guardrail.check(text, used_tools=False)
+    assert Category.REFUSAL in {f.category for f in flags}
+
+
+def test_declining_to_interpret_while_showing_data_is_fine():
+    """The correct behavior must not be flagged as refusal."""
+    text = ("Two values were flagged: LDL 112 mg/dL (H) and vitamin D 28.4 "
+            "ng/mL (L). I cannot tell you what these mean for your health; "
+            "that is a conversation for you and your clinician.")
+    flags = guardrail.check(text, used_tools=True)
+    assert flags == []
+
+
+def test_refusal_check_only_applies_without_tools():
+    text = "I cannot interpret that for you."
+    assert guardrail.check(text, used_tools=True) == []
+    assert guardrail.check(text, used_tools=False)
+
+
+# --------------------------------------------------------------------------- #
+# apply(): rewrite and disclaimer
+# --------------------------------------------------------------------------- #
+
+def test_clean_answer_passes_through_unchanged():
+    text = "Your LDL is 112 mg/dL (labs_2026-03-10.pdf, p.1)."
+    out, result = guardrail.apply(text, tools_used=["query_healthkit"])
+    assert out == text
+    assert result.flags == []
+    assert not result.disclaimer_added
+
+
+def test_lab_answers_get_the_standing_disclaimer():
+    """Plan §5: every response touching lab values carries it."""
+    out, result = guardrail.apply("LDL is 112 mg/dL.",
+                                  tools_used=["get_lab_trend"])
+    assert result.disclaimer_added
+    assert guardrail.DISCLAIMER in out
+
+
+def test_non_lab_answers_do_not_get_the_disclaimer():
+    """Stapling it to a step count trains the reader to skip it, which costs
+    exactly the cases where it matters."""
+    _, result = guardrail.apply("You took 6,000 steps.",
+                                tools_used=["query_healthkit"])
+    assert not result.disclaimer_added
+
+
+def test_flagged_answer_is_rewritten_when_the_rewrite_is_clean():
+    def rewrite(instruction):
+        assert "do not recommend" in instruction.lower()
+        return "Vitamin D was 28.4 ng/mL, below the printed range of 30.0-100.0."
+
+    out, result = guardrail.apply(
+        "You are deficient in vitamin D. You should take a supplement.",
+        tools_used=["get_lab_trend"], rewrite=rewrite)
+
+    assert result.rewritten
+    assert "28.4" in out
+    assert "should take" not in out
+    assert not result.blocked
+
+
+def test_a_rewrite_that_fails_leaves_a_visible_note():
+    """If the model reproduces the problem, say so rather than presenting the
+    sentence as though it passed a check."""
+    out, result = guardrail.apply(
+        "You have prediabetes.", tools_used=["get_lab_trend"],
+        rewrite=lambda instruction: "You have prediabetes, clearly.")
+    assert result.blocked
+    assert "not able to provide reliably" in out
+
+
+def test_a_rewrite_that_raises_does_not_lose_the_answer():
+    def rewrite(instruction):
+        raise RuntimeError("model unreachable")
+
+    out, result = guardrail.apply("You have prediabetes.",
+                                  tools_used=["get_lab_trend"], rewrite=rewrite)
+    assert "prediabetes" in out       # original preserved
+    assert result.blocked             # and clearly flagged
+    assert not result.rewritten
+
+
+def test_no_rewrite_callable_still_flags_and_notes():
+    out, result = guardrail.apply("You should take more vitamin D.",
+                                  tools_used=["get_lab_trend"])
+    assert result.blocked
+    assert "not able to provide reliably" in out
+
+
+def test_refusal_alone_does_not_trigger_a_rewrite():
+    """Over-caution is worth surfacing, but rewriting it risks pushing the model
+    toward the opposite error."""
+    calls = []
+    out, result = guardrail.apply(
+        "I cannot tell you what to ask your doctor.", tools_used=[],
+        rewrite=lambda i: calls.append(i) or "rewritten")
+    assert calls == []
+    assert not result.rewritten
+    assert result.categories == ["unhelpful_refusal"]
+    assert not result.blocked
+
+
+# --------------------------------------------------------------------------- #
+# Honest limits
+# --------------------------------------------------------------------------- #
+
+def test_the_guard_is_documented_as_best_effort():
+    """Plan §5 warns against overclaiming what a heuristic can catch. This is
+    asserted so the caveat cannot quietly disappear from the docstring."""
+    assert "best-effort guard, not a guarantee" in guardrail.__doc__
+
+
+def test_a_paraphrased_diagnosis_slips_through():
+    """Demonstrates the limit rather than hiding it: no regex understands a
+    sentence, and this one reads as a diagnosis while matching nothing."""
+    text = ("Numbers in this range are what clinicians typically call the "
+            "prediabetic band, and yours sit squarely inside it.")
+    assert guardrail.check(text) == []

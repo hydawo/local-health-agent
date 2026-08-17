@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SYNTHETIC FIXTURE for the malformed-input policy in plan §5a: skip the bad
+  element, log a metadata-only warning, keep ingesting the rest. Never crash a
+  whole run over one bad record.
+
+  Contains, in order:
+    1. a good record
+    2. a record with an unparseable startDate     -> skipped, counted
+    3. a record with no startDate at all          -> skipped, counted
+    4. a record with a non-numeric value on a quantity type -> kept as text
+    5. a record with no unit                      -> kept
+    6. another good record
+-->
+<HealthData locale="en_US">
+ <ExportDate value="2026-03-16 09:00:00 -0400"/>
+ <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01" HKCharacteristicTypeIdentifierBiologicalSex="HKBiologicalSexNotSet"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" unit="count/min" startDate="2026-03-01 08:00:00 -0500" endDate="2026-03-01 08:00:00 -0500" value="58"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" unit="count/min" startDate="not-a-date" endDate="2026-03-02 08:00:00 -0500" value="60"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" unit="count/min" endDate="2026-03-03 08:00:00 -0500" value="62"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" unit="count/min" startDate="2026-03-04 08:00:00 -0500" endDate="2026-03-04 08:00:00 -0500" value="unknown"/>
+ <Record type="HKQuantityTypeIdentifierBodyMass" sourceName="Fixture Scale" startDate="2026-03-05 07:30:00 -0500" endDate="2026-03-05 07:30:00 -0500" value="180.0"/>
+ <Record type="HKQuantityTypeIdentifierRestingHeartRate" sourceName="Fixture Watch" unit="count/min" startDate="2026-03-06 08:00:00 -0500" endDate="2026-03-06 08:00:00 -0500" value="57"/>
+</HealthData>

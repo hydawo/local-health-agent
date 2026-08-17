@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "health-agent"
+version = "0.1.0"
+description = "Local-first natural-language Q&A over your own health data"
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["health", "healthkit", "apple-health", "local-first", "privacy", "llm", "ollama"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
+# 3.11 floor: datetime.UTC, tomllib, and exception groups are all used or planned.
+requires-python = ">=3.11"
+
+# HealthKit ingestion (M1) is stdlib-only. Milestone 2 adds PDF parsing and the
+# local vector store. Note what is NOT here: no HTTP client (the Ollama calls in
+# health_agent/embeddings.py use stdlib urllib, which keeps the network surface
+# to one auditable file), and no orchestration framework (plan §4).
+dependencies = [
+    "pdfplumber>=0.11",   # PDF text/tables; renders via bundled pypdfium2, so
+                          # OCR needs no poppler or ImageMagick
+    "lancedb>=0.24",      # file-based vector store, no server, no telemetry
+]
+
+[project.optional-dependencies]
+# OCR for scanned records. Optional because it also needs the Tesseract binary,
+# and requiring a system install to read ordinary text PDFs is a bad trade.
+ocr = ["pytesseract>=0.3.10"]
+# The opt-in cloud tier (plan §4 tier 2). Optional on purpose: the local tier is
+# the product, and someone who never opts in should not have an HTTP client, a
+# vendor SDK, or its transitive dependencies installed at all. `health-agent ask
+# --cloud` tells you to install this if it is missing.
+cloud = ["anthropic>=0.70"]
+dev = ["pytest>=8.0", "pytesseract>=0.3.10", "reportlab>=4.0", "anthropic>=0.70"]
+
+[project.scripts]
+health-agent = "health_agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["health_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: spawns a sandboxed subprocess; deselect with -m 'not slow'",
+]
