@@ -32,6 +32,11 @@ dependencies = [
     "lancedb>=0.24",      # file-based vector store, no server, no telemetry
 ]
 
+[project.urls]
+Homepage = "https://github.com/hydawo/local-health-agent"
+Repository = "https://github.com/hydawo/local-health-agent"
+Changelog = "https://github.com/hydawo/local-health-agent/releases"
+
 [project.optional-dependencies]
 # OCR for scanned records. Optional because it also needs the Tesseract binary,
 # and requiring a system install to read ordinary text PDFs is a bad trade.
