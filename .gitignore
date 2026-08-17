@@ -49,9 +49,10 @@ htmlcov/
 /background-and-differentiation.md
 
 # --- Generated demo media -----------------------------------------------------
-# `demo/demo.tape` is the reviewable source; its output is not committed.
-docs/demo.gif
-docs/demo-last-frame.png
+# docs/demo.gif IS committed, despite being generated: the README needs it to
+# render on GitHub, and an uncommitted hero image is just a broken image. The
+# tape it came from is committed alongside it, so it stays reviewable and
+# regenerable — which is the property that mattered.
 
 # --- Editors / OS -------------------------------------------------------------
 .DS_Store

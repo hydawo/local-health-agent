@@ -25,6 +25,11 @@ These are the values recorded in your own files, not medical advice.
 No account, no upload, no server. A local model reads a local index and cites the
 file and page behind every number.
 
+![health-agent ingesting an export, answering questions, and proving it never touched the network](docs/demo.gif)
+
+*Recorded from `demo/demo.sh` against the synthetic fixtures — you can run the
+same thing. Regenerate with `vhs demo/demo.tape`.*
+
 **Why this exists.** Health assistants generally ask you to send your medical
 records somewhere. This one is an argument that you don't have to — and that the
 claim should be *checkable* rather than asserted. `health-agent offline-check`
