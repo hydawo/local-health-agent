@@ -58,6 +58,64 @@ trend questions the guardrail was built and tested against, so the non-diagnosis
 constraint needs re-testing specifically against intake-informed queries before
 this ships.
 
+Intake is also the natural seeding signal for the literature corpus — see 2a,
+which has a privacy question that must be settled before either item is built.
+
+### 2a. Seeding the literature corpus from intake
+
+*Depends on: #1 and #2. Decide this before building either.*
+
+Rather than fetching literature lazily when a question needs it, seed the local
+corpus at intake: someone who records type 2 diabetes, metformin, and an ACL
+reconstruction gets those topic areas pulled once, up front, forming a starting
+library that grows as real questions require more.
+
+**The reason to do this is offline integrity, not speed.** Worth stating
+plainly, because the intuition is that prefetching makes queries faster and it
+does not:
+
+- Queries are not retrieval-bound. In the release eval, answers took 20-171s and
+  essentially all of it was token generation on a 27B model. Vector search over
+  a local corpus is milliseconds. Pre-warming saves nothing measurable.
+- What it actually buys is that **no health question ever triggers a network
+  call.** A lazily-fetched corpus phones out mid-query, which is precisely what
+  `offline-check` currently proves cannot happen — it would turn the headline
+  claim into "local, except when it isn't." Seeding at an explicit, consented
+  moment (intake, or an `update-literature` command) keeps every actual question
+  fully local.
+- Secondary benefit: a corpus bounded to the person's real conditions has less
+  competing material in the embedding space than a general one. Intake is a
+  better seeding signal than #1's current "expanded from real questions."
+
+**The blocking design question is a privacy inversion.** The intake list is the
+most sensitive data in the system — more revealing than any single lab value.
+Turning it into literature queries means transmitting a reconstructable medical
+profile to NCBI, keyed to the user's IP, in a feature that presents itself as
+local-first. That is a worse leak than anything the current build does, and it
+arrives wearing a privacy badge.
+
+Options, to be chosen deliberately rather than defaulted into:
+
+- **Pre-built topic packs** downloaded wholesale (a "cardiometabolic" pack, a
+  "post-surgical rehab" pack), so a request reveals a category rather than a
+  profile. Currently the most promising: it also makes the corpus versionable
+  (#6) and reproducible across users.
+- Broad topic bundles instead of precise query strings, accepting a larger
+  corpus for a vaguer request.
+- Batching real topics with decoys, which is weaker than it sounds and worth
+  treating as a fallback rather than a plan.
+- Routing through a user-supplied proxy or Tor, which moves the problem rather
+  than solving it and adds a dependency the project has so far avoided.
+
+Whichever is chosen, `THREAT_MODEL.md` gains a claim, and the fetch step needs
+the same consent treatment the cloud tier already has — a versioned notice that
+says exactly what leaves the machine.
+
+**It also compounds the guardrail problem.** Holding both "this person has type
+2 diabetes" and a diabetes literature corpus makes synthesized advice materially
+easier to produce by accident. That is exactly the synthesis risk #4 gates on,
+so #4's review must happen before this ships, not after.
+
 ## 3. Physician visit prep — suggested questions to ask
 
 *Depends on: nothing strictly, but much better with #1 and #2.*
