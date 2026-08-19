@@ -49,6 +49,15 @@ class Config:
         backups treat the two halves of the index as one thing."""
         return self.index_dir / "vectors"
 
+    @property
+    def literature_path(self) -> Path:
+        """The corpus index. Beside the personal index, never joined to it."""
+        return self.index_dir / "literature.db"
+
+    @property
+    def literature_vector_path(self) -> Path:
+        return self.index_dir / "vectors"
+
 
 def resolve(data_dir: str | os.PathLike[str] | None = None,
             index_path: str | os.PathLike[str] | None = None) -> Config:

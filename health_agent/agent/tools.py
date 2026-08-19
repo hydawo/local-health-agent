@@ -49,6 +49,11 @@ MAX_LAB_POINTS = 40
 # roughly 800 tokens, which leaves room for the other tools in one turn.
 MAX_SEARCH_RESULTS = 8
 MAX_SNIPPET_CHARS = 600
+# Literature findings per call. Deliberately smaller than MAX_SEARCH_RESULTS:
+# each finding carries a citation, a tier, and a year alongside its text, so
+# five is already a substantial share of one turn's context.
+MAX_LITERATURE_FINDINGS = 5
+MAX_FINDING_CHARS = 700
 
 
 @dataclass
@@ -63,6 +68,8 @@ class ToolContext:
     conn: Any
     vector_path: Any
     embedder_factory: Callable[[], Any] | None = None
+    literature_conn: Any | None = None
+    literature_vector_path: Any | None = None
 
 
 @dataclass
@@ -533,6 +540,118 @@ def _search_records(ctx: ToolContext, args: dict) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# search_medical_literature
+# --------------------------------------------------------------------------- #
+
+def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
+    from ..literature import corpus as lit_corpus
+
+    query = (args.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+
+    if ctx.literature_conn is None:
+        # Not an error: a corpus is optional. But the model must be told that
+        # the absence is why there is nothing here, so it does not fall back on
+        # recalled medical knowledge — the failure this tool exists to fix.
+        return {
+            "corpus_installed": False,
+            "findings": [],
+            "note": ("A literature corpus is not installed on this machine. Say "
+                     "that you have no literature to cite and that you cannot "
+                     "state clinical thresholds or general medical facts "
+                     "without one. Do not answer from general knowledge."),
+        }
+
+    limit = min(int(args.get("limit") or MAX_LITERATURE_FINDINGS),
+                MAX_LITERATURE_FINDINGS)
+    min_tier = args.get("min_tier") or None
+    since_year = args.get("since_year") or None
+
+    try:
+        findings = _literature_hits(ctx, query, limit, min_tier, since_year)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    coverage = lit_corpus.coverage(ctx.literature_conn)
+    if not findings:
+        return {
+            "corpus_installed": True,
+            "findings": [],
+            "no_matches": True,
+            "corpus": coverage,
+            "note": ("The corpus holds nothing on this. Say that your "
+                     "literature does not cover it, name what it does cover, "
+                     "and do not answer from general knowledge."),
+        }
+
+    payload: dict = {
+        "corpus_installed": True,
+        "corpus": {"packs": coverage["packs"], "built": coverage["built"],
+                   "article_count": coverage["article_count"]},
+        "method": findings[0].method,
+        "findings": [
+            {
+                "title": f.title,
+                "text": " ".join(f.text.split())[:MAX_FINDING_CHARS],
+                "citation": f.citation,
+                "pmid": f.pmid,
+                "doi": f.doi,
+                "year": f.year,
+                "evidence_tier": f.evidence_tier,
+                "tier_source": f.tier_source,
+                "license": f.license,
+                "retracted": f.retracted,
+                **({"retraction_note": f.retraction_note} if f.retracted else {}),
+            }
+            for f in findings
+        ],
+        "note": (
+            "These are findings about populations from published research, not "
+            "facts about this person. State each one separately with its "
+            "evidence tier and its year — 'a 2019 meta-analysis found...' — and "
+            "cite it. Do not merge several findings into a single conclusion, "
+            "and do not turn any of them into a recommendation about what this "
+            "person should do."
+        ),
+    }
+    if any(f.retracted for f in findings):
+        payload["retraction_warning"] = (
+            "One or more findings come from a RETRACTED publication. Say so "
+            "beside the citation, and do not present it as current evidence.")
+    if any(f.evidence_tier == "unknown" for f in findings):
+        payload["tier_warning"] = (
+            "Findings with evidence_tier 'unknown' had no publication type "
+            "recorded. Say that their study design is unknown rather than "
+            "implying one.")
+    return payload
+
+
+def _literature_hits(ctx: ToolContext, query: str, limit: int,
+                     min_tier: str | None, since_year: int | None) -> list:
+    """Semantic where possible, keyword otherwise. Never raises for retrieval."""
+    from ..literature import embed as lit_embed
+    from ..literature import store as lit_store
+    from ..store import vector_store
+
+    if ctx.embedder_factory is not None and ctx.literature_vector_path:
+        try:
+            embedder = ctx.embedder_factory()
+            store = vector_store.VectorStore(ctx.literature_vector_path,
+                                             table_name=lit_embed.TABLE_NAME)
+            return lit_store.search(ctx.literature_conn, store, embedder, query,
+                                    limit=limit, min_tier=min_tier,
+                                    since_year=since_year)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retrieval must not kill a turn
+            log.warning("corpus semantic search unavailable (%s)",
+                        type(exc).__name__)
+    return lit_store.keyword_search(ctx.literature_conn, query, limit=limit,
+                                    min_tier=min_tier, since_year=since_year)
+
+
+# --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
 
@@ -670,6 +789,42 @@ TOOLS: tuple[Tool, ...] = (
             "required": ["query"],
         },
         handler=_search_records,
+    ),
+    Tool(
+        name="search_medical_literature",
+        description=(
+            "Search a local corpus of published medical research for what the "
+            "evidence says about a topic. Use this for ANY general medical "
+            "claim — what a marker is associated with, what a threshold is, "
+            "what research has found — because you must not state such things "
+            "from your own knowledge. Returns individual findings, each with a "
+            "dated citation and an evidence tier. These describe populations, "
+            "NOT this person; use the other tools for their own data."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string",
+                          "description": "The topic, in natural language."},
+                "min_tier": {
+                    "type": "string",
+                    "enum": ["meta_analysis", "systematic_review", "guideline",
+                             "rct", "narrative_review", "observational",
+                             "case_report"],
+                    "description": (
+                        "Strongest-to-weakest floor on study design. Omit "
+                        "unless the question is specifically about evidence "
+                        "quality; filtering too hard returns nothing."
+                    ),
+                },
+                "since_year": {"type": "integer",
+                               "description": "Only findings published since."},
+                "limit": {"type": "integer",
+                          "description": f"Max findings, up to {MAX_LITERATURE_FINDINGS}."},
+            },
+            "required": ["query"],
+        },
+        handler=_search_medical_literature,
     ),
 )
 
