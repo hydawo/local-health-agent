@@ -142,6 +142,33 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
     step("agent tool: search_records", lambda: (
         f"{len(agent_tools.dispatch(ctx, 'search_records', {'query': 'vitamin d'}).get('results', []))} results"))
 
+    # The literature corpus, built and searched entirely inside the sandbox.
+    # Without this the falsifiable proof would have a hole exactly where the
+    # newest code is.
+    from health_agent.literature import corpus as lit_corpus
+    from health_agent.literature import embed as lit_embed
+    from health_agent.literature import medline
+    from health_agent.literature import schema as lit_schema
+
+    corpus_xml = data_dir / "literature" / "corpus.xml"
+    if corpus_xml.exists():
+        lit_conn = lit_schema.connect(workdir / "literature.db", create=True)
+        lit_schema.initialize(lit_conn)
+        step("build literature corpus", lambda: (
+            f"{lit_corpus.build(lit_conn, medline.parse_articles(corpus_xml.read_bytes()), slug='fixture', version='1', license='synthetic').articles} articles"))
+
+        lit_store_path = workdir / "literature_vectors"
+        lit_vectors = vector_store.VectorStore(lit_store_path,
+                                               table_name=lit_embed.TABLE_NAME)
+        step("embed literature corpus", lambda: (
+            f"{lit_embed.embed_corpus(lit_conn, lit_vectors, embedder)} chunks"))
+
+        ctx.literature_conn = lit_conn
+        ctx.literature_vector_path = lit_store_path
+        step("agent tool: search_medical_literature", lambda: (
+            f"{len(agent_tools.dispatch(ctx, 'search_medical_literature', {'query': 'blood pressure'}).get('findings', []))} findings"))
+        lit_conn.close()
+
     conn.close()
     return steps
 

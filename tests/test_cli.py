@@ -411,3 +411,31 @@ def test_search_json_carries_kind_and_section(cli_records):
     assert code == 0
     assert payload[0]["kind"] == "note"
     assert payload[0]["section"]
+
+
+def test_literature_build_and_status(tmp_path, capsys):
+    from health_agent.cli import main
+
+    fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "literature", "build",
+                 "--from", str(fixture), "--slug", "test", "--version", "1",
+                 "--no-embed"])
+    assert code == 0
+    assert "articles" in capsys.readouterr().out
+
+    code = main(["--index", str(index), "literature", "status"])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "test@1" in out
+
+
+def test_literature_status_without_a_corpus_explains_rather_than_crashes(
+        tmp_path, capsys):
+    from health_agent.cli import main
+
+    code = main(["--index", str(tmp_path / ".index" / "health.db"),
+                 "literature", "status"])
+    assert code != 0
+    assert "literature build" in capsys.readouterr().err

@@ -21,6 +21,7 @@ from __future__ import annotations
 import platform
 import shutil
 import socket
+import sys
 from pathlib import Path
 
 import pytest
@@ -238,3 +239,63 @@ def test_a_failure_is_reported_rather_than_swallowed(tmp_path, monkeypatch):
     assert result.passed is False
     assert result.proves_offline is False
     assert "could not start the sandbox" in result.error
+
+
+# --------------------------------------------------------------------------- #
+# The literature corpus must not open a hole in the network boundary
+# --------------------------------------------------------------------------- #
+
+def test_the_query_path_cannot_reach_a_fetcher():
+    """The network boundary, enforced statically rather than by discipline.
+
+    Slice 2 adds `literature/fetch/`. This asserts that nothing reachable from
+    the ask path imports it — so the headline claim (no health question touches
+    the network) is checked by CI rather than by remembering.
+
+    Run in a subprocess rather than by deleting health_agent* out of
+    sys.modules and re-importing in-process: churning module identity mid-test-
+    session can corrupt state for tests that already hold references to those
+    modules, which is a worse failure mode than the one this test is guarding
+    against. offline_check.py already runs its own checks via a subprocess
+    child process for the same reason — this follows that pattern.
+    """
+    import subprocess
+
+    code = (
+        "import sys\n"
+        "import importlib\n"
+        "importlib.import_module('health_agent.agent.orchestrator')\n"
+        "importlib.import_module('health_agent.agent.tools')\n"
+        "importlib.import_module('health_agent.literature.store')\n"
+        "leaked = [n for n in sys.modules "
+        "if n.startswith('health_agent.literature.fetch')]\n"
+        "print('LEAKED:' + ','.join(leaked))\n"
+    )
+    completed = subprocess.run([sys.executable, "-c", code],
+                               capture_output=True, text=True, timeout=60)
+    assert completed.returncode == 0, completed.stderr
+    leaked_line = next(
+        line for line in completed.stdout.splitlines()
+        if line.startswith("LEAKED:"))
+    leaked = [n for n in leaked_line[len("LEAKED:"):].split(",") if n]
+    assert not leaked, f"the query path imported a fetcher: {leaked}"
+
+    # Nothing under health_agent.literature may reach the network at all. The
+    # corpus is read locally; only slice 2's fetch package will be allowed a
+    # client, and this asserts it has not arrived early or by accident.
+    literature_dir = Path(offline_check.__file__).parent / "literature"
+    for path in literature_dir.rglob("*.py"):
+        text = path.read_text()
+        for forbidden in ("import urllib", "import http", "import socket",
+                          "import requests"):
+            assert forbidden not in text, (
+                f"{path} imports {forbidden!r}; the corpus must not reach the "
+                f"network")
+
+
+def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):
+    """The falsifiable proof must not develop a hole where the new tool is."""
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    names = [s["step"] for s in steps]
+    assert any("search_medical_literature" in n for n in names)
+    assert all(s["ok"] for s in steps)

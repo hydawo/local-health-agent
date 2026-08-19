@@ -762,14 +762,26 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
             return 2
 
     conn = sqlite_schema.open_for_read(cfg.index_path)
+    literature_conn = None
     try:
         def embedder_factory():
             return embeddings.get_embedder(args.embedder)
+
+        from .literature import schema as lit_schema
+
+        try:
+            literature_conn = lit_schema.connect(cfg.literature_path)
+        except lit_schema.CorpusNotFound:
+            # Optional. The tool reports its own absence in terms the model
+            # can use.
+            pass
 
         ctx = agent.ToolContext(
             conn=conn,
             vector_path=cfg.vector_path,
             embedder_factory=embedder_factory,
+            literature_conn=literature_conn,
+            literature_vector_path=cfg.literature_vector_path,
         )
 
         show_progress = not args.json and not args.quiet
@@ -882,6 +894,8 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     finally:
+        if literature_conn is not None:
+            literature_conn.close()
         conn.close()
 
 
@@ -1204,6 +1218,64 @@ def cmd_embed(args: argparse.Namespace, cfg: config.Config) -> int:
         return 2
     finally:
         conn.close()
+
+
+def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
+    from .literature import corpus as lit_corpus
+    from .literature import embed as lit_embed
+    from .literature import medline, schema as lit_schema
+
+    source = Path(args.source).expanduser()
+    if not source.is_file():
+        print(f"No such file: {source}", file=sys.stderr)
+        return 2
+
+    try:
+        articles = medline.parse_articles(source.read_bytes())
+    except medline.MedlineParseError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    conn = lit_schema.connect(cfg.literature_path, create=True)
+    lit_schema.initialize(conn)
+    stats = lit_corpus.build(conn, articles, slug=args.slug,
+                             version=args.version, license=args.license)
+    print(f"{stats.articles} articles, {stats.chunks} chunks"
+          f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
+
+    if not args.no_embed:
+        embedder = embeddings.get_embedder(args.embed_backend)
+        store = vector_store.VectorStore(cfg.literature_vector_path,
+                                         table_name=lit_embed.TABLE_NAME)
+        try:
+            done = lit_embed.embed_corpus(conn, store, embedder)
+            print(f"embedded {done} chunks with {embedder.name}")
+        except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
+            print("Ollama unavailable; corpus search will use keyword matching "
+                  "until you run this again.", file=sys.stderr)
+    conn.close()
+    return 0
+
+
+def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
+    from .literature import corpus as lit_corpus
+    from .literature import schema as lit_schema
+
+    try:
+        conn = lit_schema.connect(cfg.literature_path)
+    except lit_schema.CorpusNotFound as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    report = lit_corpus.coverage(conn)
+    print(f"packs:    {', '.join(report['packs']) or '(none)'}")
+    print(f"articles: {report['article_count']}")
+    print(f"years:    {report['year_range'][0]}-{report['year_range'][1]}")
+    print(f"built:    {report['built']}")
+    print("tiers:    " + ", ".join(f"{k}={v}" for k, v in report["tiers"].items()))
+    print("topics:   " + ", ".join(report["topics"][:10]))
+    conn.close()
+    return 0
 
 
 def cmd_offline_check(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1590,6 +1662,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_consent.add_argument("--show-notice", action="store_true",
                            help="print the full disclosure and exit")
     p_consent.set_defaults(func=cmd_cloud_consent)
+
+    literature = sub.add_parser(
+        "literature", help="manage the local medical literature corpus")
+    lit_sub = literature.add_subparsers(dest="literature_command", required=True)
+
+    p_lit_build = lit_sub.add_parser("build", help="build a corpus from MEDLINE XML")
+    p_lit_build.add_argument("--from", dest="source", required=True,
+                             help="path to a MEDLINE PubmedArticleSet XML file")
+    p_lit_build.add_argument("--slug", default="local")
+    p_lit_build.add_argument("--version", default="1")
+    p_lit_build.add_argument("--license", default="abstract-only",
+                             help="license recorded on every article in this pack")
+    p_lit_build.add_argument("--embed-backend", default="ollama",
+                             choices=["ollama", "hashing"])
+    p_lit_build.add_argument("--no-embed", action="store_true")
+    p_lit_build.set_defaults(func=cmd_literature_build)
+
+    p_lit_status = lit_sub.add_parser("status", help="what the corpus holds")
+    p_lit_status.set_defaults(func=cmd_literature_status)
 
     p_reset = sub.add_parser("reset", help="delete the local index")
     p_reset.add_argument("--yes", action="store_true",
