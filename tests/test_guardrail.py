@@ -244,6 +244,10 @@ def test_flags_a_general_threshold_stated_without_a_citation(text):
     "Your weight went from 82.1 kg to 80.4 kg between March and June.",
     "You took 2000 IU of vitamin D daily, according to your notes.",
     "Three of your results were outside their printed ranges.",
+    # Reporting the user's own document back to them, not a general claim.
+    "The report prints a target range for LDL of under 100 mg/dL.",
+    "Your report lists a target range of 70-99 mg/dL for glucose.",
+    "The lab's printed reference range for HDL is above 40 mg/dL.",
 ])
 def test_does_not_flag_the_users_own_values_or_printed_ranges(text):
     flags = guardrail.check(text, used_tools=True, literature_cited=False)

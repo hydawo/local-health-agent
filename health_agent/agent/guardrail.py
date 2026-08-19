@@ -104,9 +104,22 @@ REFUSAL_PATTERNS = [
 # A1c threshold from training data, uncited and undated, and nothing in the
 # other patterns could see it. This is that hole.
 #
-# `_NOT_YOURS` is what keeps the false positives away: every clause requires
-# that the sentence is not talking about this person's own printed values.
-_NOT_YOURS = r"(?<!your )(?<!Your )(?<!the )(?<!The )"
+# `_REPORTING_CONTEXT` is what keeps the false positives away: it matches
+# phrasing that attributes the range to a document ("the report prints...",
+# "your labs list...", "according to..."). Applied as a lookback from the
+# match in `check()`, since Python's `re` only allows fixed-width lookbehind
+# and these phrases vary in length. "The report prints a target range for
+# LDL of under 100 mg/dL." is reporting the user's own document back to them
+# — the single most common thing this tool does with lab data — and must not
+# be flagged even though it names a "target range" the way a from-nowhere
+# claim would.
+_REPORTING_CONTEXT = re.compile(
+    r"\b(?:report|reports|lab|labs|document|documents|chart|charts|"
+    r"record|records|note|notes|file|files)\b[^.]{0,20}\b(?:prints?|"
+    r"printed|lists?|listed|shows?|showed|states?|stated|says?|said|"
+    r"flagged?)\b|\baccording to\b",
+    re.IGNORECASE,
+)
 
 _MARKER = (
     r"a1c|hba1c|ldl|hdl|cholesterol|triglycerides?|glucose|blood pressure|"
@@ -197,11 +210,16 @@ def check(text: str, *, used_tools: bool = True,
 
     if not literature_cited:
         for label, pattern in UNCITED_PATTERNS:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
+            for match in re.finditer(pattern, text, re.IGNORECASE):
+                context = text[max(0, match.start() - 60):match.start()]
+                if _REPORTING_CONTEXT.search(context):
+                    continue  # reporting the user's own document, not a claim
                 flags.append(Flag(Category.UNCITED, label,
                                   _excerpt(text, match)))
                 break
+            else:
+                continue
+            break
 
     # An answer that declines *and* looked nothing up is withholding, not
     # protecting. With tool results present, declining to interpret is correct.
