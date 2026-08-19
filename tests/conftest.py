@@ -27,6 +27,11 @@ def malformed_export() -> Path:
 
 
 @pytest.fixture
+def literature_fixture() -> Path:
+    return FIXTURES / "literature" / "corpus.xml"
+
+
+@pytest.fixture
 def index_path(tmp_path: Path) -> Path:
     return tmp_path / ".index" / "health.db"
 

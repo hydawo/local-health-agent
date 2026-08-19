@@ -1,0 +1,249 @@
+<?xml version="1.0"?>
+<PubmedArticleSet>
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000001</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2021</Year></PubDate></JournalIssue>
+     <Title>Journal of Synthetic Cardiology</Title>
+    </Journal>
+    <ArticleTitle>Aerobic exercise and blood pressure: a meta-analysis of randomized trials.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">Elevated blood pressure is a leading modifiable risk factor for cardiovascular disease, and structured exercise programs are commonly recommended as a first-line intervention.</AbstractText>
+     <AbstractText Label="METHODS">We pooled data from randomized controlled trials comparing supervised aerobic exercise against usual care, measuring change in systolic and diastolic blood pressure.</AbstractText>
+     <AbstractText Label="RESULTS">Aerobic exercise programs were associated with a mean reduction in systolic blood pressure of several millimeters of mercury, with more pronounced effects in participants who began with higher baseline readings.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Meta-Analysis</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Exercise</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000001</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000002</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2019</Year></PubDate></JournalIssue>
+     <Title>Synthetic Reviews in Sleep Medicine</Title>
+    </Journal>
+    <ArticleTitle>Sleep duration and metabolic markers: a systematic review.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="OBJECTIVE">To systematically review studies relating habitual sleep duration to fasting glucose, insulin sensitivity, and lipid profiles in adults.</AbstractText>
+     <AbstractText Label="FINDINGS">Short sleep duration, generally under six hours per night, was consistently associated with worse markers of glucose regulation across the reviewed studies, while long sleep duration showed more inconsistent associations.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Systematic Review</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Sleep</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000002</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000003</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2020</Year></PubDate></JournalIssue>
+     <Title>Synthetic Guidelines Digest</Title>
+    </Journal>
+    <ArticleTitle>Recommended intervals for lipid screening in average-risk adults.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="PURPOSE">This guideline addresses how frequently average-risk adults should undergo lipid panel screening.</AbstractText>
+     <AbstractText Label="RECOMMENDATION">For average-risk adults with a normal baseline lipid panel, rescreening at an interval of roughly every four to six years is reasonable, with shorter intervals for those with borderline results or new risk factors.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Practice Guideline</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000003</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000004</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2022</Year></PubDate></JournalIssue>
+     <Title>Synthetic Trials in Nutrition</Title>
+    </Journal>
+    <ArticleTitle>Dietary fibre supplementation and LDL cholesterol: a randomized controlled trial.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">Soluble fibre has been proposed to lower LDL cholesterol by binding bile acids in the gut.</AbstractText>
+     <AbstractText Label="METHODS">Participants with elevated LDL cholesterol were randomized to a daily soluble fibre supplement or a matching placebo for twelve weeks.</AbstractText>
+     <AbstractText Label="RESULTS">The fibre group showed a modest but statistically significant reduction in LDL cholesterol compared with placebo, with no significant change in HDL cholesterol.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Randomized Controlled Trial</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000004</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000005</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2018</Year></PubDate></JournalIssue>
+     <Title>Synthetic Narrative Reviews</Title>
+    </Journal>
+    <ArticleTitle>Exercise and heart rate variability: a narrative overview.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="OVERVIEW">This narrative review summarizes the physiological mechanisms by which regular aerobic exercise is thought to influence resting heart rate and heart rate variability.</AbstractText>
+     <AbstractText Label="DISCUSSION">Increased vagal tone following sustained training is a commonly cited mechanism, though the review notes substantial heterogeneity across the studies discussed and does not attempt a pooled estimate.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Review</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Heart Rate</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Exercise</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000005</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000006</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2017</Year></PubDate></JournalIssue>
+     <Title>Synthetic Observational Cohort Reports</Title>
+    </Journal>
+    <ArticleTitle>Resting heart rate and long-term outcomes in a community cohort.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="DESIGN">A community-based cohort was followed over several years, with resting heart rate measured at baseline via standard clinic assessment.</AbstractText>
+     <AbstractText Label="RESULTS">Participants in the highest baseline resting heart rate group showed a higher observed rate of adverse cardiovascular events than those in the lowest group, an association that persisted after adjustment for common confounders.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Observational Study</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Heart Rate</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000006</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000007</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2016</Year></PubDate></JournalIssue>
+     <Title>Synthetic Case Reports in Sleep Medicine</Title>
+    </Journal>
+    <ArticleTitle>Unusual presentation of sleep-related bruxism affecting daytime blood pressure readings: a case report.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="CASE">We describe a single patient presenting with elevated morning blood pressure readings that were ultimately attributed to severe, previously undiagnosed nocturnal bruxism disrupting sleep architecture.</AbstractText>
+     <AbstractText Label="OUTCOME">Following treatment of the bruxism with a fitted oral appliance, the patient's morning blood pressure readings normalized over subsequent follow-up visits.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Case Reports</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Sleep</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000007</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000008</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2015</Year></PubDate></JournalIssue>
+     <Title>Synthetic Trials in Preventive Cardiology</Title>
+    </Journal>
+    <ArticleTitle>Effect of a proprietary supplement on LDL cholesterol: a randomized controlled trial (retracted).</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">A proprietary plant-sterol supplement was tested for its effect on LDL cholesterol in adults with moderately elevated baseline levels.</AbstractText>
+     <AbstractText Label="RESULTS">The supplement group showed a large reported reduction in LDL cholesterol relative to placebo over eight weeks of follow-up.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Randomized Controlled Trial</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+   <CommentsCorrectionsList>
+    <CommentsCorrections RefType="RetractionIn">
+     <RefSource>J Synth Retract. 2016;3:12</RefSource>
+    </CommentsCorrections>
+   </CommentsCorrectionsList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000008</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+</PubmedArticleSet>
