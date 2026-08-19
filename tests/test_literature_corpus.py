@@ -48,6 +48,27 @@ def test_build_is_idempotent_for_a_repeated_pmid(tmp_path, literature_fixture):
     conn.close()
 
 
+def test_rebuild_with_a_changed_pmid_refreshes_the_stored_row(tmp_path,
+                                                               literature_fixture):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    articles = _articles(literature_fixture)
+    corpus.build(conn, articles, slug="t", version="1", license="CC-BY")
+
+    changed = articles[0]
+    changed.title = "A retitled synthetic finding."
+    changed.journal = "A Different Synthetic Journal"
+    corpus.build(conn, [changed], slug="t", version="1", license="CC-BY-NC")
+
+    row = conn.execute(
+        "SELECT title, journal, license FROM article WHERE pmid = ?",
+        (changed.pmid,)).fetchone()
+    assert row["title"] == "A retitled synthetic finding."
+    assert row["journal"] == "A Different Synthetic Journal"
+    assert row["license"] == "CC-BY-NC"
+    conn.close()
+
+
 def test_coverage_reports_what_the_corpus_holds(tmp_path, literature_fixture):
     conn = schema.connect(tmp_path / "literature.db", create=True)
     schema.initialize(conn)

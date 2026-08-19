@@ -78,11 +78,22 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             "tier_source, license, full_text_available, retracted, "
             "retraction_note, fetched_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            # Every mutable column is refreshed here, not just abstract/tier. A
+            # rebuild that silently kept a stale `license` would defeat the
+            # column's whole purpose: the PMC Open Access subset mixes CC-BY,
+            # CC-BY-NC and CC-BY-NC-ND, so a corrected license has to land.
             "ON CONFLICT(pack_id, pmid) DO UPDATE SET "
-            "abstract = excluded.abstract, evidence_tier = excluded.evidence_tier, "
+            "doi = excluded.doi, title = excluded.title, "
+            "abstract = excluded.abstract, journal = excluded.journal, "
+            "pub_year = excluded.pub_year, "
+            "publication_types = excluded.publication_types, "
+            "evidence_tier = excluded.evidence_tier, "
             "evidence_rank = excluded.evidence_rank, "
+            "tier_source = excluded.tier_source, license = excluded.license, "
+            "full_text_available = excluded.full_text_available, "
             "retracted = excluded.retracted, "
-            "retraction_note = excluded.retraction_note",
+            "retraction_note = excluded.retraction_note, "
+            "fetched_at = excluded.fetched_at",
             (pack_id, article.pmid, article.doi, article.title, body,
              article.journal, article.pub_year,
              json.dumps(article.publication_types), article.evidence_tier,
@@ -113,7 +124,11 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
         "UPDATE pack SET article_count = "
         "(SELECT COUNT(*) FROM article WHERE pack_id = ?) WHERE id = ?",
         (pack_id, pack_id))
-    conn.commit()
+    # rebuild_chunk_fts() issues its own commit, and calling it here — before
+    # any commit of ours — makes that commit the one that closes out the whole
+    # build. A crash between a separate `conn.commit()` here and the rebuild
+    # would leave article_chunk holding new rows the FTS index doesn't know
+    # about yet, a real window where search and the source table disagree.
     schema.rebuild_chunk_fts(conn)
     log.info("built pack %s@%s: %d articles, %d chunks, %d skipped",
              slug, version, stats.articles, stats.chunks, stats.skipped)
