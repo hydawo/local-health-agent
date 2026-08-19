@@ -305,3 +305,27 @@ def test_search_hit_citation_format(indexed):
     conn, _ = indexed
     hit = vector_store.keyword_search(conn, "cholesterol", limit=1)[0]
     assert "labs_" in hit.citation and "p.1" in hit.citation
+
+
+def test_two_tables_in_one_store_do_not_see_each_other(tmp_path):
+    """Corpus vectors and personal vectors share a directory, never a table."""
+    from health_agent.embeddings import HashingEmbedder
+    from health_agent.store import vector_store
+
+    embedder = HashingEmbedder()
+    personal = vector_store.VectorStore(tmp_path / "vectors")
+    literature = vector_store.VectorStore(tmp_path / "vectors",
+                                          table_name="literature_chunks")
+
+    personal.add([{"vector": embedder.embed(["mine"])[0], "chunk_id": 1,
+                   "document_id": 1, "page_no": 0,
+                   "embedder": embedder.name, "text": "mine"}])
+    literature.add([{"vector": embedder.embed(["theirs"])[0], "chunk_id": 2,
+                     "document_id": 2, "page_no": 0,
+                     "embedder": embedder.name, "text": "theirs"}])
+
+    assert personal.count() == 1
+    assert literature.count() == 1
+    hits = personal.search(embedder.embed(["theirs"])[0],
+                           embedder_name=embedder.name, limit=5)
+    assert [h["text"] for h in hits] == ["mine"]

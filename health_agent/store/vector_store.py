@@ -103,8 +103,12 @@ def _import_lancedb():
 class VectorStore:
     """LanceDB-backed vector index living beside the SQLite index."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, table_name: str = TABLE_NAME) -> None:
         self.path = Path(path)
+        # Corpus vectors and personal vectors live in one LanceDB directory but
+        # never in one table. Mixing them would let a literature chunk be
+        # hydrated as though it were the user's own record.
+        self.table_name = table_name
         self._db = None
         self._table = None
 
@@ -119,8 +123,8 @@ class VectorStore:
         db = self._connect()
         if self._table is not None:
             return self._table
-        if TABLE_NAME in _table_names(db):
-            self._table = db.open_table(TABLE_NAME)
+        if self.table_name in _table_names(db):
+            self._table = db.open_table(self.table_name)
         elif create_dim is not None:
             import pyarrow as pa
 
@@ -132,7 +136,7 @@ class VectorStore:
                 pa.field("embedder", pa.string()),
                 pa.field("text", pa.string()),
             ])
-            self._table = db.create_table(TABLE_NAME, schema=schema)
+            self._table = db.create_table(self.table_name, schema=schema)
         return self._table
 
     def count(self) -> int:
@@ -148,8 +152,8 @@ class VectorStore:
 
     def drop(self) -> None:
         db = self._connect()
-        if TABLE_NAME in _table_names(db):
-            db.drop_table(TABLE_NAME)
+        if self.table_name in _table_names(db):
+            db.drop_table(self.table_name)
         self._table = None
 
     def search(self, vector: list[float], *, embedder_name: str,
@@ -181,18 +185,36 @@ def pending_count(conn: sqlite3.Connection, embedder_name: str) -> int:
     ).fetchone()["n"]
 
 
+# table -> (parent column, page expression). The page expression is per-table
+# because an article has no page; interpolating a literal 0 for the corpus
+# keeps the LanceDB row shape identical without inventing a column.
+_ALLOWED_CHUNK_TABLES = {
+    "chunk": ("document_id", "page_no"),
+    "article_chunk": ("article_id", "0"),
+}
+
+
 def embed_pending(conn: sqlite3.Connection, store: VectorStore,
-                  embedder: "Embedder", *, batch_size: int = EMBED_BATCH,
-                  progress=None) -> int:
+                  embedder: "Embedder", *, table: str = "chunk",
+                  parent_column: str = "document_id",
+                  batch_size: int = EMBED_BATCH, progress=None) -> int:
     """Embed every chunk not yet embedded with this model. Returns count.
 
     Resumable by construction: progress is recorded per batch on the chunk rows,
     so an interrupted run (or an Ollama restart) picks up where it stopped
     instead of re-embedding a whole corpus.
     """
+    # `table` and `parent_column` are interpolated rather than bound because
+    # SQLite cannot bind identifiers. Both are module-internal constants,
+    # never user input — but this guard keeps that true.
+    allowed = _ALLOWED_CHUNK_TABLES.get(table)
+    if allowed is None or allowed[0] != parent_column:
+        raise ValueError(f"refusing to embed from unknown table {table!r}")
+    _, page_expr = allowed
+
     rows = conn.execute(
-        "SELECT id, document_id, page_no, text FROM chunk "
-        "WHERE embedded_with IS NOT ? ORDER BY id",
+        f"SELECT id, {parent_column} AS parent_id, {page_expr} AS page_no, text "  # noqa: S608
+        f"FROM {table} WHERE embedded_with IS NOT ? ORDER BY id",
         (embedder.name,),
     ).fetchall()
     if not rows:
@@ -206,7 +228,7 @@ def embed_pending(conn: sqlite3.Connection, store: VectorStore,
             {
                 "vector": vector,
                 "chunk_id": int(row["id"]),
-                "document_id": int(row["document_id"]),
+                "document_id": int(row["parent_id"]),
                 "page_no": int(row["page_no"] or 0),
                 "embedder": embedder.name,
                 "text": row["text"],
@@ -215,7 +237,8 @@ def embed_pending(conn: sqlite3.Connection, store: VectorStore,
         ])
         stamp = datetime.now().astimezone().isoformat(timespec="seconds")
         conn.executemany(
-            "UPDATE chunk SET embedded_with = ?, embedded_at = ? WHERE id = ?",
+            f"UPDATE {table} SET embedded_with = ?, embedded_at = ? "  # noqa: S608
+            f"WHERE id = ?",
             [(embedder.name, stamp, int(row["id"])) for row in batch],
         )
         conn.commit()
