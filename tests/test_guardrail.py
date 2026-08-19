@@ -210,3 +210,64 @@ def test_a_paraphrased_diagnosis_slips_through():
     text = ("Numbers in this range are what clinicians typically call the "
             "prediabetic band, and yours sit squarely inside it.")
     assert guardrail.check(text) == []
+
+
+# --------------------------------------------------------------------------- #
+# uncited_medical_claim
+# --------------------------------------------------------------------------- #
+
+"""`uncited_medical_claim`: the A1c failure the pattern check was blind to.
+
+Weighted toward must-pass cases on purpose. Per this module's own doctrine the
+expensive error is the false positive: a guard that fires on ordinary reporting
+trains its author to disable it.
+"""
+
+
+@pytest.mark.parametrize("text", [
+    "An A1c above 6.5% is considered diabetic.",
+    "LDL over 130 mg/dL is classified as elevated.",
+    "Blood pressure below 120/80 is regarded as normal.",
+    "The normal range for fasting glucose is 70 to 99 mg/dL.",
+])
+def test_flags_a_general_threshold_stated_without_a_citation(text):
+    flags = guardrail.check(text, used_tools=True, literature_cited=False)
+    assert any(f.category is guardrail.Category.UNCITED for f in flags)
+
+
+@pytest.mark.parametrize("text", [
+    # The user's own values, restated. The single most important must-pass set.
+    "Your A1c is 6.7%, above the 4.0-5.6% reference range this report printed.",
+    "Your LDL is 145 mg/dL and the lab flagged it High.",
+    "Your resting heart rate averaged 61 bpm over the last 30 days.",
+    "Your report lists a reference range of 70-99 mg/dL for glucose.",
+    "Your weight went from 82.1 kg to 80.4 kg between March and June.",
+    "You took 2000 IU of vitamin D daily, according to your notes.",
+    "Three of your results were outside their printed ranges.",
+])
+def test_does_not_flag_the_users_own_values_or_printed_ranges(text):
+    flags = guardrail.check(text, used_tools=True, literature_cited=False)
+    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]
+
+
+def test_does_not_flag_a_threshold_when_literature_was_cited():
+    text = "A 2019 meta-analysis found an A1c above 6.5% is used diagnostically."
+    flags = guardrail.check(text, used_tools=True, literature_cited=True)
+    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]
+
+
+def test_uncited_claim_is_serious_enough_to_trigger_a_rewrite():
+    def rewrite(_instruction):
+        return "Your A1c is 6.7%, above the range the report printed."
+
+    text, result = guardrail.apply(
+        "An A1c above 6.5% is considered diabetic.",
+        tools_used=["get_lab_trend"], literature_cited=False, rewrite=rewrite)
+    assert result.rewritten
+    assert "6.5% is considered" not in text
+
+
+def test_existing_callers_are_unaffected_by_the_new_default():
+    """literature_cited defaults True, so behavior is unchanged without it."""
+    flags = guardrail.check("An A1c above 6.5% is considered diabetic.")
+    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]

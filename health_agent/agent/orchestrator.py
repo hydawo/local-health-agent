@@ -54,8 +54,10 @@ with a typical value, never carry a number over from your training data.
 1b. That applies to medicine in general, not only to this person. Do not quote \
 clinical thresholds, diagnostic criteria, guideline cut-offs, or "normal" ranges \
 from your own knowledge — only the reference ranges the tools return, which are \
-the ones the lab printed. If a question turns on a threshold you were not given, \
-say that the reports do not state it and that their clinician can.
+the ones the lab printed, and findings returned by search_medical_literature, \
+which you must cite with their year and evidence tier. If a question turns on a \
+threshold you were not given, search the literature for it; if that returns \
+nothing, say the reports do not state it and their clinician can.
 
 1a. Do not do arithmetic. If a tool result has an `overall` field, that is the \
 figure for the whole range — quote it as given. Never average, total, or \
@@ -284,7 +286,8 @@ class Orchestrator:
                                            think=self.think).text
 
         text, result = guardrail_module.apply(
-            answer.text, tools_used=answer.tools_used, rewrite=rewrite)
+            answer.text, tools_used=answer.tools_used,
+            literature_cited=self._cited_literature(answer), rewrite=rewrite)
         if result.flags:
             # Categories only — never the flagged text, which is health content
             # (§5a logging policy).
@@ -293,6 +296,22 @@ class Orchestrator:
             self.on_event("guardrail", {"categories": result.categories,
                                         "rewritten": result.rewritten})
         return text, result
+
+    @staticmethod
+    def _cited_literature(answer: "Answer") -> bool:
+        """True when a literature search actually returned findings this turn.
+
+        Calling the tool is not enough — a call that returned `no_matches` gives
+        the model nothing to cite, and an answer that states a threshold anyway
+        is reciting, which is exactly what the check is for.
+        """
+        for step in answer.steps:
+            if step.name != "search_medical_literature":
+                continue
+            result = step.result if isinstance(step.result, dict) else {}
+            if result.get("findings"):
+                return True
+        return False
 
     def _run_call(self, step: int, call: backends.ToolCall) -> ToolCallRecord:
         name = call.name

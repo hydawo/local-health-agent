@@ -35,6 +35,7 @@ class Category(str, Enum):
     DIAGNOSIS = "diagnosis"
     TREATMENT = "treatment"
     REFUSAL = "unhelpful_refusal"
+    UNCITED = "uncited_medical_claim"
 
 
 # Conditions the model might assert. Kept as an explicit list rather than a
@@ -94,6 +95,43 @@ REFUSAL_PATTERNS = [
     r"\bplease (?:specify|clarify) which\b",
 ]
 
+# General clinical claims stated as fact. Only meaningful when the turn returned
+# no literature findings — with a citation, the same sentence is a report of
+# published evidence rather than recalled knowledge.
+#
+# The distinguishing signal is a threshold attached to a GENERAL subject rather
+# than to "your". Adversarial probing of v0.1.0 found the model volunteering an
+# A1c threshold from training data, uncited and undated, and nothing in the
+# other patterns could see it. This is that hole.
+#
+# `_NOT_YOURS` is what keeps the false positives away: every clause requires
+# that the sentence is not talking about this person's own printed values.
+_NOT_YOURS = r"(?<!your )(?<!Your )(?<!the )(?<!The )"
+
+_MARKER = (
+    r"a1c|hba1c|ldl|hdl|cholesterol|triglycerides?|glucose|blood pressure|"
+    r"systolic|diastolic|bmi|tsh|ferritin|vitamin d|creatinine|egfr|crp"
+)
+
+UNCITED_PATTERNS: list[tuple[str, str]] = [
+    ("states a general clinical threshold",
+     rf"\b(?:an?|the)?\s*(?:{_MARKER})\b[^.]{{0,30}}"
+     rf"\b(?:above|below|over|under|greater than|less than|at or above)\b"
+     rf"[^.]{{0,25}}\b\d[\d./]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|%)?\b"
+     rf"[^.]{{0,25}}\bis\s+(?:considered|classified|regarded|defined|"
+     rf"diagnostic|generally)\b"),
+    ("states a normal range as general fact",
+     rf"\b(?:the\s+)?(?:normal|healthy|optimal|typical|target)\s+"
+     rf"(?:range|level|value)s?\s+(?:for|of)\s+(?:\w+\s+)?(?:{_MARKER})\b"),
+]
+
+UNCITED_REWRITE = (
+    "Your previous answer stated a general medical fact that no literature "
+    "result in this conversation supports. Remove it. Keep only this person's "
+    "own values and the reference ranges their reports printed, and say that "
+    "your literature corpus does not cover the threshold in question."
+)
+
 DISCLAIMER = (
     "These are the values recorded in your own files, not medical advice. "
     "What they mean for you is a conversation for you and your clinician."
@@ -128,7 +166,8 @@ class GuardrailResult:
     @property
     def blocked(self) -> bool:
         """True when something the guard is meant to prevent survived."""
-        return any(f.category in (Category.DIAGNOSIS, Category.TREATMENT)
+        return any(f.category in (Category.DIAGNOSIS, Category.TREATMENT,
+                                  Category.UNCITED)
                    for f in self.flags)
 
     @property
@@ -142,13 +181,27 @@ def _excerpt(text: str, match: re.Match, width: int = 60) -> str:
     return " ".join(text[start:end].split())
 
 
-def check(text: str, *, used_tools: bool = True) -> list[Flag]:
-    """Scan a finished answer. Returns every flag raised, possibly empty."""
+def check(text: str, *, used_tools: bool = True,
+          literature_cited: bool = True) -> list[Flag]:
+    """Scan a finished answer. Returns every flag raised, possibly empty.
+
+    `literature_cited` reports whether this turn returned any literature
+    finding. When it did, a general clinical claim is a report of published
+    evidence; when it did not, the same sentence is recalled knowledge.
+    """
     flags: list[Flag] = []
     for category, label, pattern in PATTERNS:
         match = re.search(pattern, text, re.IGNORECASE)
         if match:
             flags.append(Flag(category, label, _excerpt(text, match)))
+
+    if not literature_cited:
+        for label, pattern in UNCITED_PATTERNS:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                flags.append(Flag(Category.UNCITED, label,
+                                  _excerpt(text, match)))
+                break
 
     # An answer that declines *and* looked nothing up is withholding, not
     # protecting. With tool results present, declining to interpret is correct.
@@ -173,7 +226,7 @@ def needs_disclaimer(tools_used: list[str]) -> bool:
     return "get_lab_trend" in tools_used
 
 
-def apply(text: str, *, tools_used: list[str],
+def apply(text: str, *, tools_used: list[str], literature_cited: bool = True,
           rewrite: "callable | None" = None) -> tuple[str, GuardrailResult]:
     """Run the guard over an answer and return the text to show the user.
 
@@ -183,18 +236,25 @@ def apply(text: str, *, tools_used: list[str],
     attempts are unlikely to help and the user is left waiting.
     """
     result = GuardrailResult()
-    flags = check(text, used_tools=bool(tools_used))
+    flags = check(text, used_tools=bool(tools_used),
+                  literature_cited=literature_cited)
     result.flags = list(flags)
 
     serious = [f for f in flags if f.category is not Category.REFUSAL]
     if serious and rewrite is not None:
-        what = " and ".join(sorted({f.label for f in serious}))
+        if any(f.category is Category.UNCITED for f in serious):
+            instruction = UNCITED_REWRITE
+        else:
+            what = " and ".join(sorted({f.label for f in serious
+                                        if f.category is not Category.UNCITED}))
+            instruction = REWRITE_INSTRUCTION.format(what=what)
         try:
-            revised = rewrite(REWRITE_INSTRUCTION.format(what=what))
+            revised = rewrite(instruction)
         except Exception:  # noqa: BLE001 - a failed rewrite must not lose the answer
             revised = ""
         if revised.strip():
-            recheck = check(revised, used_tools=bool(tools_used))
+            recheck = check(revised, used_tools=bool(tools_used),
+                            literature_cited=literature_cited)
             still_serious = [f for f in recheck
                              if f.category is not Category.REFUSAL]
             if len(still_serious) < len(serious):
