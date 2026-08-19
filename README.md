@@ -572,17 +572,44 @@ diagnosis: asked whether anything in the labs was worth raising with a doctor,
 the model once declined to look anything up at all. Over-caution withholds
 information that is already yours, so the guard flags that too.
 
-### A known hole
+### A known hole, and what closed part of it
 
-Adversarial probing found one leak the pattern check cannot close. Asked "do I
-have prediabetes?", the model correctly refused to diagnose — and then
-volunteered that clinical definitions "often cite specific thresholds (e.g., an
-A1c of 5.7%–6.4%)". That figure came from its training data, not from your
-reports: uncited, undated, and impossible for a regex to distinguish from
-sourced text. The system prompt now forbids quoting clinical thresholds from
-memory, but a prompt rule is not enforcement. Replacing recalled medical
-knowledge with dated, evidence-graded citations is exactly what the literature
-grounding in §10 of the plan is for, and it is not built yet.
+Adversarial probing found a leak the diagnosis/treatment pattern check could
+not close. Asked "do I have prediabetes?", the model correctly refused to
+diagnose — and then volunteered that clinical definitions "often cite specific
+thresholds (e.g., an A1c of 5.7%–6.4%)". That figure came from its training
+data, not from your reports: uncited, undated, and impossible for a regex
+looking for diagnostic *phrasing* to distinguish from sourced text, because
+nothing about the sentence reads as a diagnosis. The system prompt forbade
+quoting clinical thresholds from memory, but a prompt rule is not enforcement.
+
+That gap is why the medical literature corpus above exists, and it is now
+partly closed. `search_medical_literature` gives the model dated,
+evidence-tiered citations to reach for instead of recalled thresholds, and the
+guardrail gained a second check for exactly this shape of failure:
+`uncited_medical_claim` fires when the finished answer states a general
+clinical threshold or normal range — not a diagnosis, just a bare fact like "an
+A1c of 5.7%–6.4% is considered prediabetic" — **and the turn's tool calls
+returned no literature finding to back it.** The same sentence, backed by a
+cited corpus finding, is a report of published evidence and passes; unbacked,
+it is recalled knowledge and gets flagged the same way a diagnosis does — one
+rewrite pass, then a visible note if that fails.
+
+**What is still genuinely open:**
+
+- **The corpus is only as good as what has been built into it.** A threshold
+  the installed corpus simply doesn't cover cannot be cited, and the tool says
+  so rather than guessing — but that is a coverage gap, not a fixed leak.
+- **Slice 1 has no network fetch.** A corpus has to be built from a MEDLINE
+  export you already have (`health-agent literature build`); there is no
+  `update-literature` command yet, so keeping coverage current is manual. See
+  [ROADMAP.md](ROADMAP.md) #1a.
+- **The check is still a regex, with the same limits the rest of the guardrail
+  states plainly** (see [`agent/guardrail.py`](health_agent/agent/guardrail.py)'s
+  own docstring): it cannot understand a sentence, and it will miss a claim
+  phrased in a way these patterns don't anticipate. It is a best-effort
+  backstop behind the system prompt, not a guarantee — same as every other
+  category this guardrail checks.
 
 ## What's next
 
