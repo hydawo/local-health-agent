@@ -283,7 +283,9 @@ No orchestration framework — the tool-calling loop is about sixty lines in
 to Ollama's chat API. Three tools (`query_healthkit`, `get_lab_trend`,
 `search_records`) are thin adapters over the same `store/queries.py` functions
 the CLI uses, so the model and `health-agent labs` cannot report different
-numbers for the same question.
+numbers for the same question. A fourth, `search_medical_literature`, returns
+dated, evidence-tiered findings from the optional literature corpus (below)
+instead of letting the model answer clinical questions from its training data.
 
 Three decisions in that loop came out of measuring the model rather than
 guessing:
@@ -316,6 +318,39 @@ see and present them as an answer.
 Measured on an M5 with `qwen3.6:27b`: 25-60 s for a focused question, ~165 s for
 one that sweeps every lab analyte. An answer that used no tool at all is flagged
 as ungrounded rather than presented as though it came from your data.
+
+## Medical literature corpus
+
+`search_medical_literature` answers questions like "what does the research say
+about X" from a **local, curated corpus of MEDLINE citations** — dated,
+evidence-tiered, and cited by PMID — instead of the model's training data.
+
+```bash
+health-agent literature build --from medline_export.xml --slug cardiometabolic
+health-agent literature status
+```
+
+A few things worth stating plainly:
+
+- **The corpus is optional.** Nothing else in this tool depends on it. Without
+  one, `search_medical_literature` reports that no corpus is installed and
+  tells the model not to answer from recalled medical knowledge instead of
+  quietly falling back on it — which is the exact failure this tool exists to
+  close (see [Not a medical device](#not-a-medical-device)).
+- **`health-agent literature build`** is what creates one, from a MEDLINE XML
+  export you supply. See [LICENSES.md](LICENSES.md) for what's retained and
+  under what terms.
+- **Evidence tiers come from publication metadata, not judgement.** A tier is
+  read off MEDLINE's own `PublicationType` field — meta-analysis and
+  systematic review rank above RCT, which ranks above observational and case
+  report — or it is `unknown`. Nothing inspects a title, an abstract, or asks a
+  model to guess; an inferred tier would be a fabricated credential, and the
+  feature's whole value is that its citations can be trusted.
+- **Slice 1 ships no way to fetch a corpus over the network.** `literature
+  build` reads a MEDLINE XML file you already have; there is no `update` or
+  `fetch` command, and no code path in this release opens a socket to NCBI or
+  anywhere else. Network acquisition, with its own licensing and consent
+  requirements, is the next release — see [ROADMAP.md](ROADMAP.md) #1.
 
 ## Design notes worth knowing
 
@@ -554,10 +589,13 @@ grounding in §10 of the plan is for, and it is not built yet.
 [`ROADMAP.md`](ROADMAP.md) covers post-release directions. The one that unlocks
 most of the others is **medical literature grounding** — a curated local corpus
 with evidence-graded, dated citations, so the tool can say what published
-research reports about a marker instead of the model recalling it. That has a
-concrete motivation from this build: adversarial probing caught the model
-volunteering a clinical threshold from its training data — uncited, undated, and
-invisible to the guardrail's pattern check.
+research reports about a marker instead of the model recalling it. Retrieval,
+tiering, and the `search_medical_literature` tool are built and described
+above; what is not built is a way to acquire a corpus over the network without
+you supplying the MEDLINE export yourself. That has a concrete motivation from
+this build: adversarial probing caught the model volunteering a clinical
+threshold from its training data — uncited, undated, and invisible to the
+guardrail's pattern check.
 
 Two features build directly on it: **physician visit prep** (questions worth
 raising with a clinician, grounded in your own trends) and **literature-grounded

@@ -15,9 +15,28 @@ Items are roughly in dependency order. The first one unlocks most of the rest.
 
 ## 1. Medical literature grounding (RAG, not fine-tuning)
 
-A `search_medical_literature` tool over a local, curated corpus: PubMed, the
-Cochrane Library (systematic reviews specifically), and ClinicalTrials.gov for
-active-research context.
+**Slice 1 — shipped.** A `search_medical_literature` tool over a local,
+curated corpus built from a MEDLINE XML export: keyword and semantic
+retrieval, evidence tiers read from `PublicationType` (never inferred), dated
+citations, retraction flagging, and a `min_tier`/`since_year` filter. Covered
+by the eval set's Q21-Q26 and by the guardrail's `uncited_medical_claim`
+check. See the README's [Medical literature corpus](README.md#medical-literature-corpus)
+section and [LICENSES.md](LICENSES.md) for what a built corpus contains and
+under what terms.
+
+**One assumption from the original design turned out wrong:** Cochrane is not
+a separate source. It has no open API of its own — Cochrane systematic reviews
+are indexed in PubMed/MEDLINE like any other article, under the journal name
+`Cochrane Database Syst Rev`. "Cochrane first" is therefore a filter on
+PubMed results (by journal, or by the `systematic_review` tier plus that
+journal name), not a second integration to build. The corpus module has one
+ingestion path, not two.
+
+**Not shipped — network acquisition, moved to its own item, #1a below.** Slice
+1 reads a MEDLINE XML file you already have; there is no `update-literature`
+command and no code path that reaches NCBI. RAG-vs-fine-tuning, bounded scope,
+and meta-analyses-first were slice 1 design calls and remain the plan for
+slice 2's fetch step:
 
 - **RAG, not fine-tuning.** Fine-tuning is expensive, needs real ML infra, risks
   degrading tool-calling through catastrophic forgetting, would have to be
@@ -30,20 +49,39 @@ active-research context.
 - **Meta-analyses and systematic reviews first.** The closest thing biomedical
   literature has to synthesized ground truth, and far more tractable in volume
   than primary research.
-- **Evidence tiers on every citation** (meta-analysis / systematic review > RCT
-  > observational > case report) rather than presenting all sources as equally
-  weighted. This is the distinctive part, not a nice-to-have.
-- **Dated citations**, so "a 2019 meta-analysis found…" reads honestly rather
-  than as evergreen fact, refreshed by an explicit `update-literature` command
-  rather than aging invisibly.
-- **Licensing is a real compliance line**, not an assumption: full text only
-  from the PMC Open Access subset; abstracts and metadata elsewhere. Needs a
-  `LICENSES.md` documenting the distinction when this is picked up.
 
 There is already an argument for this in the current build: adversarial probing
 found the model volunteering an A1c threshold from its training data — uncited,
 undated, and invisible to the guardrail's pattern check. Replacing recalled
-medical knowledge with dated, evidence-graded citations is the actual fix.
+medical knowledge with dated, evidence-graded citations is the actual fix, and
+slice 1 is the half of it that works without ever opening a socket.
+
+### 1a. Network acquisition for the literature corpus
+
+*Depends on: #1 (slice 1). PubMed and ClinicalTrials.gov, fetched on request
+rather than lazily — see 2a for why lazy fetching is the wrong shape.*
+
+The half of #1 that slice 1 deliberately left out: a command that reaches
+PubMed's E-utilities (and, later, ClinicalTrials.gov) to build or refresh a
+corpus, instead of requiring a MEDLINE XML export supplied by hand. Carries
+forward, unchanged from the original design:
+
+- **Dated citations**, so "a 2019 meta-analysis found…" reads honestly rather
+  than as evergreen fact, refreshed by an explicit `update-literature` command
+  rather than aging invisibly.
+- **Evidence tiers on every citation** (meta-analysis / systematic review > RCT
+  > observational > case report) rather than presenting all sources as equally
+  weighted — already built in slice 1, unaffected by where the XML comes from.
+- **Licensing is a real compliance line**, not an assumption: full text only
+  from the PMC Open Access subset, and only per the license recorded on that
+  article — see [LICENSES.md](LICENSES.md), which slice 1 already needed
+  because the fixture corpus and any hand-supplied export raise the same
+  question.
+- **Privacy**: this is the first place literature grounding actually reaches
+  the network. `THREAT_MODEL.md` gains a claim here — it correctly has none
+  yet, because slice 1 adds no network call. Query terms sent to PubMed are a
+  new disclosure surface and need the same explicit, versioned consent
+  treatment the cloud tier already has, not a silent default-on fetch.
 
 ## 2. Basic medical intake (medications, allergies, conditions)
 
@@ -63,7 +101,9 @@ which has a privacy question that must be settled before either item is built.
 
 ### 2a. Seeding the literature corpus from intake
 
-*Depends on: #1 and #2. Decide this before building either.*
+*Depends on: #1a and #2. Decide this before building either.* (Slice 1's
+retrieval half is already built and needs nothing decided here; what this item
+gates is the network fetch in #1a.)
 
 Rather than fetching literature lazily when a question needs it, seed the local
 corpus at intake: someone who records type 2 diabetes, metformin, and an ACL
@@ -144,7 +184,7 @@ capability so much as a promoted one.
 
 ## 4. Literature-grounded context on out-of-range lab values
 
-*Depends on: #1. Pairs with #3.*
+*Depends on: #1 (slice 1, done). Pairs with #3.*
 
 When a lab value is trending toward or outside its reference range, surface what
 the literature says about factors associated with that marker — for example,
@@ -176,12 +216,29 @@ feature would make it substantially more likely. Before building it:
 - decide whether findings are presented individually or synthesized at all, and
   if synthesized, under what constraints
 - extend the guardrail's test corpus with synthesis-shaped cases, not just
-  single-sentence ones
+  single-sentence ones — **done**, pulled forward into slice 1:
+  `uncited_medical_claim` and its test cases in `agent/guardrail.py`
 - re-run the eval set with literature-grounded questions added, including
-  adversarial ones designed to elicit advice from evidence
+  adversarial ones designed to elicit advice from evidence — **partly done**:
+  Q21-Q26 in `tests/eval_questions.md` add corpus-sourced questions, and Q24
+  and Q26 are exactly this — adversarial cases built to elicit a recommendation
+  out of attributed findings and check that none appears. What's still open is
+  the *lab-triggered* re-run this item specifically needs: eval cases where the
+  trigger is an out-of-range value surfaced automatically, once auto-surfacing
+  exists, rather than a question the user typed.
 - consider whether the output format itself should enforce the distinction —
   a structured list of cited findings resists reading as advice in a way that
-  free prose does not
+  free prose does not — **done**, pulled forward: `search_medical_literature`
+  already returns a structured findings list (title, text, citation, tier,
+  year, retraction status as separate fields) rather than free prose, for
+  exactly this reason.
+
+**What's left for #4 itself** is the feature slice 1 didn't build: automatically
+*surfacing* literature context when a lab value is trending toward or outside
+its reference range, rather than only responding when asked. Slice 1's
+`search_medical_literature` is reachable by the model on any question; #4 is
+about triggering it proactively from an out-of-range flag, plus the
+lab-triggered eval re-run noted above.
 
 ## 5. Answer provenance / reproducibility log
 
