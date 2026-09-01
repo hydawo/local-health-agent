@@ -117,6 +117,33 @@ def test_reset_yes_skips_the_prompt(cli, tmp_path):
     assert not (tmp_path / "health.db").exists()
 
 
+def test_reset_does_not_destroy_the_literature_corpus(cli, tmp_path):
+    """Design spec §1: "delete my data" and "delete my corpus" are different
+    requests. `reset` must not reach the corpus's LanceDB table — regression
+    for the bug where `literature_vector_path` and `vector_path` resolved to
+    the same on-disk directory."""
+    from health_agent import config as config_mod
+
+    lit_fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
+    code, _ = cli("literature", "build", "--from", str(lit_fixture),
+                  "--slug", "test", "--version", "1",
+                  "--embed-backend", "hashing")
+    assert code == 0
+
+    cfg = config_mod.resolve(index_path=str(tmp_path / "health.db"))
+    assert cfg.literature_path.exists()
+    assert cfg.literature_vector_path.exists()
+    assert cfg.literature_vector_path != cfg.vector_path
+
+    code, _ = cli("reset", "--yes")
+    assert code == 0
+    assert not cfg.index_path.exists()
+    assert not cfg.vector_path.exists()
+    # The corpus and its vectors survive.
+    assert cfg.literature_path.exists()
+    assert cfg.literature_vector_path.exists()
+
+
 def test_query_before_ingest_is_actionable(tmp_path, capsys):
     code = main(["--index", str(tmp_path / "missing.db"), "stats"])
     err = capsys.readouterr().err

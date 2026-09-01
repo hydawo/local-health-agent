@@ -156,7 +156,14 @@ def search(conn: sqlite3.Connection, store: "VectorStore", embedder: "Embedder",
     raw = store.search(vector, embedder_name=embedder.name, limit=limit * 6)
     chunk_ids = [int(r["chunk_id"]) for r in raw]
     if not chunk_ids:
-        return []
+        # The SQLite side says this corpus is embedded, but the vector table
+        # returned nothing — missing, emptied, or never written. Degrade to
+        # keyword search rather than reporting a silent `no_matches` for a
+        # corpus that is still perfectly searchable; mirrors the
+        # not-yet-embedded branch above and `_search_records`' handling of
+        # the same situation for the personal store.
+        return keyword_search(conn, query, limit=limit, min_tier=min_tier,
+                              since_year=since_year)
 
     where, params = _filters(min_tier, since_year)
     placeholders = ",".join("?" * len(chunk_ids))

@@ -299,3 +299,17 @@ def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):
     names = [s["step"] for s in steps]
     assert any("search_medical_literature" in n for n in names)
     assert all(s["ok"] for s in steps)
+
+
+def test_offline_check_exercises_the_corpus_vector_store_directly(tmp_path):
+    """`run_pipeline`'s ToolContext has no `embedder_factory`, so the
+    `search_medical_literature` step above runs keyword-only and never
+    touches LanceDB. The personal store has a dedicated "vector search
+    (LanceDB)" step for exactly this reason (spec §5); the corpus needs its
+    mirror, or the newest native-code path — reads against
+    `literature_chunks` — sits outside the one test whose entire purpose is
+    to be a falsifiable proof."""
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    names = [s["step"] for s in steps]
+    assert "vector search (literature LanceDB)" in names
+    assert all(s["ok"] for s in steps)

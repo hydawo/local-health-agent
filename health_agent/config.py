@@ -56,7 +56,17 @@ class Config:
 
     @property
     def literature_vector_path(self) -> Path:
-        return self.index_dir / "vectors"
+        """Its own directory, never `vector_path`. The two LanceDB tables
+
+        (`chunks`, `literature_chunks`) used to share one on-disk directory,
+        distinguished only by table name — which meant `reset`'s
+        `shutil.rmtree(vector_path)` deleted the corpus's vectors too, even
+        though `reset` never mentions the corpus. Giving the corpus its own
+        directory makes "delete my data" and "delete my corpus" different
+        operations structurally, per the design spec's own rationale (§1),
+        rather than relying on every future caller to filter by table name.
+        """
+        return self.index_dir / "literature_vectors"
 
 
 def resolve(data_dir: str | os.PathLike[str] | None = None,

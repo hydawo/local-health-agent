@@ -1237,24 +1237,26 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
         return 2
 
     conn = lit_schema.connect(cfg.literature_path, create=True)
-    lit_schema.initialize(conn)
-    stats = lit_corpus.build(conn, articles, slug=args.slug,
-                             version=args.version, license=args.license)
-    print(f"{stats.articles} articles, {stats.chunks} chunks"
-          f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
+    try:
+        lit_schema.initialize(conn)
+        stats = lit_corpus.build(conn, articles, slug=args.slug,
+                                 version=args.version, license=args.license)
+        print(f"{stats.articles} articles, {stats.chunks} chunks"
+              f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
 
-    if not args.no_embed:
-        embedder = embeddings.get_embedder(args.embed_backend)
-        store = vector_store.VectorStore(cfg.literature_vector_path,
-                                         table_name=lit_embed.TABLE_NAME)
-        try:
-            done = lit_embed.embed_corpus(conn, store, embedder)
-            print(f"embedded {done} chunks with {embedder.name}")
-        except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
-            print("Ollama unavailable; corpus search will use keyword matching "
-                  "until you run this again.", file=sys.stderr)
-    conn.close()
-    return 0
+        if not args.no_embed:
+            embedder = embeddings.get_embedder(args.embed_backend)
+            store = vector_store.VectorStore(cfg.literature_vector_path,
+                                             table_name=lit_embed.TABLE_NAME)
+            try:
+                done = lit_embed.embed_corpus(conn, store, embedder)
+                print(f"embedded {done} chunks with {embedder.name}")
+            except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
+                print("Ollama unavailable; corpus search will use keyword "
+                      "matching until you run this again.", file=sys.stderr)
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1267,15 +1269,17 @@ def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    report = lit_corpus.coverage(conn)
-    print(f"packs:    {', '.join(report['packs']) or '(none)'}")
-    print(f"articles: {report['article_count']}")
-    print(f"years:    {report['year_range'][0]}-{report['year_range'][1]}")
-    print(f"built:    {report['built']}")
-    print("tiers:    " + ", ".join(f"{k}={v}" for k, v in report["tiers"].items()))
-    print("topics:   " + ", ".join(report["topics"][:10]))
-    conn.close()
-    return 0
+    try:
+        report = lit_corpus.coverage(conn)
+        print(f"packs:    {', '.join(report['packs']) or '(none)'}")
+        print(f"articles: {report['article_count']}")
+        print(f"years:    {report['year_range'][0]}-{report['year_range'][1]}")
+        print(f"built:    {report['built']}")
+        print("tiers:    " + ", ".join(f"{k}={v}" for k, v in report["tiers"].items()))
+        print("topics:   " + ", ".join(report["topics"][:10]))
+        return 0
+    finally:
+        conn.close()
 
 
 def cmd_offline_check(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1456,6 +1460,9 @@ def cmd_reset(args: argparse.Namespace, cfg: config.Config) -> int:
     if cfg.vector_path.exists():
         shutil.rmtree(cfg.vector_path)
     print(f"Deleted {cfg.index_path} and its vector store")
+    if cfg.literature_path.exists():
+        print("Your literature corpus was not touched; "
+              "use `health-agent literature build` to replace it.")
     return 0
 
 

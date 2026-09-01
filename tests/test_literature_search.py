@@ -38,6 +38,19 @@ def test_semantic_search_returns_findings(built):
     assert all(h.method == "semantic" for h in hits)
 
 
+def test_search_falls_back_to_keyword_when_the_vector_table_is_missing(built):
+    """A missing or emptied vector table (e.g. `reset` reaching it, or a
+    fresh checkout with no LanceDB directory yet) must degrade to working
+    keyword search rather than silently returning nothing — matching the
+    not-yet-embedded case just above, and `_search_records`' handling of the
+    same situation for the personal store."""
+    conn, store, embedder = built
+    store.drop()  # simulate the vector table being gone
+    hits = lit_store.search(conn, store, embedder, "blood pressure exercise")
+    assert hits
+    assert all(h.method == "keyword" for h in hits)
+
+
 def test_every_finding_carries_its_tier_and_provenance(built):
     conn, _, _ = built
     for hit in lit_store.keyword_search(conn, "blood pressure"):
@@ -48,8 +61,13 @@ def test_every_finding_carries_its_tier_and_provenance(built):
 
 def test_min_tier_excludes_weaker_evidence(built):
     conn, _, _ = built
+    # Unfiltered, "heart" matches two fixture articles weaker than rct
+    # (narrative_review, observational). `min_tier="rct"` must exclude both.
+    unfiltered = lit_store.keyword_search(conn, "heart")
+    assert len(unfiltered) == 2
     hits = lit_store.keyword_search(conn, "heart", min_tier="rct")
-    assert hits or True  # may legitimately be empty
+    assert hits == []
+    assert len(hits) < len(unfiltered)
     assert all(h.evidence_rank is not None and h.evidence_rank <= 3
                for h in hits)
 

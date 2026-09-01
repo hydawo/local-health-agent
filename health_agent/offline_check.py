@@ -163,6 +163,15 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         step("embed literature corpus", lambda: (
             f"{lit_embed.embed_corpus(lit_conn, lit_vectors, embedder)} chunks"))
 
+        # Mirrors "vector search (LanceDB)" above: the agent-tool step below
+        # runs with no `embedder_factory`, so it never exercises this path.
+        # Without a direct call here, the newest native-code read — against
+        # `literature_chunks` — would sit outside the one test whose entire
+        # purpose is to be a falsifiable proof (spec §5).
+        from health_agent.literature import store as lit_store
+        step("vector search (literature LanceDB)", lambda: (
+            f"{len(lit_store.search(lit_conn, lit_vectors, embedder, 'blood pressure'))} hits"))
+
         ctx.literature_conn = lit_conn
         ctx.literature_vector_path = lit_store_path
         step("agent tool: search_medical_literature", lambda: (
