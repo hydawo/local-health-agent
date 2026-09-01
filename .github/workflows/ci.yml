@@ -55,6 +55,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      # The eval set asserts on values read out of the SCANNED report, so it
+      # needs the OCR binary as much as the test job does. Without it, q9 and
+      # q20 lose the scan's contribution and fail on a short list — which
+      # looks like an accuracy regression rather than a missing dependency.
+      - name: Install Tesseract (OCR path)
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
       - run: pip install -e ".[dev]"
       - name: Eval set
         run: pytest tests/test_eval.py -v

@@ -247,15 +247,42 @@ def _install_socket_block() -> None:
 # The parent: pick a sandbox and run the child inside it
 # --------------------------------------------------------------------------- #
 
+def _sandbox_probe_passes(command: list[str]) -> bool:
+    """Run the sandbox on a trivial command to see whether it actually works.
+
+    Being on PATH is not the same as being usable. GitHub's Ubuntu runners
+    ship `unshare` but forbid unprivileged user namespaces, so `unshare -rn`
+    exists and fails every time; the same is true inside most containers,
+    which is where a lot of people will try to verify this claim.
+
+    Detecting by presence alone would report `os-sandbox` and then die. That
+    is the worst of the three outcomes: this module's whole point is that a
+    pass under `python` is weaker evidence than a pass under `os-sandbox`,
+    which only means something if the name is true. So probe, and fall back
+    to the weaker mechanism honestly when the stronger one cannot run.
+    """
+    try:
+        completed = subprocess.run(command, capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return completed.returncode == 0
+
+
 def detect_mechanism() -> tuple[str, str]:
-    """Pick the strongest available enforcement. Returns (mechanism, detail)."""
+    """Pick the strongest *working* enforcement. Returns (mechanism, detail)."""
     system = platform.system()
     if system == "Darwin" and shutil.which("sandbox-exec"):
-        return "os-sandbox", "macOS sandbox-exec, (deny network*)"
-    if system == "Linux" and shutil.which("unshare"):
+        with tempfile.TemporaryDirectory(prefix="health-agent-probe-") as tmp:
+            profile = Path(tmp) / "no-network.sb"
+            profile.write_text(MACOS_PROFILE)
+            if _sandbox_probe_passes(
+                    ["sandbox-exec", "-f", str(profile), "true"]):
+                return "os-sandbox", "macOS sandbox-exec, (deny network*)"
+    elif system == "Linux" and shutil.which("unshare"):
         # An empty network namespace has no route to anywhere, including
         # loopback services on the host.
-        return "os-sandbox", "Linux unshare -n (empty network namespace)"
+        if _sandbox_probe_passes(["unshare", "-rn", "true"]):
+            return "os-sandbox", "Linux unshare -n (empty network namespace)"
     return "python", "socket module patched to raise in the child process"
 
 
