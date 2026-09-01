@@ -58,3 +58,7 @@ htmlcov/
 .DS_Store
 .idea/
 .vscode/
+
+# Subagent-driven-development scratch: ledgers, task briefs, review diffs.
+# Working notes for a single session, never part of the project record.
+.superpowers/
