@@ -348,3 +348,21 @@ def test_detect_mechanism_reports_the_os_sandbox_when_the_probe_passes(
                         lambda command: True)
 
     assert offline_check.detect_mechanism()[0] == "os-sandbox"
+
+
+def test_missing_sandbox_is_explained_as_absent_or_as_blocked(monkeypatch):
+    """"Not installed" and "installed but not permitted" need different advice.
+
+    The second is the common case — containers and CI runners ship `unshare`
+    and forbid unprivileged user namespaces — and telling that reader to
+    install a binary they already have sends them the wrong way.
+    """
+    monkeypatch.setattr(offline_check.platform, "system", lambda: "Linux")
+
+    monkeypatch.setattr(offline_check.shutil, "which", lambda name: None)
+    assert "install" in offline_check.explain_missing_sandbox().lower()
+
+    monkeypatch.setattr(offline_check.shutil, "which", lambda name: "/usr/bin/unshare")
+    blocked = offline_check.explain_missing_sandbox()
+    assert "install" not in blocked.lower()
+    assert "namespace" in blocked.lower()

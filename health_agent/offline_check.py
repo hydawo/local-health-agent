@@ -268,6 +268,34 @@ def _sandbox_probe_passes(command: list[str]) -> bool:
     return completed.returncode == 0
 
 
+def explain_missing_sandbox() -> str:
+    """Why the OS sandbox was not used, in terms the reader can act on.
+
+    "Not installed" and "installed but not permitted" need different advice,
+    and since `detect_mechanism` started probing rather than assuming, the
+    second is now the common case: containers and CI runners ship `unshare`
+    and forbid unprivileged user namespaces. Telling that reader to install a
+    binary they already have sends them the wrong way.
+    """
+    system = platform.system()
+    if system == "Darwin":
+        if not shutil.which("sandbox-exec"):
+            return ("macOS ships `sandbox-exec`, but it was not found on "
+                    "PATH, so native code is not covered here.")
+        return ("`sandbox-exec` is present but would not start, so native "
+                "code is not covered here.")
+    if system == "Linux":
+        if not shutil.which("unshare"):
+            return ("Install `unshare` (util-linux) to also cover native "
+                    "code.")
+        return ("`unshare` is present but cannot create a network namespace "
+                "here — unprivileged user namespaces are usually disabled in "
+                "containers and on CI runners. Run this on a host that "
+                "permits them to also cover native code.")
+    return ("No OS sandbox is available on this platform, so native code is "
+            "not covered.")
+
+
 def detect_mechanism() -> tuple[str, str]:
     """Pick the strongest *working* enforcement. Returns (mechanism, detail)."""
     system = platform.system()
