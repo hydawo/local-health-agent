@@ -73,18 +73,18 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             continue
 
         conn.execute(
-            "INSERT INTO article(pack_id, pmid, doi, title, abstract, journal, "
+            "INSERT INTO article(pack_id, pmid, doi, title, journal, "
             "pub_year, publication_types, evidence_tier, evidence_rank, "
             "tier_source, license, full_text_available, retracted, "
             "retraction_note, fetched_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             # Every mutable column is refreshed here, not just abstract/tier. A
             # rebuild that silently kept a stale `license` would defeat the
             # column's whole purpose: the PMC Open Access subset mixes CC-BY,
             # CC-BY-NC and CC-BY-NC-ND, so a corrected license has to land.
             "ON CONFLICT(pack_id, pmid) DO UPDATE SET "
             "doi = excluded.doi, title = excluded.title, "
-            "abstract = excluded.abstract, journal = excluded.journal, "
+            "journal = excluded.journal, "
             "pub_year = excluded.pub_year, "
             "publication_types = excluded.publication_types, "
             "evidence_tier = excluded.evidence_tier, "
@@ -94,7 +94,7 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             "retracted = excluded.retracted, "
             "retraction_note = excluded.retraction_note, "
             "fetched_at = excluded.fetched_at",
-            (pack_id, article.pmid, article.doi, article.title, body,
+            (pack_id, article.pmid, article.doi, article.title,
              article.journal, article.pub_year,
              json.dumps(article.publication_types), article.evidence_tier,
              article.evidence_rank, article.tier_source, license,
