@@ -86,3 +86,84 @@ def test_payload_never_carries_personal_record_text(ctx):
                                    {"query": "cholesterol"})
     assert "results" not in payload      # search_records' key
     assert "analytes" not in payload     # get_lab_trend's key
+
+
+def _search(ctx, **args):
+    return agent_tools.dispatch(ctx, "search_medical_literature", args)
+
+
+def test_a_filtered_miss_is_not_reported_as_a_coverage_gap(ctx):
+    """With a floor set, 'the corpus holds nothing on this' is false: PMID
+    40000009 matches these terms and is simply untagged. The payload must say
+    the filter did the excluding, and how much of the corpus it excludes."""
+    payload = _search(ctx, query="cuff confidence", min_tier="rct")
+    assert payload["no_matches"] is True
+    assert payload["filtered"] is True
+    assert payload["filter"]["min_tier"] == "rct"
+    assert payload["filter"]["unranked_articles_excluded"] >= 1
+    assert 0 < payload["filter"]["unranked_share"] < 1
+    note = payload["note"].lower()
+    assert "holds nothing" not in note
+    assert "no recorded study design" in note
+    assert "without min_tier" in note
+    assert "do not answer from general knowledge" in note
+
+
+def test_an_unfiltered_miss_keeps_the_coverage_wording(ctx):
+    payload = _search(ctx, query="zzzz nonexistent orthopedic arthroplasty topic")
+    assert payload["no_matches"] is True
+    assert "filtered" not in payload
+    assert "filter" not in payload
+    assert "holds nothing" in payload["note"].lower()
+
+
+def test_a_since_year_only_miss_is_filtered_without_the_unranked_numbers(ctx):
+    """The unranked share only explains a tier floor. Quoting it on a
+    year-only miss would blame the wrong filter."""
+    payload = _search(ctx, query="cuff confidence", since_year=2090)
+    assert payload["no_matches"] is True
+    assert payload["filtered"] is True
+    assert payload["filter"]["since_year"] == 2090
+    assert "unranked_articles_excluded" not in payload["filter"]
+    assert "no recorded study design" not in payload["note"].lower()
+
+
+def test_a_filtered_hit_reports_what_the_floor_excluded(ctx):
+    payload = _search(ctx, query="blood pressure", min_tier="rct")
+    assert payload["findings"]
+    assert payload["filter"]["min_tier"] == "rct"
+    assert payload["filter"]["unranked_articles_excluded"] >= 1
+    assert "no recorded study design" in payload["filter_note"].lower()
+
+
+def test_an_unfiltered_hit_carries_no_filter_block(ctx):
+    payload = _search(ctx, query="blood pressure")
+    assert payload["findings"]
+    assert "filter" not in payload
+    assert "filter_note" not in payload
+
+
+def test_unknown_findings_carry_the_tier_warning(ctx):
+    """Runs against a real unknown row (PMID 40000009) for the first time."""
+    payload = _search(ctx, query="cuff confidence")
+    assert any(f["pmid"] == "40000009" and f["evidence_tier"] == "unknown"
+               for f in payload["findings"])
+    assert "study design is unknown" in payload["tier_warning"].lower()
+
+
+def test_protocol_findings_carry_their_own_warning(ctx):
+    payload = _search(ctx, query="reminders statin")
+    protocol = next(f for f in payload["findings"] if f["pmid"] == "40000010")
+    assert protocol["evidence_tier"] == "protocol"
+    assert protocol["tier_source"] == "publication_type"
+    assert "no results" in payload["protocol_warning"].lower()
+
+
+def test_min_tier_description_warns_that_most_of_the_corpus_is_untagged():
+    schema = agent_tools.BY_NAME["search_medical_literature"].schema()
+    params = schema["function"]["parameters"]
+    description = params["properties"]["min_tier"]["description"].lower()
+    assert "no study-design tag" in description or "no recorded study design" in description
+    assert "strongest-first" in description or "strongest first" in description
+    assert "protocol" not in params["properties"]["min_tier"]["enum"]
+    assert "unknown" not in params["properties"]["min_tier"]["enum"]

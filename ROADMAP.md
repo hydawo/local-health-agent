@@ -24,6 +24,17 @@ check. See the README's [Medical literature corpus](README.md#medical-literature
 section and [LICENSES.md](LICENSES.md) for what a built corpus contains and
 under what terms.
 
+**Measured after slice 1, against 2,000 real abstracts** (recorded in
+[docs/superpowers/specs/2026-09-15-literature-follow-ups-design.md](docs/superpowers/specs/2026-09-15-literature-follow-ups-design.md)):
+the corpus is 15 KB per article all-in, so the 24k-article
+meta-analyses-and-systematic-reviews scope is about 370 MB and the 61k scope
+adding guidelines and RCTs about 920 MB; the unfiltered query would be
+415k articles and 6.3 GB. 65.5% of articles have no recorded study design.
+Those numbers produced three changes: the tool now reports what a `min_tier`
+floor excludes, four more publication types are mapped (with trial protocols
+overriding rather than inflating), and the write-only abstract column is
+gone behind a schema bump and a `--rebuild` flag.
+
 **One assumption from the original design turned out wrong:** Cochrane is not
 a separate source. It has no open API of its own — Cochrane systematic reviews
 are indexed in PubMed/MEDLINE like any other article, under the journal name
@@ -140,6 +151,8 @@ Options, to be chosen deliberately rather than defaulted into:
   "post-surgical rehab" pack), so a request reveals a category rather than a
   profile. Currently the most promising: it also makes the corpus versionable
   (#6) and reproducible across users.
+  The size measurement above makes this a requirement rather than a
+  preference: an unbounded fetch is 6.3 GB.
 - Broad topic bundles instead of precise query strings, accepting a larger
   corpus for a vaguer request.
 - Batching real topics with decoys, which is weaker than it sounds and worth

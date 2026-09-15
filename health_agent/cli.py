@@ -767,14 +767,7 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
         def embedder_factory():
             return embeddings.get_embedder(args.embedder)
 
-        from .literature import schema as lit_schema
-
-        try:
-            literature_conn = lit_schema.connect(cfg.literature_path)
-        except lit_schema.CorpusNotFound:
-            # Optional. The tool reports its own absence in terms the model
-            # can use.
-            pass
+        literature_conn = _open_literature_corpus(cfg)
 
         ctx = agent.ToolContext(
             conn=conn,
@@ -1236,7 +1229,14 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    conn = lit_schema.connect(cfg.literature_path, create=True)
+    if args.rebuild:
+        _delete_literature_corpus(cfg)
+
+    try:
+        conn = lit_schema.connect(cfg.literature_path, create=True)
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     try:
         lit_schema.initialize(conn)
         stats = lit_corpus.build(conn, articles, slug=args.slug,
@@ -1259,13 +1259,52 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+def _delete_literature_corpus(cfg: config.Config) -> None:
+    """The corpus and its vector table, and nothing else.
+
+    `reset` once destroyed the corpus's vectors because two paths resolved
+    to one directory; this is the same boundary from the other side, and
+    the test for it asserts the personal index is untouched.
+    """
+    from .literature import embed as lit_embed
+
+    if cfg.literature_path.exists():
+        cfg.literature_path.unlink()
+        for suffix in ("-wal", "-shm"):
+            cfg.literature_path.with_name(
+                cfg.literature_path.name + suffix).unlink(missing_ok=True)
+    if cfg.literature_vector_path.exists():
+        vector_store.VectorStore(cfg.literature_vector_path,
+                                 table_name=lit_embed.TABLE_NAME).drop()
+
+
+def _open_literature_corpus(cfg: config.Config):
+    """The corpus for `ask`, or None when there is none to offer.
+
+    Absent and stale are both 'none to offer' from the tool's point of view —
+    it already reports its own absence in terms the model can act on — but a
+    stale corpus is the user's problem to fix, so it is said on stderr
+    rather than swallowed.
+    """
+    from .literature import schema as lit_schema
+
+    try:
+        return lit_schema.connect(cfg.literature_path)
+    except lit_schema.CorpusNotFound:
+        return None
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(f"warning: literature corpus not used: {exc}", file=sys.stderr)
+        return None
+
+
 def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
     from .literature import corpus as lit_corpus
     from .literature import schema as lit_schema
 
     try:
         conn = lit_schema.connect(cfg.literature_path)
-    except lit_schema.CorpusNotFound as exc:
+    except (lit_schema.CorpusNotFound,
+            lit_schema.CorpusSchemaVersionMismatch) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -1684,6 +1723,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_lit_build.add_argument("--embed-backend", default="ollama",
                              choices=["ollama", "hashing"])
     p_lit_build.add_argument("--no-embed", action="store_true")
+    p_lit_build.add_argument(
+        "--rebuild", action="store_true",
+        help="delete the existing corpus (literature.db and its vector table) "
+             "and build from scratch; the personal index is not touched")
     p_lit_build.set_defaults(func=cmd_literature_build)
 
     p_lit_status = lit_sub.add_parser("status", help="what the corpus holds")

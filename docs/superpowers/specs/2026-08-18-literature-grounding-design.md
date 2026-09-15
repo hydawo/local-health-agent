@@ -315,3 +315,8 @@ not produce:
 
 2. **Whether the `Review` / `Systematic Review` split holds up** against real
    PubMed data, per §2.
+
+**Both answered on 2026-09-15**, in
+[2026-09-15-literature-follow-ups-design.md](2026-09-15-literature-follow-ups-design.md) §1.
+The size estimate was low by 4–5× on text; the `Review` / `Systematic Review`
+split held and has a measured magnitude. The text above is left as written.

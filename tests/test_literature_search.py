@@ -73,9 +73,34 @@ def test_min_tier_excludes_weaker_evidence(built):
 
 
 def test_min_tier_excludes_unknown_rather_than_ranking_it_last(built):
+    """PMID 40000009 carries `Journal Article` and nothing else, so it is
+    `unknown`. Unfiltered it is findable; under any floor it is gone. Before
+    the fixture held an unknown row this test passed vacuously."""
     conn, _, _ = built
-    hits = lit_store.keyword_search(conn, "case", min_tier="case_report")
+    unfiltered = lit_store.keyword_search(conn, "cuff confidence")
+    assert "40000009" in {h.pmid for h in unfiltered}
+    assert any(h.evidence_tier == "unknown" for h in unfiltered)
+
+    hits = lit_store.keyword_search(conn, "cuff confidence",
+                                    min_tier="case_report")
+    assert "40000009" not in {h.pmid for h in hits}
     assert all(h.evidence_tier != "unknown" for h in hits)
+
+
+def test_protocol_is_findable_unfiltered_and_excluded_by_any_floor(built):
+    """PMID 40000010 is tagged both Clinical Trial Protocol and Randomized
+    Controlled Trial. It resolves to `protocol`, unranked, so a floor excludes
+    it exactly as it excludes `unknown`."""
+    conn, _, _ = built
+    unfiltered = lit_store.keyword_search(conn, "reminders statin")
+    protocol = next(h for h in unfiltered if h.pmid == "40000010")
+    assert protocol.evidence_tier == "protocol"
+    assert protocol.evidence_rank is None
+    assert protocol.tier_source == "publication_type"
+
+    hits = lit_store.keyword_search(conn, "reminders statin",
+                                    min_tier="case_report")
+    assert "40000010" not in {h.pmid for h in hits}
 
 
 def test_since_year_filters_by_publication_year(built):

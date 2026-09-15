@@ -466,3 +466,120 @@ def test_literature_status_without_a_corpus_explains_rather_than_crashes(
                  "literature", "status"])
     assert code != 0
     assert "literature build" in capsys.readouterr().err
+
+
+def test_literature_rebuild_replaces_the_corpus_and_spares_the_personal_index(
+        cli, tmp_path):
+    """The mirror of test_reset_does_not_destroy_the_literature_corpus:
+    --rebuild reaches literature.db and the literature_chunks table, and
+    nothing else."""
+    from health_agent import config as config_mod
+    from health_agent.literature import embed as lit_embed
+    from health_agent.literature import schema as lit_schema
+    from health_agent.store import sqlite_schema
+    from health_agent.store import vector_store
+
+    lit_fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
+    code, _ = cli("literature", "build", "--from", str(lit_fixture),
+                  "--slug", "test", "--version", "1",
+                  "--embed-backend", "hashing")
+    assert code == 0
+    cfg = config_mod.resolve(index_path=str(tmp_path / "health.db"))
+
+    personal = sqlite_schema.connect(cfg.index_path)
+    records_before = personal.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"]
+    personal.close()
+    assert records_before > 0
+
+    # Pretend the corpus is from an older schema.
+    lit = lit_schema.connect(cfg.literature_path)
+    lit.execute("UPDATE corpus_meta SET value = '1' WHERE key = 'schema_version'")
+    lit.commit()
+    lit.close()
+
+    code, out = cli("literature", "build", "--from", str(lit_fixture),
+                    "--slug", "test", "--version", "1",
+                    "--embed-backend", "hashing")
+    assert code != 0                      # refused: wrong version, no --rebuild
+
+    code, out = cli("literature", "build", "--from", str(lit_fixture),
+                    "--slug", "test", "--version", "1",
+                    "--embed-backend", "hashing", "--rebuild")
+    assert code == 0
+    assert "articles" in out
+
+    lit = lit_schema.connect(cfg.literature_path)
+    assert lit_schema.read_version(lit) == lit_schema.LITERATURE_SCHEMA_VERSION
+    assert lit.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] > 0
+    chunks_after = lit.execute(
+        "SELECT COUNT(*) AS n FROM article_chunk").fetchone()["n"]
+    lit.close()
+
+    # A no-op drop would leave the old table's rows in place, whose chunk_ids
+    # collide with the rebuilt corpus's new article_chunk ids — search would
+    # then hydrate stale text under a fresh citation. Proving the vector
+    # table's row count matches the rebuilt corpus rules that out.
+    lit_vectors = vector_store.VectorStore(cfg.literature_vector_path,
+                                            table_name=lit_embed.TABLE_NAME)
+    assert lit_vectors.count() == chunks_after
+
+    personal = sqlite_schema.connect(cfg.index_path)
+    assert personal.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"] == records_before
+    personal.close()
+    # The `cli` fixture ingests a HealthKit export only, so the personal
+    # vector store was never created; asserting it stays absent is this
+    # test's way of showing --rebuild never reaches it.
+    assert not cfg.vector_path.exists()
+
+
+def test_literature_build_into_a_stale_corpus_names_the_rebuild_flag(
+        tmp_path, capsys):
+    from health_agent.cli import main
+    from health_agent import config as config_mod
+    from health_agent.literature import schema as lit_schema
+
+    fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
+    index = tmp_path / ".index" / "health.db"
+    assert main(["--index", str(index), "literature", "build", "--from",
+                 str(fixture), "--no-embed"]) == 0
+    capsys.readouterr()
+
+    cfg = config_mod.resolve(index_path=str(index))
+    lit = lit_schema.connect(cfg.literature_path)
+    lit.execute("UPDATE corpus_meta SET value = '1' WHERE key = 'schema_version'")
+    lit.commit()
+    lit.close()
+
+    code = main(["--index", str(index), "literature", "build", "--from",
+                 str(fixture), "--no-embed"])
+    assert code == 2
+    assert "--rebuild" in capsys.readouterr().err
+
+    code = main(["--index", str(index), "literature", "status"])
+    assert code != 0
+    assert "--rebuild" in capsys.readouterr().err
+
+
+def test_ask_path_survives_a_stale_corpus(tmp_path, capsys):
+    """A wrong-version corpus must not crash `ask`; it is reported and the
+    tool sees no corpus, which it already knows how to say."""
+    from health_agent.cli import main
+    from health_agent import config as config_mod
+    from health_agent.literature import schema as lit_schema
+
+    fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
+    index = tmp_path / ".index" / "health.db"
+    assert main(["--index", str(index), "literature", "build", "--from",
+                 str(fixture), "--no-embed"]) == 0
+    cfg = config_mod.resolve(index_path=str(index))
+    lit = lit_schema.connect(cfg.literature_path)
+    lit.execute("UPDATE corpus_meta SET value = '1' WHERE key = 'schema_version'")
+    lit.commit()
+    lit.close()
+    capsys.readouterr()
+
+    from health_agent import cli as cli_mod
+    opened = cli_mod._open_literature_corpus(cfg)
+    err = capsys.readouterr().err
+    assert opened is None
+    assert "--rebuild" in err

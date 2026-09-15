@@ -50,3 +50,47 @@ def test_tier_source_never_records_an_inference(tmp_path):
             "INSERT INTO article(pack_id, pmid, title, evidence_tier, "
             "tier_source, license) VALUES(1, '1', 't', 'rct', 'inferred', 'x')")
     conn.close()
+
+
+def test_schema_version_is_2():
+    assert schema.LITERATURE_SCHEMA_VERSION == 2
+
+
+def test_article_has_no_abstract_column(tmp_path):
+    """Written by build() and read by nothing: article_chunk.text is the
+    retrievable copy, and on a real corpus the duplicate was a quarter of
+    the database."""
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(article)")}
+    assert "abstract" not in columns
+    assert "title" in columns
+    conn.close()
+
+
+def test_connect_refuses_a_corpus_at_another_version(tmp_path):
+    """check_version existed and was called by nobody; the ask path, status,
+    and build all opened a corpus blind. Opening is where the check belongs,
+    so no caller can forget it."""
+    path = tmp_path / "literature.db"
+    conn = schema.connect(path, create=True)
+    schema.initialize(conn)
+    conn.execute("UPDATE corpus_meta SET value = '1' WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(schema.CorpusSchemaVersionMismatch) as excinfo:
+        schema.connect(path)
+    assert "--rebuild" in str(excinfo.value)
+
+    # create=True on an existing file is still an open, not a fresh build.
+    with pytest.raises(schema.CorpusSchemaVersionMismatch):
+        schema.connect(path, create=True)
+
+
+def test_connect_creates_a_fresh_corpus_without_a_version_check(tmp_path):
+    conn = schema.connect(tmp_path / "new.db", create=True)
+    assert schema.read_version(conn) is None
+    schema.initialize(conn)
+    assert schema.read_version(conn) == schema.LITERATURE_SCHEMA_VERSION
+    conn.close()

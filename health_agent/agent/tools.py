@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import labs, metrics
+from ..literature import tiers as lit_tiers
 from ..logging_setup import get_logger
 from ..store import queries, vector_store
 
@@ -574,16 +575,54 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
         return {"error": str(exc)}
 
     coverage = lit_corpus.coverage(ctx.literature_conn)
+
+    # A floor excludes every unranked article, and on a real corpus that is
+    # most of it: 65.5% of 2,000 PubMed abstracts resolved to `unknown`
+    # because PubMed records no study design for most primary research. The
+    # numbers here are corpus-level and exact, from coverage(); a per-query
+    # count over an FTS OR-match would be true and useless. Protocols are
+    # counted separately (payload["protocol_warning"], below): a protocol has
+    # a known design, it simply reports no results, so it is not part of
+    # "no recorded study design".
+    filter_block: dict | None = None
+    if min_tier or since_year:
+        filter_block = {"min_tier": min_tier, "since_year": since_year}
+        if min_tier:
+            unranked = coverage["tiers"].get(lit_tiers.UNKNOWN, 0)
+            total = coverage["article_count"] or 1
+            filter_block["unranked_articles_excluded"] = unranked
+            filter_block["unranked_share"] = round(unranked / total, 3)
+
     if not findings:
-        return {
+        miss: dict = {
             "corpus_installed": True,
             "findings": [],
             "no_matches": True,
             "corpus": coverage,
-            "note": ("The corpus holds nothing on this. Say that your "
-                     "literature does not cover it, name what it does cover, "
-                     "and do not answer from general knowledge."),
         }
+        if filter_block is None:
+            miss["note"] = (
+                "The corpus holds nothing on this. Say that your literature "
+                "does not cover it, name what it does cover, and do not answer "
+                "from general knowledge.")
+        else:
+            # Not a coverage gap: the corpus may hold plenty on this, untagged.
+            # Saying 'holds nothing' here would send the model to recall.
+            miss["filtered"] = True
+            miss["filter"] = filter_block
+            reason = "Nothing matched under these filters. "
+            if min_tier:
+                reason += (
+                    f"{filter_block['unranked_articles_excluded']} of "
+                    f"{coverage['article_count']} articles in this corpus "
+                    f"({filter_block['unranked_share']:.0%}) have no recorded "
+                    f"study design and are excluded by any min_tier floor; "
+                    f"that is normal for PubMed, not a sign of thin coverage. ")
+            miss["note"] = (
+                reason + "Retry without min_tier and since_year before "
+                "concluding that the corpus does not cover this, and do not "
+                "answer from general knowledge.")
+        return miss
 
     payload: dict = {
         "corpus_installed": True,
@@ -619,11 +658,27 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
         payload["retraction_warning"] = (
             "One or more findings come from a RETRACTED publication. Say so "
             "beside the citation, and do not present it as current evidence.")
-    if any(f.evidence_tier == "unknown" for f in findings):
+    if any(f.evidence_tier == lit_tiers.UNKNOWN for f in findings):
         payload["tier_warning"] = (
             "Findings with evidence_tier 'unknown' had no publication type "
             "recorded. Say that their study design is unknown rather than "
             "implying one.")
+    if filter_block is not None:
+        payload["filter"] = filter_block
+        if min_tier:
+            payload["filter_note"] = (
+                f"min_tier={min_tier} excluded the "
+                f"{filter_block['unranked_articles_excluded']} articles "
+                f"({filter_block['unranked_share']:.0%} of this corpus) that "
+                f"have no recorded study design. Without a floor, results "
+                f"are ordered strongest-first among the matches, but the "
+                f"matches themselves are chosen by relevance, so a floor "
+                f"can surface strong evidence a broad query would not.")
+    if any(f.evidence_tier == lit_tiers.PROTOCOL for f in findings):
+        payload["protocol_warning"] = (
+            "One or more findings are trial PROTOCOLS: they describe a "
+            "planned study and report no results. Say so beside the citation, "
+            "and do not present a protocol as evidence of anything.")
     return payload
 
 
@@ -808,13 +863,16 @@ TOOLS: tuple[Tool, ...] = (
                           "description": "The topic, in natural language."},
                 "min_tier": {
                     "type": "string",
-                    "enum": ["meta_analysis", "systematic_review", "guideline",
-                             "rct", "narrative_review", "observational",
-                             "case_report"],
+                    "enum": list(lit_tiers.TIERS),
                     "description": (
-                        "Strongest-to-weakest floor on study design. Omit "
-                        "unless the question is specifically about evidence "
-                        "quality; filtering too hard returns nothing."
+                        "Floor on study design, strongest to weakest. Most "
+                        "primary research in PubMed carries no study-design "
+                        "tag, so ANY floor excludes the majority of the "
+                        "corpus, not just weak studies. Without it, results "
+                        "are ordered strongest-first among the relevance "
+                        "matches. Set it only when "
+                        "the user asks for evidence at a stated strength, and "
+                        "if it returns nothing, retry without it."
                     ),
                 },
                 "since_year": {"type": "integer",

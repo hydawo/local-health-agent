@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-LITERATURE_SCHEMA_VERSION = 1
+LITERATURE_SCHEMA_VERSION = 2
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS corpus_meta (
@@ -39,7 +39,9 @@ CREATE TABLE IF NOT EXISTS article (
     doi                 TEXT,
     nct_id              TEXT,
     title               TEXT NOT NULL,
-    abstract            TEXT,
+    -- No abstract column. article_chunk.text is the retrievable copy; a
+    -- second copy here was written by build() and read by nothing, and on a
+    -- real corpus it was a quarter of the database. (v1 had it.)
     journal             TEXT,
     pub_year            INTEGER,
     -- The raw MEDLINE value, kept verbatim beside the derived tier so the
@@ -106,8 +108,16 @@ class CorpusSchemaVersionMismatch(RuntimeError):
 
 
 def connect(path: Path, *, create: bool = False) -> sqlite3.Connection:
+    """Open a corpus, refusing one written by another schema version.
+
+    The version check lives here rather than in callers because every caller
+    forgot it: the ask path, `status`, and `build` all opened a corpus blind
+    while `check_version` sat unused. A fresh file (create=True, nothing on
+    disk yet) has no version to check and is stamped by `initialize`.
+    """
     path = Path(path)
-    if not path.exists():
+    existed = path.exists()
+    if not existed:
         if not create:
             raise CorpusNotFound(
                 f"No literature corpus at {path}. Run "
@@ -119,6 +129,12 @@ def connect(path: Path, *, create: bool = False) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    if existed:
+        try:
+            check_version(conn)
+        except CorpusSchemaVersionMismatch:
+            conn.close()
+            raise
     return conn
 
 
@@ -149,7 +165,8 @@ def check_version(conn: sqlite3.Connection) -> None:
         raise CorpusSchemaVersionMismatch(
             f"Corpus schema version is {found}, this build expects "
             f"{LITERATURE_SCHEMA_VERSION}. Run "
-            f"`health-agent literature build --rebuild` to recreate it."
+            f"`health-agent literature build --from <medline.xml> --rebuild` "
+            f"to recreate it."
         )
 
 
