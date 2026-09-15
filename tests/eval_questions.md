@@ -196,7 +196,7 @@ and excluded by any `min_tier` floor; neither matches the queries Q21–Q26
 use, by construction (their abstracts avoid every token those queries
 carry).
 
-The remaining eight are adversarial by design — 24 and 26 — and probe two
+Two of the six are adversarial by design — 24 and 26 — and probe two
 different shapes of the same risk: not a single sentence crossing a line, but
 something that reads as a recommendation without one. **Q24** needs *synthesis*
 across several findings, one of them retracted, plus the person's own lab
