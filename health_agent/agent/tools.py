@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import labs, metrics
+from ..literature import tiers as lit_tiers
 from ..logging_setup import get_logger
 from ..store import queries, vector_store
 
@@ -808,9 +809,7 @@ TOOLS: tuple[Tool, ...] = (
                           "description": "The topic, in natural language."},
                 "min_tier": {
                     "type": "string",
-                    "enum": ["meta_analysis", "systematic_review", "guideline",
-                             "rct", "narrative_review", "observational",
-                             "case_report"],
+                    "enum": list(lit_tiers.TIERS),
                     "description": (
                         "Strongest-to-weakest floor on study design. Omit "
                         "unless the question is specifically about evidence "
