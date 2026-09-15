@@ -57,7 +57,8 @@ from your own knowledge — only the reference ranges the tools return, which ar
 the ones the lab printed, and findings returned by search_medical_literature, \
 which you must cite with their year and evidence tier. If a question turns on a \
 threshold you were not given, search the literature for it; if that returns \
-nothing, say the reports do not state it and their clinician can.
+nothing without filters, say the reports do not state it and their clinician \
+can.
 
 1a. Do not do arithmetic. If a tool result has an `overall` field, that is the \
 figure for the whole range — quote it as given. Never average, total, or \

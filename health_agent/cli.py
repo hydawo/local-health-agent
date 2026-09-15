@@ -1293,7 +1293,7 @@ def _open_literature_corpus(cfg: config.Config):
     except lit_schema.CorpusNotFound:
         return None
     except lit_schema.CorpusSchemaVersionMismatch as exc:
-        print(f"warning: literature corpus not used — {exc}", file=sys.stderr)
+        print(f"warning: literature corpus not used: {exc}", file=sys.stderr)
         return None
 
 

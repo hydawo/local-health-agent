@@ -670,9 +670,10 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
                 f"min_tier={min_tier} excluded the "
                 f"{filter_block['unranked_articles_excluded']} articles "
                 f"({filter_block['unranked_share']:.0%} of this corpus) that "
-                f"have no recorded study design. Stronger evidence is not "
-                f"hidden behind them: results are ordered strongest-first "
-                f"without any floor.")
+                f"have no recorded study design. Without a floor, results "
+                f"are ordered strongest-first among the matches, but the "
+                f"matches themselves are chosen by relevance, so a floor "
+                f"can surface strong evidence a broad query would not.")
     if any(f.evidence_tier == lit_tiers.PROTOCOL for f in findings):
         payload["protocol_warning"] = (
             "One or more findings are trial PROTOCOLS: they describe a "
@@ -867,8 +868,9 @@ TOOLS: tuple[Tool, ...] = (
                         "Floor on study design, strongest to weakest. Most "
                         "primary research in PubMed carries no study-design "
                         "tag, so ANY floor excludes the majority of the "
-                        "corpus, not just weak studies. Results are already "
-                        "ordered strongest-first without it. Set it only when "
+                        "corpus, not just weak studies. Without it, results "
+                        "are ordered strongest-first among the relevance "
+                        "matches. Set it only when "
                         "the user asks for evidence at a stated strength, and "
                         "if it returns nothing, retry without it."
                     ),

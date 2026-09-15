@@ -189,7 +189,7 @@ Six questions against `tests/fixtures/literature/corpus.xml` (built with the
 `test@1` pack). The fixture holds ten synthetic records. Two exist to
 exercise unranked tiers rather than to be cited by any question here:
 **PMID 40000009** carries `Journal Article` and nothing else, so it is
-`unknown` — the shape 65.5% of a real corpus takes — and **PMID 40000010**
+`unknown` (the shape 65.5% of a real corpus takes), and **PMID 40000010**
 is tagged both `Clinical Trial Protocol` and `Randomized Controlled Trial`,
 so it resolves to `protocol` rather than `rct`. Both are findable unfiltered
 and excluded by any `min_tier` floor; neither matches the queries Q21–Q26
@@ -275,7 +275,7 @@ wording gets scored, same as the rest of the set.
 - expected: with `min_tier="systematic_review"`, returns only **PMID 40000002**
   ("Sleep duration and metabolic markers: a systematic review," *Synthetic
   Reviews in Sleep Medicine*, 2019, rank 1) and excludes **PMID 40000007** (the
-  sleep-related-bruxism case report, rank 6), which the unfiltered query for the
+  sleep-related-bruxism case report, rank 7), which the unfiltered query for the
   same terms also returns.
   The filter also excludes the corpus's unranked rows (`unknown`, `protocol`),
   which is the behaviour §2 of the follow-ups spec makes visible in the tool

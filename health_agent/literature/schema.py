@@ -165,7 +165,8 @@ def check_version(conn: sqlite3.Connection) -> None:
         raise CorpusSchemaVersionMismatch(
             f"Corpus schema version is {found}, this build expects "
             f"{LITERATURE_SCHEMA_VERSION}. Run "
-            f"`health-agent literature build --rebuild` to recreate it."
+            f"`health-agent literature build --from <medline.xml> --rebuild` "
+            f"to recreate it."
         )
 
 

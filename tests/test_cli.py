@@ -474,8 +474,10 @@ def test_literature_rebuild_replaces_the_corpus_and_spares_the_personal_index(
     --rebuild reaches literature.db and the literature_chunks table, and
     nothing else."""
     from health_agent import config as config_mod
+    from health_agent.literature import embed as lit_embed
     from health_agent.literature import schema as lit_schema
     from health_agent.store import sqlite_schema
+    from health_agent.store import vector_store
 
     lit_fixture = Path(__file__).parent / "fixtures" / "literature" / "corpus.xml"
     code, _ = cli("literature", "build", "--from", str(lit_fixture),
@@ -509,7 +511,17 @@ def test_literature_rebuild_replaces_the_corpus_and_spares_the_personal_index(
     lit = lit_schema.connect(cfg.literature_path)
     assert lit_schema.read_version(lit) == lit_schema.LITERATURE_SCHEMA_VERSION
     assert lit.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] > 0
+    chunks_after = lit.execute(
+        "SELECT COUNT(*) AS n FROM article_chunk").fetchone()["n"]
     lit.close()
+
+    # A no-op drop would leave the old table's rows in place, whose chunk_ids
+    # collide with the rebuilt corpus's new article_chunk ids — search would
+    # then hydrate stale text under a fresh citation. Proving the vector
+    # table's row count matches the rebuilt corpus rules that out.
+    lit_vectors = vector_store.VectorStore(cfg.literature_vector_path,
+                                            table_name=lit_embed.TABLE_NAME)
+    assert lit_vectors.count() == chunks_after
 
     personal = sqlite_schema.connect(cfg.index_path)
     assert personal.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"] == records_before
