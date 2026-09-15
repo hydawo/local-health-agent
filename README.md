@@ -1,7 +1,7 @@
 # health-agent
 
-Ask questions about your own health data — Apple Health exports, bloodwork PDFs,
-medical records, personal notes — with **the data and the model both staying on
+Ask questions about your own health data (Apple Health exports, bloodwork PDFs,
+medical records, personal notes) with **the data and the model both staying on
 your machine**.
 
 ```bash
@@ -27,12 +27,12 @@ file and page behind every number.
 
 ![health-agent ingesting an export, answering questions, and proving it never touched the network](docs/demo.gif)
 
-*Recorded from `demo/demo.sh` against the synthetic fixtures — you can run the
-same thing. Regenerate with `vhs demo/demo.tape`.*
+*Recorded from `demo/demo.sh` against the synthetic fixtures. You can run the
+same thing, and regenerate it with `vhs demo/demo.tape`.*
 
 **Why this exists.** Health assistants generally ask you to send your medical
-records somewhere. This one is an argument that you don't have to — and that the
-claim should be *checkable* rather than asserted. `health-agent offline-check`
+records somewhere. This one is an argument that you don't have to. It is also an
+argument that the claim should be *checkable* rather than asserted. `health-agent offline-check`
 runs the entire pipeline inside a kernel-level sandbox with networking denied and
 shows you the result. [`THREAT_MODEL.md`](THREAT_MODEL.md) states every claim,
 how to verify it, and what this tool does **not** protect you from.
@@ -40,7 +40,7 @@ how to verify it, and what this tool does **not** protect you from.
 > **Status: v0.1, feature-complete for its scope.** All three source types
 > ingest, natural-language questions work end to end, accuracy is measured
 > against a 20-question eval set, and the privacy claims are falsifiable.
-> Post-release directions are in [`ROADMAP.md`](ROADMAP.md) — the largest is
+> Post-release directions are in [`ROADMAP.md`](ROADMAP.md). The largest is
 > literature grounding with evidence-graded citations.
 >
 > Not a medical device, and not a substitute for your clinician. See
@@ -48,12 +48,12 @@ how to verify it, and what this tool does **not** protect you from.
 
 ## What works today
 
-Ask in plain language, or query directly — the structured commands are instant
-where `ask` takes 25–60 seconds, and both read through the same code path, so
+Ask in plain language, or query directly. The structured commands are instant
+where `ask` takes 25 to 60 seconds. Both read through the same code path, so
 they cannot disagree.
 
 ```bash
-health-agent ask "My notes mention a vitamin D result — what did the lab say?"
+health-agent ask "My notes mention a vitamin D result. What did the lab say?"
 health-agent ask "Anything in my recent labs I should ask my doctor about?" --show-tools
 ```
 
@@ -98,7 +98,7 @@ to Ollama on localhost (see [Privacy](#privacy)).
 
 ## Try it without your own data
 
-The repo ships synthetic fixtures — invented values in the real formats — so you
+The repo ships synthetic fixtures, invented values in the real formats, so you
 can exercise the whole pipeline before pointing it at anything personal. The
 demo runs entirely against those:
 
@@ -140,11 +140,11 @@ the original before relying on them.
 ```
 
 Three reports from three different labs, naming the analyte three different
-ways, merged into one trend — with the scanned one marked as less trustworthy
+ways, merged into one trend. The scanned one is marked as less trustworthy
 rather than silently mixed in.
 
-To regenerate the demo GIF (`demo/demo.tape` is checked in, so it is
-reproducible rather than hand-recorded):
+To regenerate the demo GIF (`demo/demo.tape` is checked in, so the recording
+is reproducible):
 
 ```bash
 brew install vhs && vhs demo/demo.tape
@@ -160,9 +160,9 @@ pip install -e ".[dev]"
 
 Two optional pieces, both of which the tool works without and tells you about:
 
-- **Tesseract** — only needed for scanned records with no text layer.
+- **Tesseract**, only needed for scanned records with no text layer.
   `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Debian).
-- **Ollama** — needed for `ask` and for semantic search. Without it, `search`
+- **Ollama**, needed for `ask` and for semantic search. Without it, `search`
   falls back to keyword matching and says so, and everything else still works.
   ```bash
   ollama pull qwen3.6:27b && ollama pull nomic-embed-text
@@ -185,20 +185,20 @@ only for now; PyPI and Homebrew are deferred.
     └── vectors/              <- LanceDB: embeddings
 ```
 
-Both halves of the index are generated and disposable — `health-agent reset`
+Both halves of the index are generated and disposable. `health-agent reset`
 deletes them and `ingest` rebuilds from your source files. Override locations
 with `--data-dir`, `--index`, or `$HEALTH_AGENT_DATA_DIR`.
 
 ## Measured performance
 
-Numbers from an actual Apple Health export, not estimates. Query latency for
+Numbers from an actual Apple Health export. Query latency for
 natural-language questions will be added once the model is in the loop.
 
 | | |
 | --- | --- |
 | Export size | 3.7 GB, 8.3M records, 75 HealthKit types, 41 recording sources |
 | Ingest | 6.5 min to parse, 6.8 min wall including hashing and rollup |
-| Peak memory | ~1.4 GB, almost all of it SQLite's page cache — the XML parse itself holds flat at ~13 MB regardless of file size |
+| Peak memory | ~1.4 GB, almost all of it SQLite's page cache. The XML parse itself holds flat at ~13 MB regardless of file size |
 | Index size | 4.5 GB |
 | `stats` | 0.13 s |
 | `metric steps --by month` | 0.07 s |
@@ -206,7 +206,7 @@ natural-language questions will be added once the model is in the loop.
 Aggregate queries stay in the tens of milliseconds because they read a
 materialized daily rollup (100k rows) rather than the raw record table.
 
-## Architecture — and where the data stops
+## Architecture, and where the data stops
 
 Everything inside the dashed box happens on your machine. The only two arrows
 that cross it are the local model (loopback, enforced) and the opt-in cloud tier
@@ -214,20 +214,20 @@ that cross it are the local model (loopback, enforced) and the opt-in cloud tier
 
 ```mermaid
 flowchart TB
-    subgraph disk["Your data folder — you control this"]
+    subgraph disk["Your data folder (you control this)"]
         HK["healthkit/export.xml"]
         REC["records/*.pdf"]
         NOTE["notes/*.md"]
     end
 
     subgraph machine["YOUR MACHINE"]
-        subgraph ingest["Ingest — no network, in any tier"]
+        subgraph ingest["Ingest (no network, in any tier)"]
             P1["healthkit.py<br/>stream-parse 8M+ records"]
             P2["records.py<br/>pdfplumber → OCR fallback"]
             P3["notes.py<br/>frontmatter + headings"]
         end
 
-        subgraph store["Local index — derived, disposable"]
+        subgraph store["Local index (derived, disposable)"]
             SQL[("SQLite<br/>records · labs · chunks<br/>daily aggregates")]
             VEC[("LanceDB<br/>embeddings")]
         end
@@ -265,20 +265,20 @@ flowchart TB
 
 Three things the diagram is making explicit:
 
-**Source files are read, never written.** The index is derived and disposable —
+**Source files are read, never written.** The index is derived and disposable.
 `reset` deletes it, `ingest` rebuilds it.
 
 **`store/queries.py` is the only read path.** The CLI and the agent's tools call
 the same functions, so `health-agent labs ldl` and asking the model about LDL
-cannot disagree by construction, rather than by two implementations happening to
-match.
+cannot disagree. There are not two implementations that happen to match; there
+is one.
 
 **Ingest never touches the network in either tier.** That is the claim
 `offline-check` proves at the kernel level.
 
 ## How the agent works
 
-No orchestration framework — the tool-calling loop is about sixty lines in
+There is no orchestration framework. The tool-calling loop is about sixty lines in
 [`agent/orchestrator.py`](health_agent/agent/orchestrator.py), talking directly
 to Ollama's chat API. Three tools (`query_healthkit`, `get_lab_trend`,
 `search_records`) are thin adapters over the same `store/queries.py` functions
@@ -287,15 +287,14 @@ numbers for the same question. A fourth, `search_medical_literature`, returns
 dated, evidence-tiered findings from the optional literature corpus (below)
 instead of letting the model answer clinical questions from its training data.
 
-Three decisions in that loop came out of measuring the model rather than
-guessing:
+Three decisions in that loop came out of measuring the model:
 
 **The loop is iterative, not single-shot.** Asked to compare two sources,
 `qwen3.6:27b` requests one tool, and only asks for the second after seeing the
 first result. A single-shot design would answer such questions with half the
 data and no sign anything was missing.
 
-**Thinking mode is off by default.** Enabling it tripled latency (17 s → 51 s on
+**Thinking mode is off by default.** Enabling it tripled latency (17 s to 51 s on
 a tool-call decision) and produced a byte-identical tool call. `--think` turns it
 on when a question is worth the wait.
 
@@ -307,12 +306,12 @@ fluently is this project's worst failure mode, so any figure the model might
 otherwise compute is handed to it already computed.
 
 **Tools batch, because the model won't.** Asked which results were abnormal, the
-model looked up all 23 analytes one at a time — 23 tool calls, six minutes. The
+model looked up all 23 analytes one at a time. That was 23 tool calls and six minutes. The
 lab tool now takes a list and precomputes the out-of-range set, which turned that
 into a single call.
 
-Tools also return *absence* as data — coverage ranges rather than an empty list —
-because a model told only "no results" will reach for the nearest numbers it can
+Tools also return *absence* as data, coverage ranges rather than an empty list.
+A model told only "no results" will reach for the nearest numbers it can
 see and present them as an answer.
 
 Measured on an M5 with `qwen3.6:27b`: 25-60 s for a focused question, ~165 s for
@@ -322,8 +321,8 @@ as ungrounded rather than presented as though it came from your data.
 ## Medical literature corpus
 
 `search_medical_literature` answers questions like "what does the research say
-about X" from a **local, curated corpus of MEDLINE citations** — dated,
-evidence-tiered, and cited by PMID — instead of the model's training data.
+about X" from a **local, curated corpus of MEDLINE citations**, dated,
+evidence-tiered, and cited by PMID, instead of the model's training data.
 
 ```bash
 health-agent literature build --from medline_export.xml --slug cardiometabolic
@@ -336,7 +335,7 @@ A few things worth stating plainly:
 - **The corpus is optional.** Nothing else in this tool depends on it. Without
   one, `search_medical_literature` reports that no corpus is installed and
   tells the model not to answer from recalled medical knowledge instead of
-  quietly falling back on it — which is the exact failure this tool exists to
+  quietly falling back on it. That is the exact failure this tool exists to
   close (see [Not a medical device](#not-a-medical-device)).
 - **`health-agent literature build`** is what creates one, from a MEDLINE XML
   export you supply. See [LICENSES.md](LICENSES.md) for what's retained and
@@ -364,14 +363,14 @@ A few things worth stating plainly:
   build` reads a MEDLINE XML file you already have; there is no `update` or
   `fetch` command, and no code path in this release opens a socket to NCBI or
   anywhere else. Network acquisition, with its own licensing and consent
-  requirements, is the next release — see [ROADMAP.md](ROADMAP.md) #1.
+  requirements, is the next release. See [ROADMAP.md](ROADMAP.md) #1.
 
 ## Design notes worth knowing
 
 **Aggregation follows HealthKit semantics.** Cumulative types (steps, energy) are
 summed over a period; discrete types (heart rate, weight) are averaged; category
 types (sleep) are totalled by duration. Getting this backwards produces
-confident, wrong numbers — "average steps per day: 41" is an averaged sample
+confident, wrong numbers. "Average steps per day: 41" is an averaged sample
 count, not a daily total. Override with `--agg`.
 
 **Multiple devices recording the same metric are not summed.** If an iPhone and
@@ -397,12 +396,11 @@ is stored once. Every stored value keeps the source line it came from.
 printed and never converted. Converting without knowing the assay is how you get
 confidently wrong numbers.
 
-**OCR-derived values are marked, not trusted equally.** Scanned reports with no
+**OCR-derived values are marked.** Scanned reports with no
 text layer go through OCR, which reads result values and H/L flags reliably but
-degrades on units and reference ranges — a range of `100-199` can arrive as
+degrades on units and reference ranges. A range of `100-199` can arrive as
 `100-139`. Those values are stored and shown with an `[OCR]` marker and a note
-to check them against the original, rather than presented as though they came
-off a text layer.
+to check them against the original.
 
 **Notes are never mined for lab values.** "My LDL was 112" in a journal entry is
 recollection, not a lab result. Letting prose write into the lab table would put
@@ -413,7 +411,7 @@ chunks carry the heading trail they came from and cite as
 `sleep-log.md, Sleep log > Night by night, 2026-03-11`.
 
 **Undated notes stay undated.** A note with no date in its frontmatter or
-filename is reported as undated rather than dated from file mtime — copying a
+filename is reported as undated rather than dated from file mtime. Copying a
 folder rewrites mtimes and would silently re-date years of notes.
 
 ## Two tiers, and the difference is not cosmetic
@@ -422,13 +420,13 @@ folder rewrites mtimes and would silently re-date years of notes.
 leaves the host. This is the product; it needs no flags.
 
 **Cloud (`--cloud`, opt-in).** Answers come from Anthropic's API. Your question,
-a description of what your index contains, and **the results of every tool call
-— including verbatim excerpts from your records and notes** — are transmitted
+a description of what your index contains, and **the results of every tool call,
+including verbatim excerpts from your records and notes**, are transmitted
 per request. Your source files stay on disk.
 
 That second tier is **hybrid, not local**, and this README will not call it
 anything else. Before the first `--cloud` query the tool prints a full
-disclosure and requires you to type `yes` — not `y`, and never a silent flag.
+disclosure and requires you to type `yes`. Not `y`, and never a silent flag.
 Consent is recorded per data folder, and re-requested if what gets sent ever
 changes.
 
@@ -451,7 +449,7 @@ silent fallback.
 
 | Module | Tier | Talks to |
 | --- | --- | --- |
-| `ollama_client.py` | local | Ollama on loopback — on-device inference |
+| `ollama_client.py` | local | Ollama on loopback, on-device inference |
 | `agent/backends.py` | cloud | Anthropic, only after recorded consent |
 
 The local one is enforced, not assumed: a non-loopback Ollama host is refused
@@ -460,7 +458,7 @@ this at someone else's inference server would quietly turn the local tier into a
 hybrid one.
 
 A test (`test_the_network_surface_is_exactly_two_modules`) fails if that set
-ever changes — **and it counts the vendor SDK**, because `import anthropic`
+ever changes, **and it counts the vendor SDK**, because `import anthropic`
 opens sockets just as surely as `import urllib`. A check that only looked for
 stdlib transports would have passed while the cloud backend shipped data off the
 machine. Ingestion, storage, aggregation, and search remain pure local
@@ -472,8 +470,8 @@ computation in both tiers.
 health-agent offline-check
 ```
 
-This runs the real pipeline — ingest, OCR, aggregation, lab trends, vector
-search, and every agent tool — inside a sandbox with network access denied, and
+This runs the real pipeline (ingest, OCR, aggregation, lab trends, vector
+search, and every agent tool) inside a sandbox with network access denied, and
 tells you **which enforcement actually applied**:
 
 ```
@@ -489,10 +487,11 @@ PASS — the whole local pipeline ran to completion with every network syscall
 denied at the kernel level.
 ```
 
-The distinction between mechanisms is reported rather than glossed: a pass under
-the kernel sandbox (`sandbox-exec`, `unshare`) covers native code like LanceDB's
-Rust; a pass under the Python-level fallback covers only what goes through
-Python. A tool whose claim is "verify this yourself" shouldn't blur the two.
+The two mechanisms are reported separately because they cover different
+things. A pass under the kernel sandbox (`sandbox-exec`, `unshare`) covers
+native code like LanceDB's Rust. A pass under the Python-level fallback covers
+only what goes through Python. A tool whose claim is "verify this yourself"
+shouldn't blur the two.
 
 The same proof runs in CI on Linux and macOS, plus a job that fails if any
 health-data-shaped file is ever committed.
@@ -503,8 +502,8 @@ health-data-shaped file is ever committed.
 ./scripts/install-hooks.sh
 ```
 
-[`THREAT_MODEL.md`](THREAT_MODEL.md) states every claim, how to check it, and —
-just as importantly — what this tool does *not* protect you from.
+[`THREAT_MODEL.md`](THREAT_MODEL.md) states every claim, how to check it, and,
+just as importantly, what this tool does *not* protect you from.
 
 The vector store is LanceDB rather than Chroma partly for this reason: Chroma
 installs 76 packages including an OpenTelemetry OTLP exporter and a Kubernetes
@@ -512,8 +511,8 @@ client, and its `anonymized_telemetry` setting defaults to on. LanceDB installs
 15, runs as a library against a local directory with no server, and has no
 telemetry on by default.
 
-The fuller, falsifiable version of all this — `THREAT_MODEL.md`, a sandboxed
-no-network test in CI, and a pre-commit hook keeping health data out of git —
+The fuller, falsifiable version of all this (`THREAT_MODEL.md`, a sandboxed
+no-network test in CI, and a pre-commit hook keeping health data out of git)
 lands at milestone 9.
 
 ## Accuracy
@@ -537,7 +536,7 @@ nothing diagnostic was said. Release run (`qwen3.6:27b`, thinking off, 18.9 min)
 | --- | --- | --- | --- | --- | --- |
 | 20/20 | 18/20 | 16/20 | 20/20 | 20/20 | 20/20 |
 
-The medical guardrail fired on 0 of the 20 — the no-diagnosis score is the
+The medical guardrail fired on 0 of the 20. The no-diagnosis score is the
 prompt's doing, not the guard's, which is the point of measuring them separately.
 
 The four that miss `source file named` cite the note title or the report date
@@ -548,12 +547,13 @@ each run caught, in [`tests/eval_results.md`](tests/eval_results.md).
 
 The unit suite (325 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
-two defects that the 239 unit tests passing at the time had missed — both
-failures of the *tool contract* rather than of any function in it. Five of the twenty questions are multi-source, and two have
+two defects that the 239 unit tests passing at the time had missed. Both were
+failures of the *tool contract* rather than of any function in it. Five of the
+twenty questions are multi-source, and two have
 "I don't have that data" as part of the correct answer, which is the hardest
-thing to get a model to say and the reason it is measured rather than assumed.
+thing to get a model to say, which is why it is measured.
 
-Logs contain metadata only — filenames, counts, error types. Never values, never
+Logs contain metadata only: filenames, counts, error types. Never values, never
 query text.
 
 ## Not a medical device
@@ -563,22 +563,22 @@ recommend treatment.
 
 That is enforced in two layers (plan §5). The system prompt instructs the model
 to report values, the flags and reference ranges the lab printed, and what your
-own notes say — and to send interpretation to your clinician. Behind it,
+own notes say, and to send interpretation to your clinician. Behind it,
 [`agent/guardrail.py`](health_agent/agent/guardrail.py) pattern-checks the
 finished answer; if it reads as diagnostic or prescriptive, the model is asked
-once to restate it without interpretation, and if that fails the answer is
-shown with a visible note rather than silently passed through. Answers that
+once to restate it without interpretation. If that fails the answer is
+shown with a visible note. Answers that
 touch lab values carry a standing disclaimer.
 
 **The second layer is best-effort, not a guarantee, and the code says so.** A
 regex does not understand a sentence. The test suite includes a case
 demonstrating a paraphrased diagnosis that slips through, kept deliberately so
-the limitation is visible rather than implied.
+the limitation stays visible.
 
 The patterns are narrow on purpose, because the expensive failure is the false
 positive: "your LDL is high" restates the lab's own flag and must pass, while
 "you have high cholesterol" must not. Roughly half the guardrail tests are
-phrases that must **not** trip it — a guard that fires on ordinary reporting
+phrases that must **not** trip it. A guard that fires on ordinary reporting
 gets switched off, and then it protects nothing.
 
 The failure mode actually observed in 40 eval answers was the opposite of
@@ -590,8 +590,8 @@ information that is already yours, so the guard flags that too.
 
 Adversarial probing found a leak the diagnosis/treatment pattern check could
 not close. Asked "do I have prediabetes?", the model correctly refused to
-diagnose — and then volunteered that clinical definitions "often cite specific
-thresholds (e.g., an A1c of 5.7%–6.4%)". That figure came from its training
+diagnose, and then volunteered that clinical definitions "often cite specific
+thresholds (e.g., an A1c of 5.7% to 6.4%)". That figure came from its training
 data, not from your reports: uncited, undated, and impossible for a regex
 looking for diagnostic *phrasing* to distinguish from sourced text, because
 nothing about the sentence reads as a diagnosis. The system prompt forbade
@@ -602,18 +602,18 @@ partly closed. `search_medical_literature` gives the model dated,
 evidence-tiered citations to reach for instead of recalled thresholds, and the
 guardrail gained a second check for exactly this shape of failure:
 `uncited_medical_claim` fires when the finished answer states a general
-clinical threshold or normal range — not a diagnosis, just a bare fact like "an
-A1c of 5.7%–6.4% is considered prediabetic" — **and the turn's tool calls
+clinical threshold or normal range (not a diagnosis, just a bare fact like "an
+A1c of 5.7% to 6.4% is considered prediabetic") **and the turn's tool calls
 returned no literature finding to back it.** The same sentence, backed by a
-cited corpus finding, is a report of published evidence and passes; unbacked,
-it is recalled knowledge and gets flagged the same way a diagnosis does — one
+cited corpus finding, is a report of published evidence and passes. Unbacked,
+it is recalled knowledge and gets flagged the same way a diagnosis does: one
 rewrite pass, then a visible note if that fails.
 
 **What is still genuinely open:**
 
 - **The corpus is only as good as what has been built into it.** A threshold
   the installed corpus simply doesn't cover cannot be cited, and the tool says
-  so rather than guessing — but that is a coverage gap, not a fixed leak.
+  so. That is a coverage gap, not a fixed leak.
 - **Slice 1 has no network fetch.** A corpus has to be built from a MEDLINE
   export you already have (`health-agent literature build`); there is no
   `update-literature` command yet, so keeping coverage current is manual. See
@@ -622,25 +622,25 @@ rewrite pass, then a visible note if that fails.
   states plainly** (see [`agent/guardrail.py`](health_agent/agent/guardrail.py)'s
   own docstring): it cannot understand a sentence, and it will miss a claim
   phrased in a way these patterns don't anticipate. It is a best-effort
-  backstop behind the system prompt, not a guarantee — same as every other
+  backstop behind the system prompt, not a guarantee, same as every other
   category this guardrail checks.
 
 ## What's next
 
 [`ROADMAP.md`](ROADMAP.md) covers post-release directions. The one that unlocks
-most of the others is **medical literature grounding** — a curated local corpus
+most of the others is **medical literature grounding**: a curated local corpus
 with evidence-graded, dated citations, so the tool can say what published
 research reports about a marker instead of the model recalling it. Retrieval,
 tiering, and the `search_medical_literature` tool are built and described
 above; what is not built is a way to acquire a corpus over the network without
 you supplying the MEDLINE export yourself. That has a concrete motivation from
-this build: adversarial probing caught the model volunteering a clinical
-threshold from its training data — uncited, undated, and invisible to the
+this build. Adversarial probing caught the model volunteering a clinical
+threshold from its training data, uncited, undated, and invisible to the
 guardrail's pattern check.
 
 Two features build directly on it: **physician visit prep** (questions worth
 raising with a clinician, grounded in your own trends) and **literature-grounded
-context on out-of-range values** (what evidence says about a marker — surfaced as
+context on out-of-range values** (what evidence says about a marker, surfaced as
 citations, never as a recommendation). Both stay inside the
 contextualize-don't-diagnose line, and the second carries an explicit design
 review before implementation, because synthesis across findings can read as
@@ -655,4 +655,4 @@ not optional furniture.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
