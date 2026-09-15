@@ -94,84 +94,78 @@ forward, unchanged from the original design:
   new disclosure surface and need the same explicit, versioned consent
   treatment the cloud tier already has, not a silent default-on fetch.
 
-## 2. Basic medical intake (medications, allergies, conditions)
+## 2. Medical intake: retired, and why
 
-A user-editable local file or table capturing current medications, allergies,
-and known conditions, treated as **standing context injected into relevant
-queries** rather than a separate retrievable tool — the value is in
-personalizing what other sources return, not in being queried on its own.
+*Decided 2026-09-15: this tool will not have an intake feature.* An earlier
+version of this item described a user-editable file or table of current
+medications, allergies, and known conditions, held by the tool as standing
+context. It is not going to be built, in that form or any other.
 
-**This pushes closer to clinical territory than anything else here.** "Given my
-medications, what does this mean" is materially more diagnosis-adjacent than the
-trend questions the guardrail was built and tested against, so the non-diagnosis
-constraint needs re-testing specifically against intake-informed queries before
-this ships.
+**The drop folder is the mechanism.** Anyone who wants the model to know
+about their medications, their conditions, or their medical history puts a
+file saying so into the local data folder, exactly as they already do with
+lab reports and notes. It is indexed like any other document and reached by
+`search_records`. The tool never asks for that information, never holds it
+in a structured form of its own, and never treats it differently from the
+rest of the folder. What exists, and in what words, stays the user's
+decision.
 
-Intake is also the natural seeding signal for the literature corpus — see 2a,
-which has a privacy question that must be settled before either item is built.
+Two things from the retired item survive, relocated:
 
-### 2a. Seeding the literature corpus from intake
+- **The guardrail re-test still has to happen.** "Given my medications, what
+  does this mean" is exactly as diagnosis-adjacent when the medication list
+  came from a dropped-in text file as it would have been from a form. That
+  re-test belongs to `search_records` over personal documents, and it should
+  use fixture documents shaped like what people will actually drop in.
+- **The privacy question in 2a shrinks** but does not vanish; see below.
 
-*Depends on: #1a and #2. Decide this before building either.* (Slice 1's
-retrieval half is already built and needs nothing decided here; what this item
-gates is the network fetch in #1a.)
+### 2a. What a literature fetch reveals
 
-Rather than fetching literature lazily when a question needs it, seed the local
-corpus at intake: someone who records type 2 diabetes, metformin, and an ACL
-reconstruction gets those topic areas pulled once, up front, forming a starting
-library that grows as real questions require more.
+*Depends on: #1a. Decide this before building it.*
 
-**The reason to do this is offline integrity, not speed.** Worth stating
-plainly, because the intuition is that prefetching makes queries faster and it
-does not:
+The earlier framing of this item, seeding the corpus from the intake list, no
+longer applies: there is no intake list to turn into queries. What remains is
+smaller and can be settled on its own.
 
-- Queries are not retrieval-bound. In the release eval, answers took 20-171s and
-  essentially all of it was token generation on a 27B model. Vector search over
-  a local corpus is milliseconds. Pre-warming saves nothing measurable.
-- What it actually buys is that **no health question ever triggers a network
-  call.** A lazily-fetched corpus phones out mid-query, which is precisely what
-  `offline-check` currently proves cannot happen — it would turn the headline
-  claim into "local, except when it isn't." Seeding at an explicit, consented
-  moment (intake, or an `update-literature` command) keeps every actual question
-  fully local.
-- Secondary benefit: a corpus bounded to the person's real conditions has less
-  competing material in the embedding space than a general one. Intake is a
-  better seeding signal than #1's current "expanded from real questions."
+**Fetch at an explicit, consented moment, never lazily during a question.**
+This part is unchanged and is the reason #1a is shaped as a command rather
+than a cache miss. Queries are not retrieval-bound (answer time is almost
+entirely token generation; vector search is milliseconds), so prefetching
+buys no speed. What it buys is that no health question ever opens a socket,
+which is what `offline-check` proves today and would stop proving under lazy
+fetching.
 
-**The blocking design question is a privacy inversion.** The intake list is the
-most sensitive data in the system — more revealing than any single lab value.
-Turning it into literature queries means transmitting a reconstructable medical
-profile to NCBI, keyed to the user's IP, in a feature that presents itself as
-local-first. That is a worse leak than anything the current build does, and it
-arrives wearing a privacy badge.
-
-Options, to be chosen deliberately rather than defaulted into:
+**The remaining question: what does a fetch request disclose?** Any request
+to NCBI reveals something about the person making it, keyed to their IP.
+The options, in the order the project currently favours them:
 
 - **Pre-built topic packs** downloaded wholesale (a "cardiometabolic" pack, a
-  "post-surgical rehab" pack), so a request reveals a category rather than a
-  profile. Currently the most promising: it also makes the corpus versionable
-  (#6) and reproducible across users.
-  The size measurement above makes this a requirement rather than a
-  preference: an unbounded fetch is 6.3 GB.
-- Broad topic bundles instead of precise query strings, accepting a larger
-  corpus for a vaguer request.
-- Batching real topics with decoys, which is weaker than it sounds and worth
-  treating as a fallback rather than a plan.
-- Routing through a user-supplied proxy or Tor, which moves the problem rather
-  than solving it and adds a dependency the project has so far avoided.
+  "sleep" pack), so a request reveals a category, not a person. The
+  measurements recorded in
+  [docs/superpowers/specs/2026-09-15-literature-follow-ups-design.md](docs/superpowers/specs/2026-09-15-literature-follow-ups-design.md)
+  make this a requirement rather than a preference: an unbounded fetch is
+  415k articles and 6.3 GB. Packs are also what makes the corpus versionable
+  (#6) and reproducible across users, and the schema already carries pack
+  identity.
+- **User-typed topics**, sent as broad MeSH bundles rather than precise
+  strings, for people who want something a pack does not cover. Honest
+  about what it sends; the consent notice has to show the exact terms.
+- Routing through a user-supplied proxy or Tor, which moves the problem
+  rather than solving it and adds a dependency the project has so far
+  avoided.
 
-Whichever is chosen, `THREAT_MODEL.md` gains a claim, and the fetch step needs
-the same consent treatment the cloud tier already has — a versioned notice that
+Whichever is chosen, `THREAT_MODEL.md` gains a claim, and the fetch step gets
+the same consent treatment the cloud tier already has: a versioned notice that
 says exactly what leaves the machine.
 
-**It also compounds the guardrail problem.** Holding both "this person has type
-2 diabetes" and a diabetes literature corpus makes synthesized advice materially
-easier to produce by accident. That is exactly the synthesis risk #4 gates on,
-so #4's review must happen before this ships, not after.
+**The synthesis risk does not go away without intake.** A dropped-in file that
+says "type 2 diabetes" next to a diabetes literature pack makes accidental
+advice as easy to produce as an intake table would have. #4's review still
+has to happen before literature is surfaced proactively.
 
 ## 3. Physician visit prep — suggested questions to ask
 
-*Depends on: nothing strictly, but much better with #1 and #2.*
+*Depends on: nothing strictly, but much better with #1.*
 
 Given an upcoming appointment (or on request), surface a short list of questions
 worth raising with a clinician, grounded in the user's own data: a lab value
@@ -185,9 +179,10 @@ implied diagnosis. That framing is not incidental; it is what keeps the feature
 on the right side of the line. "Ask your doctor whether your LDL trend warrants
 follow-up" is in scope. "Your LDL trend warrants follow-up" is not.
 
-Pairs naturally with #1 and #2: intake data makes the questions specific to the
-person, and literature grounding makes them specific to the evidence. Without
-either, it still works — just from trends and anomalies alone.
+Pairs naturally with #1 and with whatever the person has dropped into the
+data folder: their own documents make the questions specific to the person,
+and literature grounding makes them specific to the evidence. Without either,
+it still works — just from trends and anomalies alone.
 
 Worth noting that the current build already produces something adjacent to this
 by accident: asked "is there anything in my recent labs I should ask my doctor
