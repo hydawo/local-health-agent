@@ -246,4 +246,65 @@
    </ArticleIdList>
   </PubmedData>
  </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000009</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2023</Year></PubDate></JournalIssue>
+     <Title>Synthetic Primary Research Letters</Title>
+    </Journal>
+    <ArticleTitle>Home blood pressure monitoring adherence in adults with hypertension.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">Adherence to home blood pressure monitoring is variable among adults with hypertension, and the reasons are not well described.</AbstractText>
+     <AbstractText Label="RESULTS">Among adults asked to record home blood pressure twice daily, adherence declined over twelve weeks and was lowest among participants who reported little confidence in operating the cuff.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000009</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000010</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue>
+     <Title>Synthetic Trial Protocols</Title>
+    </Journal>
+    <ArticleTitle>Text-message reminders for statin adherence in adults with dyslipidemia: protocol for a randomized controlled trial.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">Adherence to statin therapy is incomplete in adults with dyslipidemia.</AbstractText>
+     <AbstractText Label="METHODS">We will randomize adults prescribed a statin to daily text-message reminders or usual care for six months. The primary outcome is pharmacy-refill adherence.</AbstractText>
+     <AbstractText Label="DISCUSSION">This protocol describes a planned trial. No results are available.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Clinical Trial Protocol</PublicationType>
+     <PublicationType>Randomized Controlled Trial</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000010</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
 </PubmedArticleSet>
