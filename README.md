@@ -328,6 +328,7 @@ evidence-tiered, and cited by PMID — instead of the model's training data.
 ```bash
 health-agent literature build --from medline_export.xml --slug cardiometabolic
 health-agent literature status
+health-agent literature build --from medline_export.xml --slug cardiometabolic --rebuild
 ```
 
 A few things worth stating plainly:
@@ -340,12 +341,25 @@ A few things worth stating plainly:
 - **`health-agent literature build`** is what creates one, from a MEDLINE XML
   export you supply. See [LICENSES.md](LICENSES.md) for what's retained and
   under what terms.
+  A corpus built by an older release is refused on open, with a message
+  naming `--rebuild`, which deletes the corpus (and only the corpus) before
+  building.
 - **Evidence tiers come from publication metadata, not judgement.** A tier is
-  read off MEDLINE's own `PublicationType` field — meta-analysis and
-  systematic review rank above RCT, which ranks above observational and case
-  report — or it is `unknown`. Nothing inspects a title, an abstract, or asks a
-  model to guess; an inferred tier would be a fabricated credential, and the
-  feature's whole value is that its citations can be trusted.
+  read off MEDLINE's own `PublicationType` field, or it is `unknown`. The
+  ladder, strongest first: meta-analysis and systematic review; guideline;
+  randomized controlled trial; other clinical trials (including phase trials
+  and non-randomized controlled trials); narrative and scoping reviews;
+  observational; case report. Nothing inspects a title, an abstract, or asks
+  a model to guess; an inferred tier would be a fabricated credential, and
+  the feature's whole value is that its citations can be trusted.
+- **Most of a real corpus has no tier, and that is not a bug.** Measured
+  against 2,000 real PubMed abstracts, 65.5% resolved to `unknown`, and five
+  in six of those carried `Journal Article` and nothing else: PubMed simply
+  does not record a study design for most primary research. A `min_tier`
+  floor therefore excludes most of the corpus, not just weak studies. The
+  tool says so in its payload whenever a floor is set, and a filtered miss
+  is reported as a filter result rather than as "the corpus holds nothing".
+  Trial protocols are kept, flagged, and unranked: a plan reports no results.
 - **Slice 1 ships no way to fetch a corpus over the network.** `literature
   build` reads a MEDLINE XML file you already have; there is no `update` or
   `fetch` command, and no code path in this release opens a socket to NCBI or
