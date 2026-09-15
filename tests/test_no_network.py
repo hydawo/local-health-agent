@@ -199,9 +199,16 @@ def test_no_telemetry_on_import(no_network):
 # --------------------------------------------------------------------------- #
 
 def _os_sandbox_available() -> bool:
-    system = platform.system()
-    return ((system == "Darwin" and bool(shutil.which("sandbox-exec")))
-            or (system == "Linux" and bool(shutil.which("unshare"))))
+    """Delegate to the real detector rather than re-deriving it here.
+
+    This used to repeat `detect_mechanism`'s own "is the binary on PATH"
+    test, which meant it inherited the same bug: on a host where `unshare`
+    exists but cannot create a user namespace, both agreed a sandbox was
+    available and the sandboxed tests then failed. Asking the detector is
+    also the more honest skip condition — it skips exactly when the real
+    command would decline to use the OS sandbox.
+    """
+    return offline_check.detect_mechanism()[0] == "os-sandbox"
 
 
 needs_sandbox = pytest.mark.skipif(
@@ -313,3 +320,49 @@ def test_offline_check_exercises_the_corpus_vector_store_directly(tmp_path):
     names = [s["step"] for s in steps]
     assert "vector search (literature LanceDB)" in names
     assert all(s["ok"] for s in steps)
+
+
+def test_detect_mechanism_falls_back_when_the_sandbox_cannot_actually_run(
+        monkeypatch):
+    """Being on PATH is not the same as working.
+
+    GitHub's Ubuntu runners ship `unshare` but forbid unprivileged user
+    namespaces, so the binary exists and every run of it fails. Claiming
+    `os-sandbox` and then erroring is worse than reporting the weaker
+    mechanism honestly — naming the mechanism only means something if the
+    name is true.
+    """
+    monkeypatch.setattr(offline_check, "_sandbox_probe_passes",
+                        lambda command: False)
+    mechanism, detail = offline_check.detect_mechanism()
+
+    assert mechanism == "python"
+    assert detail
+
+
+def test_detect_mechanism_reports_the_os_sandbox_when_the_probe_passes(
+        monkeypatch):
+    if not (shutil.which("sandbox-exec") or shutil.which("unshare")):
+        pytest.skip("no sandbox binary on this platform")
+    monkeypatch.setattr(offline_check, "_sandbox_probe_passes",
+                        lambda command: True)
+
+    assert offline_check.detect_mechanism()[0] == "os-sandbox"
+
+
+def test_missing_sandbox_is_explained_as_absent_or_as_blocked(monkeypatch):
+    """"Not installed" and "installed but not permitted" need different advice.
+
+    The second is the common case — containers and CI runners ship `unshare`
+    and forbid unprivileged user namespaces — and telling that reader to
+    install a binary they already have sends them the wrong way.
+    """
+    monkeypatch.setattr(offline_check.platform, "system", lambda: "Linux")
+
+    monkeypatch.setattr(offline_check.shutil, "which", lambda name: None)
+    assert "install" in offline_check.explain_missing_sandbox().lower()
+
+    monkeypatch.setattr(offline_check.shutil, "which", lambda name: "/usr/bin/unshare")
+    blocked = offline_check.explain_missing_sandbox()
+    assert "install" not in blocked.lower()
+    assert "namespace" in blocked.lower()

@@ -1325,9 +1325,9 @@ def cmd_offline_check(args: argparse.Namespace, cfg: config.Config) -> int:
     else:
         print("PASS — the local pipeline ran to completion with Python "
               "networking disabled.")
-        print("\nNote: this is the weaker of the two checks. Install/enable an "
-              "OS sandbox (macOS has `sandbox-exec`; Linux needs `unshare`) "
-              "to also cover native code.")
+        print(f"\nNote: this is the weaker of the two checks — it covers this "
+              f"codebase, not native libraries. "
+              f"{offline_check.explain_missing_sandbox()}")
     print("\nThis proves the LOCAL tier only. `ask --cloud` sends data to "
           "Anthropic by design — see THREAT_MODEL.md.")
     return 0
