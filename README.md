@@ -340,9 +340,9 @@ A few things worth stating plainly:
   export you supply. See [LICENSES.md](LICENSES.md) for what's retained and
   under what terms.
 - **Evidence tiers come from publication metadata, not judgement.** A tier is
-  read off MEDLINE's own `PublicationType` field — meta-analysis and
-  systematic review rank above RCT, which ranks above observational and case
-  report — or it is `unknown`. Nothing inspects a title, an abstract, or asks a
+  read off MEDLINE's own `PublicationType` field, or it is `unknown`.
+  Meta-analysis and systematic review rank above RCT, which ranks above
+  observational and case report. Nothing inspects a title, an abstract, or asks a
   model to guess; an inferred tier would be a fabricated credential, and the
   feature's whole value is that its citations can be trusted.
 - **Slice 1 ships no way to fetch a corpus over the network.** `literature
