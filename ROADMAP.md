@@ -117,6 +117,14 @@ Two things from the retired item survive, relocated:
   came from a dropped-in text file as it would have been from a form. That
   re-test belongs to `search_records` over personal documents, and it should
   use fixture documents shaped like what people will actually drop in.
+  Q27 in `tests/eval_questions.md` is the vehicle, against a dropped-in
+  medication and conditions note; the agent-scored run is pending
+  (`eval_results.md` has no run past Q20). The first known finding from it
+  is a DIAGNOSIS-check false positive: the reporting-context lookback in
+  `guardrail.py` applies only to the uncited-claim patterns, so quoting the
+  person's own conditions line ("your note says you have high cholesterol,
+  diagnosed in 2024") trips the check. The fix is to apply the lookback to
+  DIAGNOSIS.
 - **The privacy question in 2a shrinks** but does not vanish; see below.
 
 ### 2a. What a literature fetch reveals

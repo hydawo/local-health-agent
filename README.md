@@ -66,7 +66,8 @@ health-agent stats
 ```
 
 Photos, screenshots, and Word documents dropped into `notes/` are read too:
-`.png`, `.jpg`, `.jpeg`, and `.heic` go through Tesseract and are cited as
+`.png`, `.jpg`, `.jpeg`, and `.heic` go through Tesseract, and `.heic` also
+needs the `[ocr]` extra (`pip install -e '.[ocr]'`); all are cited as
 read by OCR. `.docx` is ingested exactly as a markdown note, headings and
 tables included. Since there is no intake step, this is how a medication
 list, a conditions list, or a clinic letter gets in, as a file. A
@@ -171,7 +172,8 @@ pip install -e ".[dev]"
 
 Two optional pieces, both of which the tool works without and tells you about:
 
-- **Tesseract**, only needed for scanned records with no text layer.
+- **Tesseract**, needed for scanned records with no text layer and for
+  photos or screenshots in `notes/`.
   `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Debian).
 - **Ollama**, needed for `ask` and for semantic search. Without it, `search`
   falls back to keyword matching and says so, and everything else still works.

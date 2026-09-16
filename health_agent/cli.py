@@ -1490,13 +1490,17 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
     disk_note = "" if free_gb >= 10 else "   (low — a large export needs several GB)"
     print(f"free disk      {free_gb:,.1f} GB{disk_note}")
 
-    print("\nOCR (for scanned records)")
+    print("\nOCR (for scanned records and photos)")
     if records.ocr_available():
         print("  Tesseract      available")
     else:
-        print("  Tesseract      NOT available — scanned PDFs will be skipped")
+        print("  Tesseract      NOT available: scanned PDFs and photos will be skipped")
         print("                 macOS: brew install tesseract")
         print("                 Debian/Ubuntu: apt install tesseract-ocr")
+    if readers._heic_supported():
+        print("  HEIC photos    supported")
+    else:
+        print("  HEIC photos    install pillow-heif (pip install -e '.[ocr]')")
 
     print("\nLocal model (Ollama)")
     try:

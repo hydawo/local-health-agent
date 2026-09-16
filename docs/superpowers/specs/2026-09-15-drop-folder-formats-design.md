@@ -57,7 +57,7 @@ the same section splitter, the same chunker, the same tables.
 
 ### `read_docx`
 
-`python-docx`, a pure-Python dependency, added to the core dependencies. Body
+`python-docx`, a dependency with no system binary, added to the core dependencies. Body
 paragraphs are joined with blank lines. Paragraphs whose style name begins
 with `Heading` become markdown headings at the matching level (`Heading 1` →
 `#`, `Heading 2` → `##`, capped at six), so the existing section splitter

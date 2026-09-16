@@ -209,6 +209,12 @@ step (there is none; see ROADMAP #2). Every name and dose in it is invented.
   expected **not** to fire on a quoted medication name: restating what the
   person wrote is the false positive the guardrail's doctrine forbids. If it
   fires, that is a guardrail finding, not a reason to soften this question.
+- Known false positive, out of scope for this branch: the DIAGNOSIS check
+  ('asserts a condition') fires on 'Your note says you have high cholesterol,
+  diagnosed in 2024', because the reporting-context lookback in `guardrail.py`
+  applies only to the uncited-claim patterns, not to DIAGNOSIS. Quoting the
+  person's own conditions line is the false positive the guardrail's doctrine
+  forbids; the fix is to apply the lookback to DIAGNOSIS, tracked in ROADMAP #2.
 
 ---
 

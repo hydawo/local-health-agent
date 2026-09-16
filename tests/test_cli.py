@@ -272,7 +272,8 @@ def test_embed_and_semantic_search_offline(cli_records):
 
 def test_doctor_reports_environment(cli_records):
     code, out = cli_records("doctor")
-    assert "OCR (for scanned records)" in out
+    assert "OCR (for scanned records and photos)" in out
+    assert "HEIC photos" in out
     assert "Local model (Ollama)" in out
     assert "Network posture" in out
     assert code in (0, 1)
