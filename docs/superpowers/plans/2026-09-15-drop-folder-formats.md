@@ -133,10 +133,10 @@ def make_rotated_jpg(png: Path, path: Path) -> None:
     from PIL import Image
 
     upright = Image.open(png)
-    # Rotate the pixels so they are sideways on disk, then tell the viewer
-    # (via EXIF orientation 6 = "rotate 90 CW to display") how to fix it.
-    # This is exactly what a phone writes for a photo taken sideways.
-    sideways = upright.rotate(-90, expand=True)
+    # Orientation 6 means "rotate 90 CW to display", so the stored pixels
+    # must be 90 CCW of upright (PIL's positive angle is CCW). This is what a
+    # phone writes for a photo taken sideways; exif_transpose undoes it.
+    sideways = upright.rotate(90, expand=True)
     exif = Image.Exif()
     exif[0x0112] = 6
     sideways.save(path, quality=95, exif=exif.tobytes())
