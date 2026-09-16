@@ -62,3 +62,6 @@ htmlcov/
 # Subagent-driven-development scratch: ledgers, task briefs, review diffs.
 # Working notes for a single session, never part of the project record.
 .superpowers/
+
+# uv writes this when its scripts run here; the project installs with pip
+uv.lock
