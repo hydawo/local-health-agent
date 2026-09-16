@@ -60,10 +60,20 @@ health-agent ask "Anything in my recent labs I should ask my doctor about?" --sh
 Setup and inspection:
 
 ```bash
-health-agent ingest ~/Downloads/export.zip     # export.xml, export.zip, PDFs, or a folder
+health-agent ingest ~/Downloads/export.zip     # export.xml, export.zip, PDFs, notes, photos, .docx, or a folder
 health-agent doctor                            # what's installed, what's missing
 health-agent stats
 ```
+
+Photos, screenshots, and Word documents dropped into `notes/` are read too:
+`.png`, `.jpg`, `.jpeg`, and `.heic` go through Tesseract and are cited as
+read by OCR. `.docx` is ingested exactly as a markdown note, headings and
+tables included. Since there is no intake step, this is how a medication
+list, a conditions list, or a clinic letter gets in, as a file. A
+photographed lab report becomes searchable text, never a trend line. OCR on
+a phone photo is the least reliable extraction the tool has, and a wrong lab
+value poisons a trend where a missing one is a visible gap, so a report you
+want in a trend has to arrive as a PDF.
 
 HealthKit metrics:
 
@@ -90,6 +100,7 @@ health-agent notes --tags             # every tag
 health-agent notes --tag followup
 health-agent search "vitamin d"       # notes and records in one ranked list
 health-agent search "coffee" --kind note
+health-agent search "metformin" --kind image   # photos and screenshots only
 ```
 
 Everything above is local computation over a SQLite index and a file-based
@@ -179,7 +190,7 @@ only for now; PyPI and Homebrew are deferred.
 ~/HealthData/                 <- you control this; nothing is written outside it
 ├── healthkit/export.xml
 ├── records/*.pdf             <- bloodwork, medical records
-├── notes/*.md                <- personal notes, markdown or plain text
+├── notes/                    <- .md .txt .docx, and photos or screenshots
 └── .index/
     ├── health.db             <- SQLite: records, labs, aggregates, chunk text
     └── vectors/              <- LanceDB: embeddings
@@ -217,7 +228,7 @@ flowchart TB
     subgraph disk["Your data folder (you control this)"]
         HK["healthkit/export.xml"]
         REC["records/*.pdf"]
-        NOTE["notes/*.md"]
+        NOTE["notes/ (.md .docx photos)"]
     end
 
     subgraph machine["YOUR MACHINE"]
@@ -404,7 +415,9 @@ to check them against the original.
 
 **Notes are never mined for lab values.** "My LDL was 112" in a journal entry is
 recollection, not a lab result. Letting prose write into the lab table would put
-uncited numbers into trends that are supposed to be traceable to a report.
+uncited numbers into trends that are supposed to be traceable to a report. The
+same rule covers photos: a photographed lab report is searchable text, never a
+trend line.
 
 **Notes cite headings; PDFs cite pages.** A note has no page numbers, so its
 chunks carry the heading trail they came from and cite as
@@ -517,7 +530,7 @@ lands at milestone 9.
 
 ## Accuracy
 
-`tests/eval_questions.md` holds 20 questions with hand-verified answers spanning
+`tests/eval_questions.md` holds 27 questions with hand-verified answers spanning
 all three sources. There are two ways to run them:
 
 ```bash
