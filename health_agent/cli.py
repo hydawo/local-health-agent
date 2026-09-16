@@ -1680,8 +1680,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_search.add_argument("--limit", type=int, default=5)
     p_search.add_argument("--keyword", action="store_true",
                           help="force keyword search, skip embeddings")
-    p_search.add_argument("--kind", choices=("pdf", "note"),
-                          help="restrict to records (pdf) or notes")
+    p_search.add_argument("--kind", choices=("pdf", "note", "image"),
+                          help="restrict to records (pdf), notes, or photos "
+                               "and screenshots read by OCR (image)")
     p_search.add_argument("--embedder", default="ollama",
                           choices=("ollama", "hashing"))
     p_search.add_argument("--json", action="store_true")

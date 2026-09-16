@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from health_agent.cli import main
+from health_agent.ingest import records
 
 
 @pytest.fixture
@@ -364,6 +365,28 @@ def test_search_kind_filter_excludes_the_other_source(cli_records):
     assert code == 0
     assert ".pdf" in out
     assert ".md" not in out
+
+
+def test_search_kind_image_reaches_photos_read_by_ocr(tmp_path, capsys):
+    """The CLI's `search --kind image` is the same filter the agent tool
+    accepts as kind='image'; a user should be able to ask for it too."""
+    if not records.ocr_available():
+        pytest.skip("Tesseract not installed; the image path is exercised in CI")
+
+    docs = Path(__file__).parent / "fixtures" / "documents"
+    notes_dir = tmp_path / "notes"
+    notes_dir.mkdir()
+    shutil.copy(docs / "medication-list.png", notes_dir / "IMG_0042.png")
+    index = tmp_path / "health.db"
+
+    code = main(["--index", str(index), "ingest", str(notes_dir), "--no-embed"])
+    assert code == 0
+    capsys.readouterr()
+
+    code = main(["--index", str(index), "search", "metformin", "--kind", "image"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "(read by OCR)" in out
 
 
 # --------------------------------------------------------------------------- #

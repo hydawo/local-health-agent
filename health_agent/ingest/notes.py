@@ -349,7 +349,8 @@ def ingest_note(conn: sqlite3.Connection, path: Path, *, source_file_id: int,
     )
     document_id = int(cursor.lastrowid)
     stats.notes += 1
-    stats.images += kind == "image"
+    if kind == "image":
+        stats.images += 1
 
     # One "page" holding the body, so notes and records hydrate identically in
     # search. The body excludes frontmatter: embedding YAML is noise.
