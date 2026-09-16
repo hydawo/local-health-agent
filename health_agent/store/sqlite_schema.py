@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS document (
     id               INTEGER PRIMARY KEY,
     source_file_id   INTEGER NOT NULL REFERENCES source_file(id),
     path             TEXT NOT NULL,
-    kind             TEXT NOT NULL,   -- 'pdf' (records) | 'note' (markdown/text)
+    kind             TEXT NOT NULL,   -- 'pdf' (records) | 'note' (markdown, text, docx) | 'image' (photo or screenshot, OCR)
     title            TEXT,
     doc_date         TEXT,            -- collection date, or a note's own date
     page_count       INTEGER NOT NULL DEFAULT 0,

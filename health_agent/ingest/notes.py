@@ -1,8 +1,9 @@
-"""Ingest personal notes: markdown and plain text.
+"""Ingest personal notes: markdown, plain text, .docx, and photos.
 
 Pipeline per file (plan §3.3):
 
-    .md / .txt -> frontmatter (date, tags)  -> document + document_tag
+    .md / .txt / .docx / image -> text (readers.py for the last two)
+               -> frontmatter (date, tags)  -> document + document_tag
                -> body split on headings    -> chunk (with a section trail)
 
 Notes are stored as `document` rows of kind `'note'`, sharing the tables records
@@ -15,6 +16,11 @@ came from and cite as "sleep-log.md > Week of March 10".
 **Notes are never parsed for lab values.** "My LDL was 112" in a journal entry is
 recollection, not a lab result, and letting prose write into `lab_result` would
 put uncited numbers into trends that are supposed to be traceable to a report.
+
+**Neither are images.** A photo of a lab report is OCR'd into searchable text
+and cited as read by OCR; it never writes `lab_result`. See `readers.py` for
+why: phone-photo OCR is the least reliable extraction the tool has, and a
+wrong lab value poisons a trend where a missing one is a visible gap.
 
 **Frontmatter parsing handles the common subset, not all of YAML.** Scalars,
 quoted strings, inline `[a, b]` lists, and block `- item` lists cover what note
@@ -36,11 +42,14 @@ from datetime import datetime
 from pathlib import Path
 
 from ..logging_setup import get_logger
-from .records import chunk_text
+from . import readers
+from . import records as records_mod
+from .records import OcrUnavailable, chunk_text
 
 log = get_logger("ingest.notes")
 
-SUPPORTED_SUFFIXES = {".md", ".markdown", ".txt"}
+TEXT_SUFFIXES = {".md", ".markdown", ".txt"}
+SUPPORTED_SUFFIXES = TEXT_SUFFIXES | readers.DOCX_SUFFIXES | readers.IMAGE_SUFFIXES
 
 # Common frontmatter keys that mean "when this note is about".
 DATE_KEYS = ("date", "created", "created_at", "day", "datetime", "timestamp")
@@ -70,6 +79,8 @@ class NoteStats:
     dated: int = 0
     undated: int = 0
     unparsed_frontmatter: int = 0
+    images: int = 0
+    ocr_available: bool = True
     skipped: dict[str, int] = field(default_factory=dict)
 
     def skip(self, reason: str) -> None:
@@ -292,11 +303,44 @@ def read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
 
 
+def read_body(path: Path, *, use_ocr: bool = True) -> tuple[str, str, str]:
+    """Return (raw text, document kind, extraction) for any supported file.
+
+    Raises `OcrUnavailable`, `readers.HeicUnsupported`, or `OcrDisabled` for
+    images that cannot be read; `ingest_notes` turns each into a counted skip
+    reason so a photo is never silently absent from the index.
+    """
+    suffix = path.suffix.lower()
+    if suffix in readers.IMAGE_SUFFIXES:
+        if not use_ocr:
+            raise OcrDisabled(path.name)
+        return readers.read_image(path), "image", "ocr"
+    if suffix in readers.DOCX_SUFFIXES:
+        return readers.read_docx(path), "note", "text"
+    return read_text(path), "note", "text"
+
+
+class OcrDisabled(RuntimeError):
+    """`--no-ocr` was passed and the file is an image."""
+
+
+class NoTextRead(RuntimeError):
+    """OCR ran on an image and read nothing.
+
+    An empty document would count as ingested while returning no search hit,
+    which is silent absence. Raising before any INSERT leaves the source file
+    `partial`, so a sharper photo or a newer Tesseract gets a fresh attempt on
+    the next `ingest` without `--force`.
+    """
+
+
 def ingest_note(conn: sqlite3.Connection, path: Path, *, source_file_id: int,
-                stats: NoteStats) -> int:
+                stats: NoteStats, use_ocr: bool = True) -> int:
     """Parse and store one note. Returns the document id."""
-    raw = read_text(path)
+    raw, kind, extraction = read_body(path, use_ocr=use_ocr)
     meta, body = parse_frontmatter(raw)
+    if kind == "image" and not body.strip():
+        raise NoTextRead(path.name)
 
     date = extract_date(meta, path)
     tags = extract_tags(meta, body)
@@ -312,18 +356,20 @@ def ingest_note(conn: sqlite3.Connection, path: Path, *, source_file_id: int,
         "INSERT INTO document(source_file_id, path, kind, title, doc_date, "
         "page_count, extraction, ingested_at, frontmatter_json) "
         "VALUES(?,?,?,?,?,?,?,?,?)",
-        (source_file_id, str(path), "note", title, date, 1, "text", _now(),
+        (source_file_id, str(path), kind, title, date, 1, extraction, _now(),
          json.dumps(meta, sort_keys=True, default=str) if meta else None),
     )
     document_id = int(cursor.lastrowid)
     stats.notes += 1
+    if kind == "image":
+        stats.images += 1
 
     # One "page" holding the body, so notes and records hydrate identically in
     # search. The body excludes frontmatter: embedding YAML is noise.
     conn.execute(
         "INSERT INTO document_page(document_id, page_no, text, char_count, "
         "extraction) VALUES(?,?,?,?,?)",
-        (document_id, 1, body, len(body), "text"),
+        (document_id, 1, body, len(body), extraction),
     )
 
     if tags:
@@ -362,11 +408,16 @@ def ingest_notes(
     register: Callable[[Path], tuple[int, bool]],
     force: bool = False,
     on_file: Callable[[Path], None] | None = None,
+    use_ocr: bool = True,
 ) -> NoteStats:
     """Ingest every note under `root`, skipping unchanged files."""
     from ..store import sqlite_schema
 
     stats = NoteStats()
+    # Reflects --no-ocr as well as a missing Tesseract, matching records, so
+    # the CLI can tell "not installed" from "told not to" when it explains a
+    # skipped photo.
+    stats.ocr_available = use_ocr and records_mod.ocr_available()
 
     for path in find_notes(root):
         source_file_id, already = register(path)
@@ -382,7 +433,23 @@ def ingest_notes(
         sqlite_schema.clear_document_data(conn, source_file_id)
         before = stats.chunks
         try:
-            ingest_note(conn, path, source_file_id=source_file_id, stats=stats)
+            ingest_note(conn, path, source_file_id=source_file_id, stats=stats,
+                       use_ocr=use_ocr)
+        except OcrDisabled:
+            stats.skip("ocr disabled")
+            continue
+        except NoTextRead:
+            log.warning("%s: skipped (no text read by OCR)", path.name)
+            stats.skip("no text read by OCR")
+            continue
+        except OcrUnavailable:
+            log.warning("%s: skipped (OCR unavailable)", path.name)
+            stats.skip("ocr unavailable")
+            continue
+        except readers.HeicUnsupported:
+            log.warning("%s: skipped (.heic needs pillow-heif)", path.name)
+            stats.skip("heic unsupported")
+            continue
         except Exception as exc:  # noqa: BLE001 - one bad note, not the folder
             log.warning("%s: skipped (%s)", path.name, type(exc).__name__)
             stats.skip(type(exc).__name__)

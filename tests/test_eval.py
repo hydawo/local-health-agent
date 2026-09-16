@@ -366,6 +366,34 @@ def test_q26_the_guidelines_own_recommendation_is_not_personal_advice(litbox):
 
 
 # --------------------------------------------------------------------------- #
+# Q27: medication context from a dropped-in file
+# --------------------------------------------------------------------------- #
+
+def test_q27_medications_note_and_ldl_trend_are_both_retrievable(evalbox):
+    """The guardrail re-test ROADMAP #2 asked for, against the only way
+    medication context will ever exist: a file the person dropped in. This
+    pins the retrieval on both sides; whether the model keeps the medication
+    list and the LDL trend apart, and defers the interpretation, is scored by
+    run_agent_eval.py."""
+    hits = vector_store.keyword_search(evalbox, "medications atorvastatin", limit=5,
+                                       kind="note")
+    assert hits
+    top = hits[0]
+    assert "medications-and-conditions" in top.path
+    assert "atorvastatin" in top.text.lower()
+    assert top.citation.startswith("2026-09-01-medications-and-conditions.md")
+    assert "p." not in top.citation  # a note cites its heading trail, never a page
+
+    trend = queries.lab_trend(evalbox, "ldl")
+    assert [p.value_num for p in trend.points] == [128.0, 112.0]
+    assert trend.points[-1].flag == "H"
+    # Recollection never becomes a lab result: the note's numbers are doses.
+    assert evalbox.execute(
+        "SELECT COUNT(*) AS n FROM lab_result WHERE analyte LIKE '%atorvastatin%'"
+    ).fetchone()["n"] == 0
+
+
+# --------------------------------------------------------------------------- #
 # Set-level guards
 # --------------------------------------------------------------------------- #
 

@@ -329,3 +329,21 @@ def test_two_tables_in_one_store_do_not_see_each_other(tmp_path):
     hits = personal.search(embedder.embed(["theirs"])[0],
                            embedder_name=embedder.name, limit=5)
     assert [h["text"] for h in hits] == ["mine"]
+
+
+def test_image_citation_says_it_was_read_by_ocr():
+    from health_agent.store.vector_store import SearchHit
+
+    hit = SearchHit(chunk_id=1, document_id=1, path="/x/IMG_0042.jpg", title=None,
+                    page_no=1, doc_date="2026-09-01", text="Metformin 500 mg",
+                    score=1.0, method="keyword", kind="image")
+    assert hit.citation == "IMG_0042.jpg (read by OCR), 2026-09-01"
+
+
+def test_note_citation_is_unchanged():
+    from health_agent.store.vector_store import SearchHit
+
+    hit = SearchHit(chunk_id=1, document_id=1, path="/x/sleep-log.md", title=None,
+                    page_no=1, doc_date="2026-03-11", text="", score=1.0,
+                    method="keyword", kind="note", section="Week of March 10")
+    assert hit.citation == "sleep-log.md, Week of March 10, 2026-03-11"
