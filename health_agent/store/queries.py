@@ -481,7 +481,10 @@ def list_documents(conn: sqlite3.Connection,
         "FROM document d "
     )
     params: list = []
-    if kind:
+    if kind == "note":
+        # The notes surface includes photos; see NOTE_KINDS.
+        sql += "WHERE d.kind IN ('note', 'image') "
+    elif kind:
         sql += "WHERE d.kind = ? "
         params.append(kind)
     sql += "ORDER BY COALESCE(d.doc_date, d.ingested_at)"
@@ -511,21 +514,31 @@ def notes_by_tag(conn: sqlite3.Connection, tag: str) -> list[dict]:
     )]
 
 
+# A photo or screenshot in notes/ is a note that happened to arrive as
+# pixels: it is searched, cited as read by OCR, and never parsed for lab
+# values. So it belongs to the notes surface everywhere a count is reported,
+# and the PDF/records surface must never claim it. Counting it under "reports"
+# would tell the model there is a lab report to trend where there is none.
+NOTE_KINDS = ("note", "image")
+
+
 def note_summary(conn: sqlite3.Connection) -> dict:
     row = conn.execute(
         "SELECT COUNT(*) AS n, MIN(doc_date) AS first, MAX(doc_date) AS last, "
-        "SUM(CASE WHEN doc_date IS NULL THEN 1 ELSE 0 END) AS undated "
-        "FROM document WHERE kind = 'note'"
+        "SUM(CASE WHEN doc_date IS NULL THEN 1 ELSE 0 END) AS undated, "
+        "SUM(CASE WHEN kind = 'image' THEN 1 ELSE 0 END) AS images "
+        "FROM document WHERE kind IN ('note', 'image')"
     ).fetchone()
     tags = conn.execute(
         "SELECT COUNT(DISTINCT tag) AS n FROM document_tag"
     ).fetchone()["n"]
     chunks = conn.execute(
         "SELECT COUNT(*) AS n FROM chunk c JOIN document d ON d.id = c.document_id "
-        "WHERE d.kind = 'note'"
+        "WHERE d.kind IN ('note', 'image')"
     ).fetchone()["n"]
     return {
         "notes": row["n"] or 0,
+        "images": row["images"] or 0,
         "first": row["first"],
         "last": row["last"],
         "undated": row["undated"] or 0,
@@ -616,17 +629,20 @@ def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
 
 
 def document_summary(conn: sqlite3.Connection) -> dict:
+    """Counts for the records surface: PDFs and their pages only.
+
+    `kind = 'pdf'` rather than `!= 'note'`, because an OCR'd photo is a note
+    (see NOTE_KINDS) and must not be reported as a lab report or have its one
+    OCR page counted among scanned pages.
+    """
     docs = conn.execute(
         "SELECT COUNT(*) AS n, MIN(doc_date) AS first, MAX(doc_date) AS last "
-        "FROM document"
+        "FROM document WHERE kind = 'pdf'"
     ).fetchone()
     pages = conn.execute(
-        "SELECT COUNT(*) AS n, SUM(CASE WHEN extraction = 'ocr' THEN 1 ELSE 0 END) "
-        "AS ocr FROM document_page"
-    ).fetchone()
-    docs = conn.execute(
-        "SELECT COUNT(*) AS n, MIN(doc_date) AS first, MAX(doc_date) AS last "
-        "FROM document WHERE kind != 'note'"
+        "SELECT COUNT(*) AS n, SUM(CASE WHEN p.extraction = 'ocr' THEN 1 ELSE 0 END) "
+        "AS ocr FROM document_page p JOIN document d ON d.id = p.document_id "
+        "WHERE d.kind = 'pdf'"
     ).fetchone()
     labs_row = conn.execute(
         "SELECT COUNT(*) AS n, COUNT(DISTINCT analyte_key) AS analytes FROM lab_result"

@@ -609,14 +609,27 @@ def test_ask_path_survives_a_stale_corpus(tmp_path, capsys):
     assert "--rebuild" in err
 
 
+def _document_paths(index: Path) -> list[str]:
+    from health_agent.store import sqlite_schema
+
+    conn = sqlite_schema.connect(index)
+    try:
+        return [r["path"] for r in conn.execute("SELECT path FROM document")]
+    finally:
+        conn.close()
+
+
 def test_ingest_routes_an_image_to_the_notes_path(tmp_path, capsys, monkeypatch):
-    """An explicit `ingest photo.png` is a note ingest, and when OCR is off the
-    summary says the photo was skipped and how to enable it."""
+    """An explicit `ingest photo.png` is a note ingest of that one file: a
+    sibling in the same folder is not swept in. With --no-ocr the summary
+    says the photo was skipped because of the flag, not because Tesseract is
+    missing."""
     from health_agent.cli import main
 
     docs = Path(__file__).parent / "fixtures" / "documents"
     photo = tmp_path / "photo.png"
     shutil.copy(docs / "medication-list.png", photo)
+    (tmp_path / "todo.txt").write_text("buy milk\ncall the plumber\n")
     index = tmp_path / ".index" / "health.db"
 
     code = main(["--index", str(index), "ingest", str(photo), "--no-ocr", "--no-embed"])
@@ -624,4 +637,91 @@ def test_ingest_routes_an_image_to_the_notes_path(tmp_path, capsys, monkeypatch)
     assert code == 0
     assert "Ingesting 1 note(s)" in out
     assert "skipped: ocr disabled: 1" in out
+    assert "--no-ocr was passed" in out
+    assert "brew install tesseract" not in out
+    assert not any(p.endswith("todo.txt") for p in _document_paths(index))
+
+
+def test_ingest_of_one_pdf_does_not_sweep_its_siblings(tmp_path, capsys):
+    """`ingest labs.pdf` ingests labs.pdf. Handing the parent folder to the
+    records sweep would pull in every other PDF in Downloads."""
+    from health_agent.cli import main
+
+    fixtures = Path(__file__).parent / "fixtures" / "records"
+    target = tmp_path / "labs.pdf"
+    shutil.copy(fixtures / "labs_2026-03-10.pdf", target)
+    shutil.copy(fixtures / "labs_2025-09-12.pdf", tmp_path / "older.pdf")
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "ingest", str(target), "--no-ocr", "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Ingesting 1 record file(s)" in out
+    assert "Records: 1 document(s)" in out
+    paths = _document_paths(index)
+    assert len(paths) == 1
+    assert paths[0].endswith("labs.pdf")
+
+
+def test_ingest_install_hint_fires_only_when_tesseract_is_missing(
+        tmp_path, capsys, monkeypatch):
+    """Telling someone with Tesseract installed to install Tesseract sends
+    them chasing the wrong problem; the hint is for the machine without it."""
+    from health_agent.cli import main
+    from health_agent.ingest import readers, records as records_mod
+
+    monkeypatch.setattr(records_mod, "ocr_available", lambda: False)
+    monkeypatch.setattr(readers, "read_image", lambda path: (_ for _ in ()).throw(
+        records_mod.OcrUnavailable("no tesseract")))
+    docs = Path(__file__).parent / "fixtures" / "documents"
+    photo = tmp_path / "photo.png"
+    shutil.copy(docs / "medication-list.png", photo)
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "ingest", str(photo), "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "skipped: ocr unavailable: 1" in out
     assert "brew install tesseract" in out
+    assert "Then re-run `ingest`." in out
+    assert "--force" not in out
+
+
+def test_ingest_names_photos_left_in_the_records_folder(tmp_path, capsys):
+    """A photo in records/ is read by nothing. Saying so, and where it does
+    belong, is the difference between a gap and a silent one."""
+    from health_agent.cli import main
+
+    docs = Path(__file__).parent / "fixtures" / "documents"
+    data = tmp_path / "data"
+    (data / "records").mkdir(parents=True)
+    (data / "notes").mkdir()
+    shutil.copy(docs / "medication-list.png", data / "records" / "photo.png")
+    (data / "notes" / "2026-01-01-note.md").write_text("# A note\n\nsome text\n")
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "ingest", str(data), "--no-ocr", "--no-embed"])
+    captured = capsys.readouterr()
+    assert code == 0
+    assert ("Note: 1 photo(s) in records/ were not read; photos belong in notes/"
+            in captured.err)
+    assert not any(p.endswith("photo.png") for p in _document_paths(index))
+
+
+@pytest.mark.skipif(not records.ocr_available(),
+                    reason="Tesseract not installed; the image path is exercised in CI")
+def test_notes_listing_includes_photos_marked_as_ocr(tmp_path, capsys):
+    """A photo is listed with the notes it sits among, marked so a reader
+    knows its text came from pixels."""
+    from health_agent.cli import main
+
+    docs = Path(__file__).parent / "fixtures" / "documents"
+    photo = tmp_path / "photo.png"
+    shutil.copy(docs / "medication-list.png", photo)
+    index = tmp_path / ".index" / "health.db"
+    assert main(["--index", str(index), "ingest", str(photo), "--no-embed"]) == 0
+    capsys.readouterr()
+
+    assert main(["--index", str(index), "notes"]) == 0
+    out = capsys.readouterr().out
+    assert "photo.png (OCR)" in out

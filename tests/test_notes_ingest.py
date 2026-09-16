@@ -239,6 +239,7 @@ def test_note_summary(notes_index):
     conn, _ = notes_index
     summary = queries.note_summary(conn)
     assert summary["notes"] == 5
+    assert summary["images"] == 0
     assert summary["undated"] == 1
     assert summary["first"] == "2026-03-11"
     assert summary["last"] == "2026-09-01"
@@ -362,6 +363,54 @@ def test_image_ingests_as_kind_image_read_by_ocr(fresh_index, tmp_path):
     assert fresh_index.execute("SELECT COUNT(*) AS n FROM lab_result").fetchone()["n"] == 0
 
 
+@needs_ocr
+def test_a_photo_is_counted_as_a_note_everywhere_the_model_looks(
+        fresh_index, tmp_path):
+    """A photo in notes/ is searched, never trended. Every count the model
+    reads has to agree: it is a note, and it is not a lab report."""
+    from health_agent.agent import tools as agent_tools
+
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    shutil.copy(DOCS / "medication-list.png", folder / "medication-list.png")
+    notes.ingest_notes(fresh_index, folder, register=_register_for(fresh_index))
+
+    summary = queries.note_summary(fresh_index)
+    assert summary["images"] == 1
+    assert summary["notes"] == 1
+    docs = queries.document_summary(fresh_index)
+    assert docs["documents"] == 0
+    assert docs["pages"] == 0
+    assert docs["pages_ocr"] == 0
+    listed = queries.list_documents(fresh_index, kind="note")
+    assert [d["kind"] for d in listed] == ["image"]
+
+    inventory = agent_tools.data_inventory(fresh_index)
+    assert inventory["labs"]["reports"] == 0
+    assert inventory["notes"]["count"] == 1
+    assert inventory["notes"]["images"] == 1
+
+
+@needs_ocr
+def test_a_photo_that_ocrs_to_nothing_is_skipped_and_retried(fresh_index, tmp_path):
+    """An empty OCR result is not an ingested note: nothing would ever be
+    found in it. The file stays partial so the next plain ingest tries again."""
+    from PIL import Image
+
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    Image.new("RGB", (400, 200), "white").save(folder / "blank.png")
+
+    stats = notes.ingest_notes(fresh_index, folder, register=_register_for(fresh_index))
+    assert stats.notes == 0
+    assert stats.images == 0
+    assert stats.skipped == {"no text read by OCR": 1}
+    assert fresh_index.execute("SELECT COUNT(*) AS n FROM document").fetchone()["n"] == 0
+
+    again = notes.ingest_notes(fresh_index, folder, register=_register_for(fresh_index))
+    assert again.skipped == {"no text read by OCR": 1}
+
+
 def test_image_is_skipped_and_counted_when_ocr_is_unavailable(
         fresh_index, tmp_path, monkeypatch):
     from health_agent.ingest import readers, records as records_mod
@@ -387,6 +436,9 @@ def test_no_ocr_skips_images_with_its_own_reason(fresh_index, tmp_path):
                                use_ocr=False)
     assert stats.notes == 0
     assert stats.skipped == {"ocr disabled": 1}
+    # --no-ocr reads as "not available" too, matching records, so the CLI
+    # never tells someone with Tesseract installed to install Tesseract.
+    assert stats.ocr_available is False
 
 
 def test_heic_without_support_is_skipped_with_its_reason(

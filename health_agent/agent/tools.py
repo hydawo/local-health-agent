@@ -959,6 +959,10 @@ def data_inventory(conn, *, max_metrics: int = 25,
         },
         "notes": {
             "count": notes["notes"],
+            # Photos are notes, not reports: the model learns here that
+            # kind="image" has something to return, and labs.reports never
+            # counts them.
+            "images": notes["images"],
             "date_range": [notes["first"], notes["last"]],
             "tags": tags,
         },

@@ -5,13 +5,14 @@ because OCR and search have to be exercised against words that look like
 what people actually write, but no dose, date, condition, clinic, or person
 here corresponds to anyone. Same rule as `generate_pdfs.py`.
 
-Run after changing a fixture (python-docx and Pillow are dev dependencies):
+Run after changing a fixture (python-docx, Pillow, and pillow-heif are dev
+dependencies; pillow-heif comes with the `[ocr]` extra):
 
     python tests/fixtures/generate_documents.py
 
 The generated files are committed so the suite doesn't depend on fonts.
 
-Three files:
+Four files:
 
   clinic-summary.docx          a Heading 1, prose, a Heading 2, and a table,
                                so heading levels and table flattening are
@@ -21,6 +22,9 @@ Three files:
   medication-list-rotated.jpg  the same pixels rotated 90 degrees and tagged
                                with EXIF orientation 6, as a phone would save
                                a sideways photo; the reader must transpose it
+  medication-list.heic         the same pixels in the iPhone default format,
+                               so the pillow-heif path is proven on a real
+                               HEIF container rather than on a renamed file
 """
 
 from __future__ import annotations
@@ -77,6 +81,15 @@ def make_rotated_jpg(png: Path, path: Path) -> None:
     sideways.save(path, quality=95, exif=exif.tobytes())
 
 
+def make_heic(png: Path, path: Path) -> None:
+    import pillow_heif
+    from PIL import Image
+
+    pillow_heif.register_heif_opener()
+    with Image.open(png) as image:
+        image.save(path, format="HEIF")
+
+
 def make_docx(path: Path) -> None:
     import docx
 
@@ -108,8 +121,9 @@ def main() -> None:
     png = HERE / "medication-list.png"
     make_png(png)
     make_rotated_jpg(png, HERE / "medication-list-rotated.jpg")
+    make_heic(png, HERE / "medication-list.heic")
     make_docx(HERE / "clinic-summary.docx")
-    print(f"wrote 3 files to {HERE}")
+    print(f"wrote 4 files to {HERE}")
 
 
 if __name__ == "__main__":

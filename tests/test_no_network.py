@@ -125,7 +125,8 @@ def test_full_local_pipeline_runs_with_no_network(no_network, tmp_path):
     # Guard against the proof quietly shrinking: these are the paths that touch
     # user data, and all of them must be covered.
     for required in ("ingest healthkit export", "ingest record PDFs (incl. OCR path)",
-                     "ingest notes", "lab trend", "keyword search",
+                     "ingest notes", "ingest documents (docx + images)",
+                     "lab trend", "keyword search",
                      "vector search (LanceDB)", "agent tool: search_records"):
         assert required in names, f"{required!r} missing from the offline proof"
 

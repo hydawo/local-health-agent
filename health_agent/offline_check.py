@@ -113,6 +113,23 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         step("ingest notes", lambda: (
             f"{notes.ingest_notes(conn, notes_dir, register=lambda p: register(p, 'note')).notes} notes"))
 
+    # The docx and image readers run under the same sandbox as everything
+    # else, or the proof has a hole exactly where the newest code is. Without
+    # Tesseract the images skip with a counted reason and the docx still has
+    # to land; a sweep that reads nothing is a failure, not a pass.
+    documents_dir = data_dir / "documents"
+    if documents_dir.is_dir():
+        def _ingest_documents() -> str:
+            stats = notes.ingest_notes(
+                conn, documents_dir, register=lambda p: register(p, "note"))
+            if stats.notes - stats.images < 1:
+                raise RuntimeError(
+                    f"no .docx ingested (skipped: {stats.skipped})")
+            skipped = (f", skipped {dict(stats.skipped)}" if stats.skipped else "")
+            return (f"{stats.notes - stats.images} docx, "
+                    f"{stats.images} images via OCR{skipped}")
+        step("ingest documents (docx + images)", _ingest_documents)
+
     step("aggregate a metric", lambda: (
         f"{len(queries.metric_series(conn, metrics.resolve('resting-hr')).points)} points"))
     step("lab trend", lambda: (

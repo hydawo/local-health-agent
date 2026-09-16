@@ -13,6 +13,10 @@ needs_ocr = pytest.mark.skipif(
     not records.ocr_available(),
     reason="Tesseract not installed; the image path is exercised in CI",
 )
+needs_heif = pytest.mark.skipif(
+    not readers._heic_supported(),
+    reason="pillow-heif not installed (the [ocr] extra); .heic is exercised in CI",
+)
 
 
 def test_docx_headings_become_markdown_headings():
@@ -62,6 +66,15 @@ def test_sideways_phone_photo_is_transposed_before_ocr():
     for word in ("metformin", "atorvastatin", "lisinopril"):
         assert word in upright
         assert word in rotated
+
+
+@needs_ocr
+@needs_heif
+def test_heic_photo_is_read_by_ocr():
+    """The iPhone default format, on a real HEIF container rather than a
+    renamed PNG, so the pillow-heif opener is what gets proven."""
+    text = readers.read_image(DOCS / "medication-list.heic").lower()
+    assert "metformin" in text
 
 
 def test_image_without_tesseract_raises_the_typed_error(monkeypatch):

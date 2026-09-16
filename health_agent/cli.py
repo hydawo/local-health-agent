@@ -24,7 +24,7 @@ from pathlib import Path
 from . import (__version__, agent, config, consent, embeddings, labs, metrics,
                offline_check,
                ollama_client)
-from .ingest import healthkit, notes, records
+from .ingest import healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .store import queries, sqlite_schema, vector_store
 
@@ -111,6 +111,7 @@ def _plan_ingest(args: argparse.Namespace,
         # every stray .md in the tree — a README next to your records is
         # documentation, not a health note.
         if (target / "notes").is_dir() or (target / "records").is_dir():
+            _warn_photos_in_records(target / "records")
             return (_resolve_export_path(target),
                     records.find_records(target / "records")
                     if (target / "records").is_dir() else [],
@@ -123,10 +124,29 @@ def _plan_ingest(args: argparse.Namespace,
     export = _resolve_export_path(cfg.default_export_path)
     if export is None:
         export = _resolve_export_path(cfg.healthkit_dir)
+    _warn_photos_in_records(cfg.records_dir)
     found_records = (records.find_records(cfg.records_dir)
                      if cfg.records_dir.is_dir() else [])
     found_notes = notes.find_notes(cfg.notes_dir) if cfg.notes_dir.is_dir() else []
     return export, found_records, found_notes
+
+
+def _warn_photos_in_records(records_dir: Path) -> None:
+    """Say so when photos sit in records/, where nothing reads them.
+
+    `find_records` only takes PDFs, so a photo of a lab report dropped there
+    would vanish without a word. Absence is reported, never silent: the note
+    names the folder that does read photos and why they are only searched.
+    """
+    if not records_dir.is_dir():
+        return
+    photos = [p for p in records_dir.rglob("*")
+              if p.is_file() and p.suffix.lower() in readers.IMAGE_SUFFIXES
+              and not p.name.startswith(".")]
+    if photos:
+        print(f"Note: {len(photos)} photo(s) in records/ were not read; photos "
+              "belong in notes/ (they are searched, never parsed for lab "
+              "values).", file=sys.stderr)
 
 
 def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -221,7 +241,10 @@ def _ingest_records(conn: sqlite3.Connection, files: list[Path],
     def on_file(path: Path) -> None:
         print(f"  {path.name}", flush=True)
 
-    root = files[0].parent if len(files) == 1 else _common_parent(files)
+    # A single explicit file is handed over as itself: find_records and
+    # find_notes return [root] for a file, and handing over its parent
+    # would sweep every sibling in Desktop or Downloads into the index.
+    root = files[0] if len(files) == 1 else _common_parent(files)
     stats = records.ingest_records(
         conn, root, register=register, use_ocr=use_ocr, force=force,
         on_file=on_file,
@@ -263,7 +286,10 @@ def _ingest_notes(conn: sqlite3.Connection, files: list[Path], *,
     def on_file(path: Path) -> None:
         print(f"  {path.name}", flush=True)
 
-    root = files[0].parent if len(files) == 1 else _common_parent(files)
+    # A single explicit file is handed over as itself: find_records and
+    # find_notes return [root] for a file, and handing over its parent
+    # would sweep every sibling in Desktop or Downloads into the index.
+    root = files[0] if len(files) == 1 else _common_parent(files)
     stats = notes.ingest_notes(conn, root, register=register, force=force,
                                on_file=on_file, use_ocr=use_ocr)
 
@@ -282,16 +308,27 @@ def _ingest_notes(conn: sqlite3.Connection, files: list[Path], *,
               f"(kept raw; only simple keys are interpreted)")
     for reason, count in stats.skipped.items():
         print(f"  skipped: {reason}: {count}")
-    if (stats.skipped.get("ocr unavailable") or stats.skipped.get("ocr disabled")):
-        print("\nNote: photos and screenshots are read with Tesseract, and it "
-              "was not used, so those files are not in the index. Install it "
-              "to enable OCR:\n"
+    # Three different reasons a photo was not read, three different fixes.
+    # Telling someone with Tesseract installed to install Tesseract sends
+    # them chasing the wrong problem. A skipped photo stays `partial`, so a
+    # plain `ingest` retries it; --force is not needed.
+    unread = stats.skipped.get("ocr unavailable", 0)
+    if stats.skipped.get("ocr disabled"):
+        print("\nNote: photos and screenshots were skipped because --no-ocr "
+              "was passed; re-run without it to read them.")
+    elif unread and not stats.ocr_available:
+        print("\nNote: photos and screenshots are read with Tesseract, which "
+              "is not installed, so those files are not in the index. Install "
+              "it to enable OCR:\n"
               "  macOS:  brew install tesseract\n"
               "  Debian: apt install tesseract-ocr\n"
-              "Then re-run with `ingest --force`.")
+              "Then re-run `ingest`.")
+    elif unread:
+        print(f"\nNote: {unread} photo(s) could not be read by OCR; see the "
+              "log for which.")
     if stats.skipped.get("heic unsupported"):
         print("\nNote: .heic photos need pillow-heif: pip install -e '.[ocr]', "
-              "then re-run with `ingest --force`.")
+              "then re-run `ingest`.")
     print()
 
 
@@ -948,8 +985,10 @@ def cmd_notes(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"Put markdown or text files in {cfg.notes_dir} and run "
                   f"`health-agent ingest`.")
             return 1
+        # A photo is listed with the notes it sits among; the (OCR) mark says
+        # its text was read from pixels, so a reader knows how far to trust it.
         rows = [[
-            Path(n["path"]).name,
+            Path(n["path"]).name + (" (OCR)" if n["kind"] == "image" else ""),
             n["doc_date"] or "-",
             f"{n['chunks']:,}",
             (n["tags"] or "-")[:34],

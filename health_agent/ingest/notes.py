@@ -324,11 +324,23 @@ class OcrDisabled(RuntimeError):
     """`--no-ocr` was passed and the file is an image."""
 
 
+class NoTextRead(RuntimeError):
+    """OCR ran on an image and read nothing.
+
+    An empty document would count as ingested while returning no search hit,
+    which is silent absence. Raising before any INSERT leaves the source file
+    `partial`, so a sharper photo or a newer Tesseract gets a fresh attempt on
+    the next `ingest` without `--force`.
+    """
+
+
 def ingest_note(conn: sqlite3.Connection, path: Path, *, source_file_id: int,
                 stats: NoteStats, use_ocr: bool = True) -> int:
     """Parse and store one note. Returns the document id."""
     raw, kind, extraction = read_body(path, use_ocr=use_ocr)
     meta, body = parse_frontmatter(raw)
+    if kind == "image" and not body.strip():
+        raise NoTextRead(path.name)
 
     date = extract_date(meta, path)
     tags = extract_tags(meta, body)
@@ -402,7 +414,10 @@ def ingest_notes(
     from ..store import sqlite_schema
 
     stats = NoteStats()
-    stats.ocr_available = records_mod.ocr_available()
+    # Reflects --no-ocr as well as a missing Tesseract, matching records, so
+    # the CLI can tell "not installed" from "told not to" when it explains a
+    # skipped photo.
+    stats.ocr_available = use_ocr and records_mod.ocr_available()
 
     for path in find_notes(root):
         source_file_id, already = register(path)
@@ -422,6 +437,10 @@ def ingest_notes(
                        use_ocr=use_ocr)
         except OcrDisabled:
             stats.skip("ocr disabled")
+            continue
+        except NoTextRead:
+            log.warning("%s: skipped (no text read by OCR)", path.name)
+            stats.skip("no text read by OCR")
             continue
         except OcrUnavailable:
             log.warning("%s: skipped (OCR unavailable)", path.name)
