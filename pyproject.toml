@@ -30,6 +30,8 @@ dependencies = [
     "pdfplumber>=0.11",   # PDF text/tables; renders via bundled pypdfium2, so
                           # OCR needs no poppler or ImageMagick
     "lancedb>=0.24",      # file-based vector store, no server, no telemetry
+    "python-docx>=1.1",   # .docx in the drop folder; pure Python, so it is
+                          # core rather than an extra
 ]
 
 [project.urls]
@@ -40,13 +42,13 @@ Changelog = "https://github.com/hydawo/local-health-agent/releases"
 [project.optional-dependencies]
 # OCR for scanned records. Optional because it also needs the Tesseract binary,
 # and requiring a system install to read ordinary text PDFs is a bad trade.
-ocr = ["pytesseract>=0.3.10"]
+ocr = ["pytesseract>=0.3.10", "pillow-heif>=0.18"]
 # The opt-in cloud tier (plan §4 tier 2). Optional on purpose: the local tier is
 # the product, and someone who never opts in should not have an HTTP client, a
 # vendor SDK, or its transitive dependencies installed at all. `health-agent ask
 # --cloud` tells you to install this if it is missing.
 cloud = ["anthropic>=0.70"]
-dev = ["pytest>=8.0", "pytesseract>=0.3.10", "reportlab>=4.0", "anthropic>=0.70"]
+dev = ["pytest>=8.0", "pytesseract>=0.3.10", "pillow-heif>=0.18", "reportlab>=4.0", "anthropic>=0.70"]
 
 [project.scripts]
 health-agent = "health_agent.cli:main"

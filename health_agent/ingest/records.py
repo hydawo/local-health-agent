@@ -114,11 +114,11 @@ def ocr_available() -> bool:
     return True
 
 
-def ocr_page(page, dpi: int = OCR_DPI) -> tuple[str, str]:
-    """Rasterize one page and OCR it. Returns (plain text, layout text).
+def ocr_image(image) -> tuple[str, str]:
+    """OCR one PIL image. Returns (plain text, layout text).
 
-    pdfplumber renders through its bundled pypdfium2, so this needs no external
-    rasterizer (no poppler, no ImageMagick) — only the Tesseract binary itself.
+    Shared by scanned PDF pages and by photos dropped into the notes folder,
+    so the two fixes below apply to both and cannot drift apart.
 
     Two Tesseract behaviors have to be worked around, and both fail *silently*
     by producing text that looks fine and parses to nothing:
@@ -141,11 +141,6 @@ def ocr_page(page, dpi: int = OCR_DPI) -> tuple[str, str]:
         raise OcrUnavailable("pytesseract is not installed") from exc
 
     try:
-        image = page.to_image(resolution=dpi).original
-    except Exception as exc:  # noqa: BLE001 - rendering failures are per-page
-        raise OcrUnavailable(f"page render failed: {type(exc).__name__}") from exc
-
-    try:
         data = pytesseract.image_to_data(
             image, config=OCR_CONFIG, output_type=pytesseract.Output.DICT
         )
@@ -153,6 +148,19 @@ def ocr_page(page, dpi: int = OCR_DPI) -> tuple[str, str]:
         raise OcrUnavailable(f"tesseract failed: {type(exc).__name__}") from exc
 
     return _reconstruct_ocr_text(data)
+
+
+def ocr_page(page, dpi: int = OCR_DPI) -> tuple[str, str]:
+    """Rasterize one PDF page and OCR it. Returns (plain text, layout text).
+
+    pdfplumber renders through its bundled pypdfium2, so this needs no external
+    rasterizer (no poppler, no ImageMagick) — only the Tesseract binary itself.
+    """
+    try:
+        image = page.to_image(resolution=dpi).original
+    except Exception as exc:  # noqa: BLE001 - rendering failures are per-page
+        raise OcrUnavailable(f"page render failed: {type(exc).__name__}") from exc
+    return ocr_image(image)
 
 
 def _reconstruct_ocr_text(data: dict) -> tuple[str, str]:
