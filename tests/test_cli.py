@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -583,3 +584,21 @@ def test_ask_path_survives_a_stale_corpus(tmp_path, capsys):
     err = capsys.readouterr().err
     assert opened is None
     assert "--rebuild" in err
+
+
+def test_ingest_routes_an_image_to_the_notes_path(tmp_path, capsys, monkeypatch):
+    """An explicit `ingest photo.png` is a note ingest, and when OCR is off the
+    summary says the photo was skipped and how to enable it."""
+    from health_agent.cli import main
+
+    docs = Path(__file__).parent / "fixtures" / "documents"
+    photo = tmp_path / "photo.png"
+    shutil.copy(docs / "medication-list.png", photo)
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "ingest", str(photo), "--no-ocr", "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Ingesting 1 note(s)" in out
+    assert "skipped: ocr disabled: 1" in out
+    assert "brew install tesseract" in out

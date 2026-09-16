@@ -487,7 +487,7 @@ def _search_records(ctx: ToolContext, args: dict) -> dict:
 
     limit = min(int(args.get("limit") or 5), MAX_SEARCH_RESULTS)
     kind = args.get("kind")
-    if kind not in ("note", "pdf", None):
+    if kind not in ("note", "pdf", "image", None):
         kind = None
 
     hits: list = []
@@ -832,10 +832,11 @@ TOOLS: tuple[Tool, ...] = (
                           "description": "What to look for, in natural language."},
                 "kind": {
                     "type": "string",
-                    "enum": ["note", "pdf"],
+                    "enum": ["note", "pdf", "image"],
                     "description": (
-                        "Restrict to personal notes or to medical records. Omit "
-                        "to search both."
+                        "Restrict to personal notes, to medical records (PDFs), "
+                        "or to photos and screenshots read by OCR. Omit to "
+                        "search all three."
                     ),
                 },
                 "limit": {"type": "integer",

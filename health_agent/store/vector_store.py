@@ -55,7 +55,7 @@ class SearchHit:
     text: str
     score: float
     method: str  # 'semantic' | 'keyword'
-    kind: str = "pdf"  # 'pdf' (records) | 'note'
+    kind: str = "pdf"  # 'pdf' (records) | 'note' | 'image' (OCR'd photo)
     section: str | None = None
 
     @property
@@ -67,7 +67,11 @@ class SearchHit:
         filename and, when known, the date.
         """
         parts = [Path(self.path).name]
-        if self.kind == "note":
+        if self.kind == "image":
+            # Provenance the reader must see: OCR text can be wrong in ways a
+            # typed note cannot, and the answer should carry that caveat.
+            parts[0] += " (read by OCR)"
+        elif self.kind == "note":
             if self.section:
                 parts.append(self.section)
         elif self.page_no:

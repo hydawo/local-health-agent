@@ -164,7 +164,7 @@ def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
             _ingest_records(conn, record_files, cfg, force=force,
                             use_ocr=not args.no_ocr)
         if note_files:
-            _ingest_notes(conn, note_files, force=force)
+            _ingest_notes(conn, note_files, force=force, use_ocr=not args.no_ocr)
         if (record_files or note_files) and not args.no_embed:
             _embed_chunks(conn, cfg, args.embedder, quiet_if_unavailable=True)
         return 0
@@ -253,7 +253,7 @@ def _ingest_records(conn: sqlite3.Connection, files: list[Path],
 
 
 def _ingest_notes(conn: sqlite3.Connection, files: list[Path], *,
-                  force: bool) -> None:
+                  force: bool, use_ocr: bool) -> None:
     print(f"Ingesting {len(files)} note(s)", flush=True)
 
     def register(path: Path) -> tuple[int, bool]:
@@ -265,11 +265,13 @@ def _ingest_notes(conn: sqlite3.Connection, files: list[Path], *,
 
     root = files[0].parent if len(files) == 1 else _common_parent(files)
     stats = notes.ingest_notes(conn, root, register=register, force=force,
-                               on_file=on_file)
+                               on_file=on_file, use_ocr=use_ocr)
 
     print()
     print(f"Notes: {stats.notes} note(s)")
     print(f"  text chunks         {stats.chunks}")
+    if stats.images:
+        print(f"  images (OCR)        {stats.images}")
     print(f"  with tags           {stats.tagged}")
     print(f"  dated               {stats.dated}")
     if stats.undated:
@@ -280,6 +282,16 @@ def _ingest_notes(conn: sqlite3.Connection, files: list[Path], *,
               f"(kept raw; only simple keys are interpreted)")
     for reason, count in stats.skipped.items():
         print(f"  skipped: {reason}: {count}")
+    if (stats.skipped.get("ocr unavailable") or stats.skipped.get("ocr disabled")):
+        print("\nNote: photos and screenshots are read with Tesseract, and it "
+              "was not used, so those files are not in the index. Install it "
+              "to enable OCR:\n"
+              "  macOS:  brew install tesseract\n"
+              "  Debian: apt install tesseract-ocr\n"
+              "Then re-run with `ingest --force`.")
+    if stats.skipped.get("heic unsupported"):
+        print("\nNote: .heic photos need pillow-heif: pip install -e '.[ocr]', "
+              "then re-run with `ingest --force`.")
     print()
 
 
