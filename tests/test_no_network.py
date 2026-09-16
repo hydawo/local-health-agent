@@ -150,7 +150,7 @@ def test_ingest_alone_is_offline(no_network, tmp_path):
         register=lambda p: register(p, "record")).documents == 3
     assert notes.ingest_notes(
         conn, FIXTURES / "notes",
-        register=lambda p: register(p, "note")).notes == 4
+        register=lambda p: register(p, "note")).notes == 5
     conn.close()
 
 

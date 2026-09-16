@@ -288,7 +288,7 @@ def test_ingest_reports_note_counts(tmp_path, capsys):
                  "--no-ocr", "--no-embed"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "Notes: 4 note(s)" in out
+    assert "Notes: 5 note(s)" in out
     assert "undated             1" in out
 
 

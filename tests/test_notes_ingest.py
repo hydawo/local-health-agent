@@ -196,11 +196,11 @@ def notes_index(tmp_path):
 
 def test_all_notes_are_stored(notes_index):
     conn, stats = notes_index
-    assert stats.notes == 4
+    assert stats.notes == 5
     assert stats.chunks > 0
     assert conn.execute(
         "SELECT COUNT(*) AS n FROM document WHERE kind = 'note'"
-    ).fetchone()["n"] == 4
+    ).fetchone()["n"] == 5
 
 
 def test_notes_never_produce_lab_results(notes_index):
@@ -238,10 +238,10 @@ def test_chunks_carry_their_section(notes_index):
 def test_note_summary(notes_index):
     conn, _ = notes_index
     summary = queries.note_summary(conn)
-    assert summary["notes"] == 4
+    assert summary["notes"] == 5
     assert summary["undated"] == 1
     assert summary["first"] == "2026-03-11"
-    assert summary["last"] == "2026-03-14"
+    assert summary["last"] == "2026-09-01"
 
 
 def test_editing_a_note_replaces_it(notes_index, tmp_path):
