@@ -36,6 +36,16 @@ def query_url(base: str, params: dict) -> str:
     return base + "?" + urlencode(params)
 
 
+def looks_like_url(source: str) -> bool:
+    """Whether a `--from` value is a URL rather than a path. Lives here so
+    that `cli.py` never imports urllib: the network-surface test counts
+    imports, and `urllib.parse` would look the same as `urllib.request` to
+    it. A scheme check rather than a prefix check so `http://` routes to
+    `get`, which refuses it with the reason, instead of to "No such file".
+    """
+    return urlparse(source).scheme in ("http", "https")
+
+
 def url_filename(url: str) -> str:
     """The last path segment of a URL, without query or fragment. Same
     reason as `query_url` for living here."""

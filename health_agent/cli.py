@@ -1353,17 +1353,14 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
 
 def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int]] | None:
     """slug -> (version, article_count) from the local `pack` table, or None
-    when there is no corpus. A schema mismatch is reported and treated as
-    empty so that `packs` and `doctor` still list the catalog."""
+    when there is no corpus. A `CorpusSchemaVersionMismatch` propagates:
+    an empty dict here would let `packs` say "not installed" and `doctor`
+    say "All good" about a corpus that is neither."""
     from .literature import schema as lit_schema
 
     if not cfg.literature_path.exists():
         return None
-    try:
-        conn = lit_schema.connect(cfg.literature_path)
-    except lit_schema.CorpusSchemaVersionMismatch as exc:
-        print(str(exc), file=sys.stderr)
-        return {}
+    conn = lit_schema.connect(cfg.literature_path)
     try:
         return {r["slug"]: (r["version"], r["article_count"]) for r in
                 conn.execute("SELECT slug, version, article_count FROM pack")}
@@ -1373,9 +1370,13 @@ def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int]] | None:
 
 def cmd_literature_packs(args: argparse.Namespace, cfg: config.Config) -> int:
     """The catalog and what is installed. Reads only the local pack table."""
-    from .literature import packs
+    from .literature import packs, schema as lit_schema
 
-    installed = _installed_packs(cfg) or {}
+    try:
+        installed = _installed_packs(cfg) or {}
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     for spec in packs.CATALOG.values():
         state = (f"installed {installed[spec.slug][0]}, {installed[spec.slug][1]} articles"
                  if spec.slug in installed else "not installed")
@@ -1409,8 +1410,26 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
     if not _confirm_literature(cfg, assume_yes=args.yes):
         return 1
 
+    from .literature.fetch import client as fetch_client
+
     version = args.version or packs.LATEST_VERSION
-    if args.source and not args.source.startswith("https://"):
+    is_url = bool(args.source) and fetch_client.looks_like_url(args.source)
+
+    if not args.source and not args.force:
+        # Before any fetch, not after: the notice describes a download the
+        # user chose, and a no-op reinstall is not one.
+        try:
+            installed = _installed_packs(cfg) or {}
+        except lit_schema.CorpusSchemaVersionMismatch as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        if installed.get(args.slug, (None,))[0] == version:
+            print(f"{args.slug}@{version} is already installed; "
+                  f"pass --force to reinstall.")
+            return 0
+
+    downloaded = False
+    if args.source and not is_url:
         pack_path = Path(args.source).expanduser()
         if not pack_path.is_file():
             print(f"No such file: {pack_path}", file=sys.stderr)
@@ -1419,6 +1438,8 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         from .literature.fetch import packs as fetch_packs
         try:
             if args.source:
+                # An http:// URL reaches the client's allow list, which
+                # refuses it with the reason; not "No such file".
                 pack_path = fetch_packs.download_url(args.source, cfg.index_dir / "packs")
             else:
                 print(f"Downloading {args.slug}-{version} from github.com ...", flush=True)
@@ -1426,11 +1447,18 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         except Exception as exc:  # noqa: BLE001 - reported, never a traceback
             print(f"Download failed: {exc}", file=sys.stderr)
             return 2
+        downloaded = True
 
     try:
         manifest, articles = packs.read_pack(pack_path)
     except packs.PackError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    if args.source and manifest.slug != args.slug:
+        # Any slug is allowed through --from (that is how a locally built
+        # pack is tested); a silent disagreement with the argument is not.
+        print(f"The file is the {manifest.slug} pack; you asked to install "
+              f"{args.slug}. Pass the slug the file names.", file=sys.stderr)
         return 2
     # The pack's stored tier is not trusted; the installed table is the
     # authority, and publication_types is carried verbatim for exactly this.
@@ -1456,6 +1484,12 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"{manifest.slug}@{manifest.version}: {stats.articles} articles, "
               f"{stats.chunks} chunks"
               f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
+        if downloaded:
+            # The rows are in; the file is never reused (a same-version
+            # reinstall stops before any fetch), and a user's own --from
+            # file is not the tool's to remove.
+            pack_path.unlink(missing_ok=True)
+            pack_path.with_name(pack_path.name + ".sha256").unlink(missing_ok=True)
         if not args.no_embed:
             embedder = embeddings.get_embedder(args.embed_backend)
             store = vector_store.VectorStore(cfg.literature_vector_path,
@@ -1726,11 +1760,17 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"               PROBLEM: {exc}")
             ok = False
 
-    installed = _installed_packs(cfg)
-    if installed is not None:
-        listed = ", ".join(f"{slug}@{ver}" for slug, (ver, _) in installed.items())
-        print(f"literature packs: {len(installed)} installed"
-              f"{f' ({listed})' if listed else ''}")
+    from .literature import schema as lit_schema
+    try:
+        installed = _installed_packs(cfg)
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(f"literature packs: PROBLEM: {exc}")
+        ok = False
+    else:
+        if installed is not None:
+            listed = ", ".join(f"{slug}@{ver}" for slug, (ver, _) in installed.items())
+            print(f"literature packs: {len(installed)} installed"
+                  f"{f' ({listed})' if listed else ''}")
 
     free_gb = shutil.disk_usage(
         cfg.index_dir if cfg.index_dir.exists() else Path.home()
@@ -1767,7 +1807,9 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
     print("\nNetwork posture")
     print("  This build makes no outbound calls except to the Ollama host above,")
     print("  which is refused unless it is loopback. Ingestion and all queries")
-    print("  are pure local computation.")
+    print("  are pure local computation. Two commands connect to the internet,")
+    print("  `literature install` and `literature build-pack`, and only after a")
+    print("  one-time notice; `literature-consent` shows or withdraws it.")
 
     print(f"\n{'All good.' if ok else 'Some checks reported problems (above).'}")
     return 0 if ok else 1

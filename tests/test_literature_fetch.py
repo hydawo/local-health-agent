@@ -306,3 +306,12 @@ def test_esearch_surfaces_ncbis_own_error_text():
             b'<ERROR>Invalid db name specified: pubmedx</ERROR></eSearchResult>')
     with pytest.raises(client.FetchError, match="Invalid db name specified: pubmedx"):
         eutils.search("x", get=lambda url, **kw: body)
+
+
+def test_looks_like_url_routes_schemes_not_prefixes():
+    from health_agent.literature.fetch import client
+    assert client.looks_like_url("https://github.com/x.jsonl.gz")
+    assert client.looks_like_url("http://github.com/x.jsonl.gz")
+    assert not client.looks_like_url("/tmp/sleep-1.jsonl.gz")
+    assert not client.looks_like_url("sleep-1.jsonl.gz")
+    assert not client.looks_like_url("~/packs/sleep-1.jsonl.gz")

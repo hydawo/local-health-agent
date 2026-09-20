@@ -772,7 +772,7 @@ def test_literature_install_from_a_local_pack_builds_the_corpus(tmp_path, capsys
                  "--from", str(pack_path), "--yes", "--no-embed"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "sleep@1" in out or "sleep" in out
+    assert "sleep@1" in out
 
     cfg = config_mod.resolve(index_path=str(index))
     conn = lit_schema.connect(cfg.literature_path)
@@ -869,3 +869,139 @@ def test_doctor_reports_installed_packs(tmp_path, capsys, monkeypatch):
 def _doctor_out(main, index, capsys) -> str:
     main(["--index", str(index), "doctor"])
     return capsys.readouterr().out
+
+
+def _write_sleep_pack(tmp_path, version="1"):
+    from health_agent.literature import medline, packs
+    articles = medline.parse_articles(
+        (Path(__file__).parent / "fixtures" / "literature" / "corpus.xml").read_bytes())
+    pack_path = tmp_path / f"sleep-{version}.jsonl.gz"
+    packs.write_pack(pack_path, packs.CATALOG["sleep"], version, articles,
+                     license=packs.PACK_LICENSE)
+    return pack_path
+
+
+def test_literature_install_refuses_a_file_that_names_a_different_pack(tmp_path, capsys):
+    """`--from` may carry any slug (that is the local-test path), but the
+    file and the argument must agree, or the user installs the wrong pack
+    without being told."""
+    from health_agent.cli import main
+    pack_path = _write_sleep_pack(tmp_path)
+    code = main(["--index", str(tmp_path / ".index" / "health.db"),
+                 "literature", "install", "cardiovascular",
+                 "--from", str(pack_path), "--yes", "--no-embed"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "sleep" in err and "cardiovascular" in err
+
+
+def _stale_corpus(tmp_path, capsys):
+    from health_agent.cli import main
+    from health_agent import config as config_mod
+    from health_agent.literature import schema as lit_schema
+    index = tmp_path / ".index" / "health.db"
+    pack_path = _write_sleep_pack(tmp_path)
+    assert main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
+    capsys.readouterr()
+    cfg = config_mod.resolve(index_path=str(index))
+    lit = lit_schema.connect(cfg.literature_path)
+    lit.execute("UPDATE corpus_meta SET value = '3' WHERE key = 'schema_version'")
+    lit.commit()
+    lit.close()
+    return index
+
+
+def test_literature_packs_names_a_stale_corpus_instead_of_saying_not_installed(
+        tmp_path, capsys):
+    from health_agent.cli import main
+    index = _stale_corpus(tmp_path, capsys)
+    code = main(["--index", str(index), "literature", "packs"])
+    out, err = capsys.readouterr()
+    assert code != 0
+    assert "schema" in err.lower()
+    assert "not installed" not in out
+
+
+def test_doctor_reports_a_stale_corpus_as_a_problem(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    from health_agent.cli import main
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = _stale_corpus(tmp_path, capsys)
+    code = main(["--index", str(index), "doctor"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "PROBLEM" in out and "schema" in out.lower()
+    assert "All good" not in out
+
+
+def test_literature_install_does_not_download_what_it_already_has(
+        tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    from health_agent.literature.fetch import packs as fetch_packs
+
+    index = tmp_path / ".index" / "health.db"
+    pack_path = _write_sleep_pack(tmp_path)
+    assert main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
+    capsys.readouterr()
+
+    calls = []
+    monkeypatch.setattr(fetch_packs, "download", lambda *a, **k: calls.append(a) or None)
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--version", "1", "--yes", "--no-embed"])
+    assert code == 0
+    assert "already installed" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_literature_install_removes_the_downloaded_file_afterwards(
+        tmp_path, capsys, monkeypatch):
+    """A pack file is 75 MB and never reused (a reinstall at the same
+    version is a no-op before any fetch), so keeping it is pure cost."""
+    from health_agent.cli import main
+    from health_agent.literature.fetch import packs as fetch_packs
+
+    index = tmp_path / ".index" / "health.db"
+    pack_path = _write_sleep_pack(tmp_path)
+
+    def fake_download(slug, version, dest_dir, **k):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / pack_path.name
+        shutil.copy(pack_path, dest)
+        (dest_dir / (dest.name + ".sha256")).write_text("x")
+        return dest
+
+    monkeypatch.setattr(fetch_packs, "download", fake_download)
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--version", "1", "--yes", "--no-embed"])
+    assert code == 0
+    assert "sleep@1" in capsys.readouterr().out
+    packs_dir = tmp_path / ".index" / "packs"
+    assert list(packs_dir.glob("*.jsonl.gz")) == []
+    assert list(packs_dir.glob("*.sha256")) == []
+    # The user's own --from file is not the tool's to delete.
+    assert pack_path.exists()
+
+
+def test_literature_install_from_a_plain_http_url_hits_the_allow_list(tmp_path, capsys):
+    from health_agent.cli import main
+    code = main(["--index", str(tmp_path / ".index" / "health.db"),
+                 "literature", "install", "sleep",
+                 "--from", "http://github.com/x.jsonl.gz", "--yes"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "allow list" in err
+    assert "No such file" not in err
+
+
+def test_doctor_names_the_two_commands_that_connect(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    from health_agent.cli import main
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    main(["--index", str(tmp_path / ".index" / "health.db"), "doctor"])
+    out = capsys.readouterr().out
+    assert "literature install" in out and "literature build-pack" in out
+    assert "literature-consent" in out
