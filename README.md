@@ -635,8 +635,10 @@ rewrite pass, then a visible note if that fails.
   did its job; the guard switched itself off because the tool worked. The
   fix, tracked as a guardrail follow-up, is to judge each threshold sentence
   by whether it carries its own citation rather than gating on the turn.
-  Until that lands, this case is caught by the corpus when it covers the
-  topic and by nothing when it does not.
+  Until that lands, a threshold is caught by the guard when the search
+  returns nothing, by a citation when the corpus states the cutoff, and by
+  nothing when the search returns papers on the topic that do not state it,
+  which on a real corpus is the common case.
 - **The corpus is only as good as what has been built into it.** A threshold
   the installed corpus simply doesn't cover cannot be cited, and the tool says
   so. That is a coverage gap, not a fixed leak.
