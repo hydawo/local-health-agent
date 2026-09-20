@@ -447,12 +447,12 @@ pack is installed, each lab question also names one finding by title, year,
 tier, and PMID. It does not quote the finding.
 
 There is no model in this command. The output is a list of your numbers
-with a fixed sentence around each. A template does that exactly. A model
-does it approximately. It sometimes attaches a recalled threshold instead
-of the printed one (see [eval run 6](tests/eval_results.md)). The sheet
-also runs on a machine that cannot run the model. The guardrail can be run
-over the finished sheet as a test. A template that reads as interpretation
-fails the suite.
+with a fixed sentence around each, and a template does that exactly, where
+a model does it approximately, and on the evidence of
+[eval run 6](tests/eval_results.md) sometimes with a recalled threshold
+attached. The sheet also runs on a machine that cannot run the model. The
+guardrail can be run over the finished sheet as a test. A template that
+reads as interpretation fails the suite.
 
 It does not read your notes. Medications and conditions you wrote down are
 free text. A rule cannot tell "stopped metformin" from "started metformin".
@@ -759,7 +759,7 @@ guardrail's pattern check.
 **Physician visit prep** builds directly on it and has shipped. See
 [Visit prep](#visit-prep) above for what it writes and why there is no model
 in the loop. **Literature-grounded context on out-of-range values** is the
-other feature built on the corpus and remains ahead of us. It would surface
+other feature built on the corpus and is not built yet. It would surface
 what evidence says about a marker as citations, never as a recommendation.
 It stays inside the contextualize-don't-diagnose line. It also needs an
 explicit design review before implementation. Synthesis across findings can

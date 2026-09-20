@@ -190,6 +190,10 @@ def metric_shift_for(recent: list[float], prior: list[float],
     return abs(recent_mean - prior_mean) / abs(prior_mean) * 100 >= amount
 
 
+def _days(n: int) -> str:
+    return f"{n} day" if n == 1 else f"{n} days"
+
+
 def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float]]:
     """(label, unit, {date: value}) for one metric, sleep via nights."""
     if alias == "sleep":
@@ -222,10 +226,12 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
             window = {"recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                       "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat()}
         if len(recent) < need:
-            gaps.append(f"{label}: {len(recent)} days in the last {window_days}")
+            gaps.append(f"{label}: {_days(len(recent))} in the {window_days} days "
+                       f"to {last.isoformat()}")
             continue
         if len(prior) < need:
-            gaps.append(f"{label}: {len(prior)} days in the {window_days} before")
+            gaps.append(f"{label}: {_days(len(prior))} in the {window_days} days "
+                       f"before {recent_start.isoformat()}")
             continue
         if not metric_shift_for(recent, prior, threshold):
             continue
@@ -245,6 +251,13 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
             },
         ))
     return signals, gaps, window
+
+
+# Reading order for the rendered sheet: the values furthest from routine
+# come first, near-limit and returned-to-range follow, metric shifts last.
+# Stable within a kind, so `sorted` alone gives a deterministic order.
+_KIND_ORDER = {"lab_out_of_range": 0, "lab_near_limit": 1,
+              "lab_returned_to_range": 2, "metric_shift": 3}
 
 
 @dataclass
@@ -268,7 +281,7 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
         labs={"reports": docs["documents"], "first": docs["doc_first"],
               "last": docs["doc_last"], "analytes": docs["analytes"]},
         healthkit=window,
-        signals=lab + shifts,
+        signals=sorted(lab + shifts, key=lambda s: _KIND_ORDER[s.kind]),
         gaps=gaps,
     )
 
@@ -290,6 +303,17 @@ INTRO = ("Prepared {date} from your own files. Nothing here is a conclusion; "
          "worth asking. Bring the reports named.")
 NOTHING = ("Nothing stood out in what was looked at. That is a statement about "
            "this tool's cutoffs, not about your health.")
+
+
+def _sentence_label(label: str) -> str:
+    """`label`, lowercased at the start only when it reads as a normal word
+    ("Total cholesterol" -> "total cholesterol") and left alone when the
+    second character says it's an acronym or an initialism ("LDL
+    cholesterol", "HRV (SDNN)"). Used mid-sentence, in the question line
+    only; gaps and headings keep the label as given."""
+    if len(label) >= 2 and label[1].islower():
+        return label[0].lower() + label[1:]
+    return label
 
 
 def _val(e: dict) -> str:
@@ -377,7 +401,7 @@ def render(sheet: Sheet) -> str:
     if sheet.signals:
         lines.append("## Questions")
         for i, s in enumerate(sheet.signals, 1):
-            lines.append(f"{i}. {QUESTION_TEMPLATES[s.kind].format(label=s.label)} "
+            lines.append(f"{i}. {QUESTION_TEMPLATES[s.kind].format(label=_sentence_label(s.label))} "
                          f"{_evidence_sentence(s)}")
             for caveat in s.caveats:
                 lines.append(f"   {caveat}")

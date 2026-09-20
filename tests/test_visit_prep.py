@@ -237,7 +237,8 @@ def test_too_few_days_is_a_gap_not_a_signal(tmp_path):
     conn = _synthetic_index(tmp_path, prior + recent)
     signals, gaps, _ = visit_prep.metric_signals(conn, window_days=30)
     assert signals == []
-    assert any(g.startswith("Resting heart rate: 10 days in the last 30") for g in gaps)
+    assert any(g.startswith("Resting heart rate: 10 days in the 30 days to 2026-06-09")
+              for g in gaps)
 
 
 def test_gather_assembles_the_sheet(fixture_index):
@@ -247,6 +248,14 @@ def test_gather_assembles_the_sheet(fixture_index):
     assert sheet.labs["analytes"] >= 20
     assert {s.subject for s in sheet.signals} >= {"ldl", "vitamin_d"}
     assert sheet.literature is None
+
+
+def test_signals_are_ordered_out_of_range_then_near_limit_then_returned_then_shift(fixture_index):
+    sheet = visit_prep.gather(fixture_index, window_days=30, today=date(2026, 9, 20))
+    kinds = [s.kind for s in sheet.signals]
+    rank = {"lab_out_of_range": 0, "lab_near_limit": 1,
+           "lab_returned_to_range": 2, "metric_shift": 3}
+    assert kinds == sorted(kinds, key=lambda k: rank[k])
 
 
 from health_agent.agent import guardrail

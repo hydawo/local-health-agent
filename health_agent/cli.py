@@ -486,12 +486,10 @@ def cmd_visit_prep(args: argparse.Namespace, cfg: config.Config) -> int:
                 sheet, literature_conn,
                 vector_path=cfg.literature_vector_path,
                 embedder_factory=embedder_factory)
-        if args.json:
-            print(json.dumps(asdict(sheet), indent=2))
-            return 0
-        text = visit_prep.render(sheet)
+        text = (json.dumps(asdict(sheet), indent=2) + "\n" if args.json
+               else visit_prep.render(sheet))
         if args.out:
-            Path(args.out).write_text(text)
+            Path(args.out).expanduser().write_text(text)
             print(f"wrote {args.out}", file=sys.stderr)
         else:
             print(text, end="")
@@ -2162,7 +2160,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "installed.")
     p_visit.add_argument("--window", type=int, default=30,
                          help="days per HealthKit comparison window (default 30)")
-    p_visit.add_argument("--json", action="store_true", help="the signals as JSON")
+    p_visit.add_argument("--json", action="store_true", help="the whole sheet as JSON")
     p_visit.add_argument("--out", help="write the sheet here instead of stdout")
     p_visit.add_argument("--no-literature", action="store_true",
                          help="skip the corpus even when one is installed")

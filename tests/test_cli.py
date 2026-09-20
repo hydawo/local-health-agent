@@ -1179,6 +1179,14 @@ def test_visit_prep_json_and_out(cli_records, tmp_path):
     assert target.read_text().startswith("# Questions for your next visit")
     assert "wrote" in cli_records.err.lower()
 
+    json_target = tmp_path / "sheet.json"
+    code, out = cli_records("visit-prep", "--json", "--out", str(json_target))
+    assert code == 0
+    assert out == ""
+    data = json.loads(json_target.read_text())
+    assert data["prepared"]
+    assert "wrote" in cli_records.err.lower()
+
 
 def test_visit_prep_without_an_index(tmp_path, capsys):
     code = main(["--index", str(tmp_path / "none.db"), "visit-prep"])

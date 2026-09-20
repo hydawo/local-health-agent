@@ -210,11 +210,11 @@ written as free text stay `ask`'s territory. A rule cannot tell "stopped
 metformin" from "started metformin". It does not know about an upcoming
 appointment. There is no date input. The sheet is generated fresh each time
 it runs rather than tied to a calendar. It exposes no tool to the model
-either. The command is a standalone CLI path, not something `ask` can call
-on the user's behalf. Every question is phrased as something to ask a
-clinician, never an answer, a conclusion, or an implied diagnosis. That
-boundary comes from the templates themselves, not from the guardrail
-catching a violation after the fact.
+either. The command is a standalone CLI path; `ask` cannot call it on the
+user's behalf. Every question is phrased as something to ask a clinician,
+never an answer, a conclusion, or an implied diagnosis. That boundary comes
+from the templates themselves, not from the guardrail catching a violation
+after the fact.
 
 ## 4. Literature-grounded context on out-of-range lab values
 
