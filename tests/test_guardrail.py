@@ -322,6 +322,11 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "| 2026-03-10 | 112 | 0-99 | H | labs_2026-03-10.pdf |",
     # A category word near a range, but attributed to the person.
     "Their LDL was high: LDL of 145 to 160 mg/dL across three reports.",
+    # "generally" and "used" near a range are not verdicts.
+    "The three reports used LDL of 112 to 130 mg/dL.",
+    "Generally stable: A1c of 5.4% to 5.6% across three reports.",
+    "Used the same lab; LDL of 112 to 130 mg/dL over the year.",
+    "A1c of 5.9% to 5.4% over the year, generally improving.",
     "An A1c above 6.5% is considered diabetic (PubMed ID 42613609).",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):

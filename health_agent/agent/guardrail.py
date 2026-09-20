@@ -196,7 +196,13 @@ _CATEGORY_LABEL = (
     r"(?:normal|prediabetes|prediabetic|diabetes|diabetic|elevated|high|low|"
     r"optimal|borderline|target)"
 )
-_RANGE_VERDICT = rf"(?:{_JUDGED}|indicates?|corresponds?|means?)"
+# Narrower than `_JUDGED` on purpose: "generally" and "used" next to a range
+# are not verdicts ("the three reports used LDL of 112 to 130 mg/dL" is a
+# trend), so the range alternatives take only words that pass judgment.
+_RANGE_VERDICT = (
+    r"(?:considered|classified|regarded|defined|diagnostic|recogni[sz]ed|"
+    r"indicates?|corresponds?|means?)"
+)
 _RANGE = rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}\s*(?:to|-|–|—)\s*{_NUM}"
 
 UNCITED_PATTERNS: list[tuple[str, str]] = [
@@ -229,7 +235,7 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
      # as an A1c of 5.7% to 6.4%").
      rf"\b{_CATEGORY_LABEL}\b[^\n]{{0,30}}{_RANGE}"
      rf"|{_RANGE}[^\n]{{0,40}}\b{_RANGE_VERDICT}\b"
-     rf"|\b{_JUDGED}\b[^\n]{{0,40}}{_RANGE}"),
+     rf"|\b{_RANGE_VERDICT}\b[^\n]{{0,40}}{_RANGE}"),
     ("states a general clinical threshold",
      # "considered diagnostic of <condition>"
      rf"\b(?:{_MARKER})\b[^\n]{{0,60}}\bconsidered\s+diagnostic\s+(?:of|for)\b"),
