@@ -63,6 +63,7 @@ Setup and inspection:
 health-agent ingest ~/Downloads/export.zip     # export.xml, export.zip, PDFs, notes, photos, .docx, or a folder
 health-agent literature install sample         # optional: ~2,000 PubMed abstracts, one download, asks first
 health-agent check                             # what's installed, what's missing
+health-agent visit-prep                        # questions worth asking at your next appointment
 health-agent stats
 ```
 
@@ -425,6 +426,47 @@ A few things worth stating plainly:
   the tool never connects at any other time. `offline-check` still proves
   that the ask path cannot.
 
+## Visit prep
+
+`health-agent visit-prep` writes a short sheet of questions to bring to a
+clinician. Each one ties to a value in your own files:
+
+- a lab result outside the range printed on the report, with the previous
+  result so the direction is visible
+- one that was outside and has come back inside, with the question of
+  whether to keep checking it
+- one inside the range but within a tenth of its span of a limit, moving
+  toward it since the previous result
+- a watch metric (resting heart rate, weight, steps, HRV, sleep) whose
+  average over the last 30 days moved past this tool's cutoff against the
+  30 days before
+
+Every question opens with "Ask". The sentence after it gives the value, the
+printed range, the date, and the report it came from. When a literature
+pack is installed, each lab question also names one finding by title, year,
+tier, and PMID. It does not quote the finding. The finding is the corpus's
+best match for the analyte's name. It is not a paper about your own result.
+
+No language model is involved in this command, though the embedding model
+may run for the literature lookup when a pack is installed. The output is a
+list of your numbers with a fixed sentence around each, and a template does
+that exactly, where a model does it approximately, and on the evidence of
+[eval run 6](tests/eval_results.md) sometimes with a recalled threshold
+attached. The sheet also runs on a machine that cannot run the model. The
+guardrail can be run over the finished sheet as a test. A template that
+reads as interpretation fails the suite.
+
+It does not read your notes. Medications and conditions you wrote down are
+free text. A rule cannot tell "stopped metformin" from "started metformin".
+`ask` handles those. The cutoffs for a watch metric are this tool's own,
+chosen to sit clear of day-to-day noise. The sheet names them next to each
+one.
+
+```bash
+health-agent visit-prep                # to the terminal
+health-agent visit-prep --out prep.md  # to a file you can print
+```
+
 ## Design notes worth knowing
 
 **Aggregation follows HealthKit semantics.** Cumulative types (steps, energy) are
@@ -716,13 +758,14 @@ this build. Adversarial probing caught the model volunteering a clinical
 threshold from its training data, uncited, undated, and invisible to the
 guardrail's pattern check.
 
-Two features build directly on it: **physician visit prep** (questions worth
-raising with a clinician, grounded in your own trends) and **literature-grounded
-context on out-of-range values** (what evidence says about a marker, surfaced as
-citations, never as a recommendation). Both stay inside the
-contextualize-don't-diagnose line, and the second carries an explicit design
-review before implementation, because synthesis across findings can read as
-advice without any single sentence crossing the line.
+**Physician visit prep** builds directly on it and has shipped. See
+[Visit prep](#visit-prep) above for what it writes and why there is no model
+in the loop. **Literature-grounded context on out-of-range values** is the
+other feature built on the corpus and is not built yet. It would surface
+what evidence says about a marker as citations, never as a recommendation.
+It stays inside the contextualize-don't-diagnose line. It also needs an
+explicit design review before implementation. Synthesis across findings can
+read as advice without any single sentence crossing the line.
 
 ## Contributing
 

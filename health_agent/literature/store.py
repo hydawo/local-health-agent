@@ -203,4 +203,28 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in tokens if len(t) > 1)
 
 
-__all__ = ["Finding", "keyword_search", "search", "TABLE_NAME"]
+def hits(conn: sqlite3.Connection, query: str, *, limit: int = 5,
+         min_tier: str | None = None, since_year: int | None = None,
+         vector_path=None, embedder_factory=None) -> list[Finding]:
+    """Semantic where possible, keyword otherwise. Never raises for
+    retrieval; a bad `min_tier` (ValueError) still propagates.
+
+    Shared by the agent's `search_medical_literature` tool and by visit
+    prep, so both see the same corpus the same way."""
+    if embedder_factory is not None and vector_path:
+        from ..store import vector_store
+        from . import embed as lit_embed
+        try:
+            embedder = embedder_factory()
+            store = vector_store.VectorStore(vector_path, table_name=lit_embed.TABLE_NAME)
+            return search(conn, store, embedder, query, limit=limit,
+                          min_tier=min_tier, since_year=since_year)
+        except ValueError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - retrieval must not kill a turn
+            log.warning("corpus semantic search unavailable (%s)", type(exc).__name__)
+    return keyword_search(conn, query, limit=limit, min_tier=min_tier,
+                          since_year=since_year)
+
+
+__all__ = ["Finding", "keyword_search", "search", "hits", "TABLE_NAME"]

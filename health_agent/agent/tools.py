@@ -686,25 +686,11 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
 def _literature_hits(ctx: ToolContext, query: str, limit: int,
                      min_tier: str | None, since_year: int | None) -> list:
     """Semantic where possible, keyword otherwise. Never raises for retrieval."""
-    from ..literature import embed as lit_embed
     from ..literature import store as lit_store
-    from ..store import vector_store
-
-    if ctx.embedder_factory is not None and ctx.literature_vector_path:
-        try:
-            embedder = ctx.embedder_factory()
-            store = vector_store.VectorStore(ctx.literature_vector_path,
-                                             table_name=lit_embed.TABLE_NAME)
-            return lit_store.search(ctx.literature_conn, store, embedder, query,
-                                    limit=limit, min_tier=min_tier,
-                                    since_year=since_year)
-        except ValueError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - retrieval must not kill a turn
-            log.warning("corpus semantic search unavailable (%s)",
-                        type(exc).__name__)
-    return lit_store.keyword_search(ctx.literature_conn, query, limit=limit,
-                                    min_tier=min_tier, since_year=since_year)
+    return lit_store.hits(ctx.literature_conn, query, limit=limit,
+                          min_tier=min_tier, since_year=since_year,
+                          vector_path=ctx.literature_vector_path,
+                          embedder_factory=ctx.embedder_factory)
 
 
 # --------------------------------------------------------------------------- #

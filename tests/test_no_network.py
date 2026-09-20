@@ -372,3 +372,10 @@ def test_missing_sandbox_is_explained_as_absent_or_as_blocked(monkeypatch):
     blocked = offline_check.explain_missing_sandbox()
     assert "install" not in blocked.lower()
     assert "namespace" in blocked.lower()
+
+
+def test_visit_prep_imports_no_fetcher_and_no_model():
+    text = (Path(offline_check.__file__).parent / "visit_prep.py").read_text()
+    for forbidden in ("literature.fetch", "fetch import", "orchestrator", "backends",
+                      "import urllib", "from urllib", "import http"):
+        assert forbidden not in text, f"visit_prep.py mentions {forbidden!r}"
