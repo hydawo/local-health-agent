@@ -2,7 +2,7 @@
 efetch in pages. Called only by `literature build-pack`.
 
 The polite delay between pages is NCBI's stated limit for callers without an
-API key (three requests a second). With `NCBI_API_KEY` in the environment
+API key (three calls a second). With `NCBI_API_KEY` in the environment
 the key is sent and the limit is higher, but the delay is kept: a pack build
 is a one-off maintainer job, not a race.
 """
@@ -14,7 +14,7 @@ import re
 import time
 from dataclasses import dataclass
 
-from ..medline import ParsedArticle, parse_articles
+from ..medline import MedlineParseError, ParsedArticle, parse_articles
 from . import client
 
 BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
@@ -40,11 +40,20 @@ def _params(**kw) -> dict:
     return params
 
 
-def search(term: str, *, get=client.get) -> SearchHandle:
+def search(term: str, *, sort: str | None = None,
+           get=client.get) -> SearchHandle:
     """Run the query on the history server and return the handle, not the
-    IDs: `retmax=0` because the IDs are never needed client-side."""
-    url = client.query_url(BASE + "esearch.fcgi",
-                           _params(term=term, retmax=0, usehistory="y"))
+    IDs: `retmax=0` because the IDs are never needed client-side.
+
+    `sort` matters only when a cap follows: efetch pages the handle in the
+    order esearch stored it, so a capped pack takes the first N of whatever
+    order that was. PubMed's default is relevance for a term like ours;
+    `pub_date` makes "the first 2,000" mean the most recent 2,000.
+    """
+    params = _params(term=term, retmax=0, usehistory="y")
+    if sort:
+        params["sort"] = sort
+    url = client.query_url(BASE + "esearch.fcgi", params)
     body = get(url).decode("utf-8", errors="replace")
     count = re.search(r"<Count>(\d+)</Count>", body)
     webenv = re.search(r"<WebEnv>([^<]+)</WebEnv>", body)
@@ -66,8 +75,13 @@ def fetch_all(handle: SearchHandle, *, max_articles: int | None,
     """Page through the history handle. Unique PMIDs in first-seen order.
 
     Deduplicated here because NCBI's paging is not guaranteed stable across
-    requests, and a pack that lists the same PMID twice would fail the
+    calls, and a pack that lists the same PMID twice would fail the
     corpus's uniqueness constraint at install time, long after the build.
+
+    A page that is not MEDLINE XML (an HTML error page served with a 200,
+    a truncated body) surfaces as a `FetchError` naming the page and the
+    parse failure, so `build-pack` reports it like any other fetch problem
+    instead of a traceback from the parser.
     """
     total = handle.count if max_articles is None else min(handle.count, max_articles)
     seen: set[str] = set()
@@ -78,7 +92,14 @@ def fetch_all(handle: SearchHandle, *, max_articles: int | None,
         url = client.query_url(BASE + "efetch.fcgi", _params(
             query_key=handle.query_key, WebEnv=handle.webenv,
             retstart=start, retmax=size, retmode="xml"))
-        for article in parse_articles(get(url)):
+        try:
+            page = parse_articles(get(url))
+        except MedlineParseError as exc:
+            raise client.FetchError(
+                "eutils.ncbi.nlm.nih.gov", None,
+                f"efetch page at retstart={start} was not MEDLINE XML: {exc}"
+            ) from exc
+        for article in page:
             if article.pmid not in seen:
                 seen.add(article.pmid)
                 out.append(article)

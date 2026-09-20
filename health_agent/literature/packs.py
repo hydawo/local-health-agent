@@ -73,6 +73,17 @@ class PackSpec:
         parts.append("hasabstract[text]")
         return " AND ".join(parts)
 
+    @property
+    def sort(self) -> str | None:
+        """The esearch sort order, or None for PubMed's default.
+
+        Only a capped pack has one. An uncapped pack takes every match, so
+        order is irrelevant; a capped one takes the first `max_articles`,
+        and "most recent" is a description the reader can check, where
+        "most relevant to a MeSH union" is not.
+        """
+        return "pub_date" if self.max_articles else None
+
 
 _ALL_AREAS = (
     '"Cholesterol"[MeSH] OR "Hypertension"[MeSH] OR "Cardiovascular Diseases"[MeSH] '
@@ -83,7 +94,8 @@ _ALL_AREAS = (
 CATALOG: dict[str, PackSpec] = {
     "sample": PackSpec(
         slug="sample", title="Sample",
-        description="About 2,000 recent papers across all four areas, for a first try.",
+        description="About 2,000 papers across all four areas, most recent by "
+                    "publication date, for a first try.",
         query=_ALL_AREAS, evidence_filter=(), since_year=None, max_articles=2000),
     "cardiovascular": PackSpec(
         slug="cardiovascular", title="Cardiovascular",

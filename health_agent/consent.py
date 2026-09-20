@@ -113,7 +113,8 @@ Asking questions never touches the network, and `offline-check` proves
 it. Two literature commands do, and only when you run them:
 
   health-agent literature install <pack>
-    Downloads one pack file from github.com (the project's releases).
+    Downloads one pack file from github.com (the project's releases),
+    which hands the file off to objects.githubusercontent.com.
     What the request reveals: which pack you chose, your IP address, and
     this tool's version. Nothing from your data folder. Nothing about
     your questions. Packs are deliberately broad (cardiovascular, sleep)
@@ -123,6 +124,7 @@ it. Two literature commands do, and only when you run them:
     A maintainer command. Sends the pack's search terms (a fixed list of
     medical subject headings, the same for everyone) to
     eutils.ncbi.nlm.nih.gov, with your IP address and the tool's version.
+    If NCBI_API_KEY is set in your environment, it is sent too.
 
 Neither command runs on its own, checks for updates, or reports usage.
 Never during ask, ingest, or search.

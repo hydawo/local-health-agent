@@ -970,7 +970,6 @@ def test_literature_install_removes_the_downloaded_file_afterwards(
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / pack_path.name
         shutil.copy(pack_path, dest)
-        (dest_dir / (dest.name + ".sha256")).write_text("x")
         return dest
 
     monkeypatch.setattr(fetch_packs, "download", fake_download)
@@ -979,10 +978,121 @@ def test_literature_install_removes_the_downloaded_file_afterwards(
     assert code == 0
     assert "sleep@1" in capsys.readouterr().out
     packs_dir = tmp_path / ".index" / "packs"
-    assert list(packs_dir.glob("*.jsonl.gz")) == []
-    assert list(packs_dir.glob("*.sha256")) == []
+    assert list(packs_dir.iterdir()) == []
     # The user's own --from file is not the tool's to delete.
     assert pack_path.exists()
+
+
+def _fake_download_url(pack_path):
+    """A `download_url` that copies a local pack into the packs directory,
+    the way the real one saves what it fetched."""
+    def fake(url, dest_dir, **k):
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / pack_path.name
+        shutil.copy(pack_path, dest)
+        return dest
+    return fake
+
+
+def test_literature_install_removes_the_downloaded_file_on_a_refused_install(
+        tmp_path, capsys, monkeypatch):
+    """The file goes on every exit path, not only the successful one: a
+    same-version `--from <url>` (refused as already installed) and a slug
+    mismatch both leave the packs directory empty."""
+    from health_agent.cli import main
+    from health_agent.literature.fetch import packs as fetch_packs
+
+    index = tmp_path / ".index" / "health.db"
+    pack_path = _write_sleep_pack(tmp_path)
+    assert main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
+    capsys.readouterr()
+    monkeypatch.setattr(fetch_packs, "download_url", _fake_download_url(pack_path))
+    packs_dir = tmp_path / ".index" / "packs"
+
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", "https://github.com/x/sleep-1.jsonl.gz",
+                 "--yes", "--no-embed"])
+    assert code == 0
+    assert "already installed" in capsys.readouterr().out
+    assert list(packs_dir.iterdir()) == []
+
+    code = main(["--index", str(index), "literature", "install", "cardiovascular",
+                 "--from", "https://github.com/x/sleep-1.jsonl.gz",
+                 "--yes", "--no-embed"])
+    assert code == 2
+    assert "sleep" in capsys.readouterr().err
+    assert list(packs_dir.iterdir()) == []
+
+
+def test_literature_install_checks_the_schema_before_any_fetch(
+        tmp_path, capsys, monkeypatch):
+    """`--force` skips the already-installed check, not the schema check:
+    a stale corpus refuses the install either way, so the download must
+    not happen first."""
+    from health_agent.cli import main
+    from health_agent.literature.fetch import packs as fetch_packs
+
+    index = _stale_corpus(tmp_path, capsys)
+    calls = []
+    monkeypatch.setattr(fetch_packs, "download", lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setattr(fetch_packs, "download_url", lambda *a, **k: calls.append(a) or None)
+
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--yes", "--force", "--no-embed"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert calls == []
+    assert "--rebuild" in err
+
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", "https://github.com/x/sleep-1.jsonl.gz",
+                 "--yes", "--no-embed"])
+    assert code == 2
+    assert calls == []
+    assert "--rebuild" in capsys.readouterr().err
+
+
+def test_literature_install_rebuild_replaces_a_stale_corpus_and_spares_the_index(
+        cli, tmp_path, capsys):
+    """A v3 corpus with no MEDLINE export of its own had no way forward
+    before `install --rebuild`; `build --rebuild` needs an XML file."""
+    from health_agent import config as config_mod
+    from health_agent.literature import schema as lit_schema
+    from health_agent.store import sqlite_schema
+
+    cfg = config_mod.resolve(index_path=str(tmp_path / "health.db"))
+    personal = sqlite_schema.connect(cfg.index_path)
+    records_before = personal.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"]
+    personal.close()
+    assert records_before > 0
+
+    pack_path = _write_sleep_pack(tmp_path)
+    code, _ = cli("literature", "install", "sleep", "--from", str(pack_path),
+                  "--yes", "--embed-backend", "hashing")
+    assert code == 0
+    lit = lit_schema.connect(cfg.literature_path)
+    lit.execute("UPDATE corpus_meta SET value = '3' WHERE key = 'schema_version'")
+    lit.commit()
+    lit.close()
+
+    code, _ = cli("literature", "install", "sleep", "--from", str(pack_path),
+                  "--yes", "--force", "--embed-backend", "hashing")
+    assert code != 0
+
+    code, out = cli("literature", "install", "sleep", "--from", str(pack_path),
+                    "--yes", "--rebuild", "--embed-backend", "hashing")
+    assert code == 0
+    assert "sleep@1:" in out and "already installed" not in out
+    lit = lit_schema.connect(cfg.literature_path)
+    assert lit_schema.read_version(lit) == lit_schema.LITERATURE_SCHEMA_VERSION
+    assert lit.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] > 0
+    lit.close()
+
+    personal = sqlite_schema.connect(cfg.index_path)
+    assert personal.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"] == records_before
+    personal.close()
+    assert not cfg.vector_path.exists()
 
 
 def test_literature_install_from_a_plain_http_url_hits_the_allow_list(tmp_path, capsys):

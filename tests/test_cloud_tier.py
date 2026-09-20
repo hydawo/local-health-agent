@@ -107,8 +107,9 @@ def test_literature_consent_is_a_separate_record_from_cloud(tmp_path):
 
 def test_literature_notice_says_what_leaves_and_when():
     text = consent.LITERATURE.text.lower()
-    for phrase in ("github.com", "eutils.ncbi.nlm.nih.gov", "pack", "ip address",
-                   "never during", "revoke"):
+    for phrase in ("github.com", "objects.githubusercontent.com",
+                   "eutils.ncbi.nlm.nih.gov", "pack", "ip address",
+                   "ncbi_api_key", "never during", "revoke"):
         assert phrase in text
 
 

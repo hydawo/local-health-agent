@@ -108,13 +108,34 @@ def test_efetch_pages_in_batches_with_a_polite_delay():
     assert [a.pmid for a in articles] == ["40000001", "40000002"]
 
 
-def test_efetch_reports_a_non_200_as_a_typed_error():
+def test_efetch_reports_a_non_xml_page_as_a_typed_error():
+    """A 200 whose body is not MEDLINE XML (an HTML error page, a cut-off
+    response) is a fetch failure to `build-pack`, not a parser traceback."""
     def get(url, **kw):
-        raise client.FetchError("eutils.ncbi.nlm.nih.gov", 503, "busy")
+        return b"<html><body>Service unavailable<br></body></html>"
     handle = eutils.SearchHandle(count=10, webenv="W", query_key="1")
     with pytest.raises(client.FetchError) as excinfo:
         eutils.fetch_all(handle, max_articles=10, get=get, sleep=lambda s: None)
     assert excinfo.value.host == "eutils.ncbi.nlm.nih.gov"
+    assert "not MEDLINE XML" in str(excinfo.value)
+    assert "could not parse" in str(excinfo.value)
+
+
+def test_esearch_sorts_by_date_only_for_a_capped_pack():
+    """`sample` takes the first 2,000 of its matches, so its order has to
+    be one the catalog can describe; an uncapped pack takes every match."""
+    seen = []
+
+    def get(url, **kw):
+        seen.append(url)
+        return (FIX / "esearch.xml").read_bytes()
+
+    sample, sleep = pack_format.CATALOG["sample"], pack_format.CATALOG["sleep"]
+    assert sample.max_articles and not sleep.max_articles
+    eutils.search(sample.search_term(), sort=sample.sort, get=get)
+    eutils.search(sleep.search_term(), sort=sleep.sort, get=get)
+    assert "sort=pub_date" in seen[0]
+    assert "sort=" not in seen[1]
 
 
 # --------------------------------------------------------------------------- #

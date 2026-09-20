@@ -1346,6 +1346,7 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
             except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
                 print("Ollama unavailable; corpus search will use keyword "
                       "matching until you run this again.", file=sys.stderr)
+            _reclaim_literature_vectors(conn, store)
         return 0
     finally:
         conn.close()
@@ -1398,10 +1399,7 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
     and a reader of the record should not have to work out which invocation
     was the one that connected.
     """
-    from .literature import corpus as lit_corpus
-    from .literature import embed as lit_embed
     from .literature import packs, schema as lit_schema
-    from .literature import tiers as lit_tiers
 
     if args.slug not in packs.CATALOG and not args.source:
         print(f"{args.slug!r} is not a known pack. `health-agent literature packs` "
@@ -1415,14 +1413,20 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
     version = args.version or packs.LATEST_VERSION
     is_url = bool(args.source) and fetch_client.looks_like_url(args.source)
 
-    if not args.source and not args.force:
-        # Before any fetch, not after: the notice describes a download the
-        # user chose, and a no-op reinstall is not one.
+    # The schema check comes before any fetch, on every path: a stale
+    # corpus refuses the install whatever the flags, so downloading first
+    # would spend the connection (and the notice's promise) on nothing.
+    # --rebuild is the way out of that refusal, so it skips the check: the
+    # corpus it would fail on is deleted once the file is in hand.
+    installed: dict = {}
+    if not args.rebuild:
         try:
             installed = _installed_packs(cfg) or {}
         except lit_schema.CorpusSchemaVersionMismatch as exc:
             print(str(exc), file=sys.stderr)
             return 2
+    if not args.source and not args.force and not args.rebuild:
+        # A no-op reinstall is not a download the user chose.
         if installed.get(args.slug, (None,))[0] == version:
             print(f"{args.slug}@{version} is already installed; "
                   f"pass --force to reinstall.")
@@ -1450,6 +1454,25 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         downloaded = True
 
     try:
+        return _install_pack_file(args, cfg, pack_path)
+    finally:
+        if downloaded:
+            # The file is never reused (a same-version reinstall stops
+            # before any fetch) and is 75 MB, so it goes on every exit:
+            # success, a slug mismatch, a bad file, a stale schema. A
+            # user's own --from file is not the tool's to remove.
+            pack_path.unlink(missing_ok=True)
+
+
+def _install_pack_file(args: argparse.Namespace, cfg: config.Config,
+                       pack_path: Path) -> int:
+    """Read one pack file into the corpus. The exit code, as `install`."""
+    from .literature import corpus as lit_corpus
+    from .literature import embed as lit_embed
+    from .literature import packs, schema as lit_schema
+    from .literature import tiers as lit_tiers
+
+    try:
         manifest, articles = packs.read_pack(pack_path)
     except packs.PackError as exc:
         print(str(exc), file=sys.stderr)
@@ -1466,6 +1489,10 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         article.evidence_tier, article.evidence_rank, article.tier_source = \
             lit_tiers.resolve(article.publication_types)
 
+    if args.rebuild:
+        # After the file is read and checked, so a bad download or a slug
+        # mismatch does not cost the corpus that was there.
+        _delete_literature_corpus(cfg)
     try:
         conn = lit_schema.connect(cfg.literature_path, create=True)
     except lit_schema.CorpusSchemaVersionMismatch as exc:
@@ -1484,12 +1511,6 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"{manifest.slug}@{manifest.version}: {stats.articles} articles, "
               f"{stats.chunks} chunks"
               f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
-        if downloaded:
-            # The rows are in; the file is never reused (a same-version
-            # reinstall stops before any fetch), and a user's own --from
-            # file is not the tool's to remove.
-            pack_path.unlink(missing_ok=True)
-            pack_path.with_name(pack_path.name + ".sha256").unlink(missing_ok=True)
         if not args.no_embed:
             embedder = embeddings.get_embedder(args.embed_backend)
             store = vector_store.VectorStore(cfg.literature_vector_path,
@@ -1500,9 +1521,24 @@ def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
             except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
                 print("Ollama unavailable; corpus search will use keyword matching "
                       "until you run this again.", file=sys.stderr)
+            _reclaim_literature_vectors(conn, store)
         return 0
     finally:
         conn.close()
+
+
+def _reclaim_literature_vectors(conn, store: vector_store.VectorStore) -> None:
+    """Drop the vectors a build left without a chunk, and say so.
+
+    Runs after embedding, even when Ollama was unavailable: the orphans are
+    from chunks that are already gone, and leaving them until the next
+    successful embed is how they accumulate.
+    """
+    from .literature import embed as lit_embed
+
+    reclaimed = lit_embed.reclaim_orphans(conn, store)
+    if reclaimed:
+        print(f"reclaimed {reclaimed} stale vectors")
 
 
 def cmd_literature_build_pack(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1512,7 +1548,6 @@ def cmd_literature_build_pack(args: argparse.Namespace, cfg: config.Config) -> i
     so the tool never holds a GitHub token.
     """
     from .literature import packs
-    from .literature.fetch import eutils
 
     spec = packs.CATALOG.get(args.slug)
     if spec is None:
@@ -1521,10 +1556,12 @@ def cmd_literature_build_pack(args: argparse.Namespace, cfg: config.Config) -> i
     if not _confirm_literature(cfg, assume_yes=args.yes):
         return 1
 
+    from .literature.fetch import eutils
+
     version = args.version or packs.LATEST_VERSION
     cap = args.max if args.max is not None else spec.max_articles
     try:
-        handle = eutils.search(spec.search_term())
+        handle = eutils.search(spec.search_term(), sort=spec.sort)
         print(f"{handle.count} matching articles; fetching "
               f"{min(handle.count, cap) if cap else handle.count}", flush=True)
         articles = eutils.fetch_all(
@@ -2110,6 +2147,10 @@ def build_parser() -> argparse.ArgumentParser:
                                help="accept the network notice without prompting")
     p_lit_install.add_argument("--force", action="store_true",
                                help="reinstall even if this version is present")
+    p_lit_install.add_argument(
+        "--rebuild", action="store_true",
+        help="delete the existing corpus (literature.db and its vector table) "
+             "before installing; the personal index is not touched")
     p_lit_install.add_argument("--no-embed", action="store_true")
     p_lit_install.add_argument("--embed-backend", default="ollama",
                                choices=["ollama", "hashing"])

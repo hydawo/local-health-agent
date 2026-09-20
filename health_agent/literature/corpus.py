@@ -58,12 +58,13 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
     article column is refreshed on conflict, not just abstract/tier, because
     a corrected license or a retraction has to land.
 
-    Note on vectors: every write here deletes and re-inserts the article's
-    chunks, even when the article was already present (linked from another
-    pack). The new chunk rows get new ids, so any LanceDB rows embedded
-    under the old ids become orphaned — `embed_corpus` will pick up and
-    embed the new ones, but nothing here reclaims the old vectors. See the
-    task report for why that is left alone in this task.
+    Chunks are left alone when the article's text has not changed. A chunk
+    row's id is what its vector is keyed by, so deleting and re-inserting an
+    unchanged abstract would orphan a vector that is identical to the one
+    embedded next, and every reinstall would leave one more copy behind to
+    crowd the search's over-fetch. Only a changed abstract gets new chunk
+    rows; `embed.reclaim_orphans` removes whatever vectors those leave, and
+    the two install paths call it after embedding.
     """
     stats = BuildStats()
     built_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -121,8 +122,6 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
                      "VALUES(?, ?)", (article_id, pack_id))
         now_linked.add(article_id)
 
-        conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
-                     (article_id,))
         conn.execute("DELETE FROM mesh_term WHERE article_id = ?", (article_id,))
         major = set(article.major_terms)
         conn.executemany(
@@ -130,12 +129,19 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             [(article_id, term, int(term in major))
              for term in article.mesh_terms])
 
-        for index, chunk in enumerate(_chunks(body)):
-            conn.execute(
-                "INSERT INTO article_chunk(article_id, section, chunk_index, "
-                "text, char_count) VALUES(?, ?, ?, ?, ?)",
-                (article_id, "abstract", index, chunk, len(chunk)))
-            stats.chunks += 1
+        chunks = _chunks(body)
+        existing = [r["text"] for r in conn.execute(
+            "SELECT text FROM article_chunk WHERE article_id = ? "
+            "ORDER BY chunk_index", (article_id,))]
+        if existing != chunks:
+            conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
+                         (article_id,))
+            for index, chunk in enumerate(chunks):
+                conn.execute(
+                    "INSERT INTO article_chunk(article_id, section, chunk_index, "
+                    "text, char_count) VALUES(?, ?, ?, ?, ?)",
+                    (article_id, "abstract", index, chunk, len(chunk)))
+        stats.chunks += len(chunks)
         stats.articles += 1
 
     for article_id in previously_linked - now_linked:
@@ -169,7 +175,12 @@ def _refresh_count(conn: sqlite3.Connection, pack_id: int) -> None:
 
 
 def remove_pack(conn: sqlite3.Connection, slug: str) -> int:
-    """Drop a pack and the articles only it held. Returns articles removed."""
+    """Drop a pack and the articles only it held. Returns articles removed.
+
+    The vector table is not touched here: this function has the SQLite
+    connection and nothing else. The caller reclaims the removed articles'
+    vectors with `embed.reclaim_orphans` afterwards.
+    """
     row = conn.execute("SELECT id FROM pack WHERE slug = ?", (slug,)).fetchone()
     if row is None:
         raise KeyError(slug)
