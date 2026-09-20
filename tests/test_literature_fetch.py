@@ -352,3 +352,104 @@ def test_looks_like_url_routes_schemes_not_prefixes():
     assert not client.looks_like_url("/tmp/sleep-1.jsonl.gz")
     assert not client.looks_like_url("sleep-1.jsonl.gz")
     assert not client.looks_like_url("~/packs/sleep-1.jsonl.gz")
+
+
+# --------------------------------------------------------------------------- #
+# NCBI's 10,000-record page limit
+# --------------------------------------------------------------------------- #
+
+def _esearch_xml(count: int) -> bytes:
+    return (f"<eSearchResult><Count>{count}</Count><RetMax>0</RetMax>"
+            f"<WebEnv>W{count}</WebEnv><QueryKey>1</QueryKey></eSearchResult>"
+            ).encode()
+
+
+def _counting_get(counts_by_range: dict, whole: int):
+    """A fake NCBI: esearch answers from `counts_by_range` keyed by
+    (mindate, maxdate), `whole` when no date range is sent; efetch serves
+    the fixture batch and records every retstart it was asked for."""
+    from urllib.parse import parse_qs, urlparse
+    seen = {"retstarts": [], "ranges": []}
+
+    def get(url, **kw):
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        if "esearch" in url:
+            if "mindate" in q:
+                key = (q["mindate"], q["maxdate"])
+                seen["ranges"].append(key)
+                assert q["datetype"] == "pdat"
+                return _esearch_xml(counts_by_range.get(key, 0))
+            return _esearch_xml(whole)
+        seen["retstarts"].append(int(q["retstart"]))
+        assert int(q["retstart"]) < eutils.PAGE_LIMIT, "paged past NCBI's limit"
+        return (FIX / "efetch_batch.xml").read_bytes()
+    return get, seen
+
+
+def test_a_result_under_the_limit_is_one_handle():
+    get, seen = _counting_get({}, whole=9_000)
+    handles = eutils.search_slices("x", first_year=2015, last_year=2016, get=get,
+                                   sleep=lambda s: None)
+    assert [h.count for h in handles] == [9_000]
+    assert seen["ranges"] == []
+
+
+def test_a_result_over_the_limit_is_sliced_by_year_then_month():
+    counts = {("2015/01/01", "2015/12/31"): 4_000,
+              ("2016/01/01", "2016/12/31"): 12_000,   # over: split into months
+              ("2017/01/01", "2017/12/31"): 0}        # empty year: skipped
+    counts.update({(f"2016/{m:02d}/01", hi): 1_000 for m, hi in
+                   [(1, "2016/01/31"), (2, "2016/02/29"), (3, "2016/03/31"),
+                    (4, "2016/04/30"), (5, "2016/05/31"), (6, "2016/06/30"),
+                    (7, "2016/07/31"), (8, "2016/08/31"), (9, "2016/09/30"),
+                    (10, "2016/10/31"), (11, "2016/11/30"), (12, "2016/12/31")]})
+    get, seen = _counting_get(counts, whole=16_000)
+    handles = eutils.search_slices("x", first_year=2015, last_year=2017, get=get,
+                                   sleep=lambda s: None)
+    assert [h.count for h in handles] == [4_000] + [1_000] * 12
+    assert ("2016/02/01", "2016/02/29") in seen["ranges"]   # leap year handled
+
+
+def test_a_month_over_the_limit_raises_rather_than_truncating():
+    counts = {("2015/01/01", "2015/12/31"): 20_000}
+    counts.update({(f"2015/{m:02d}/01", f"2015/{m:02d}/{d}"): 11_000
+                   for m, d in [(1, "31")]})
+    get, _ = _counting_get(counts, whole=20_000)
+    with pytest.raises(client.FetchError) as excinfo:
+        eutils.search_slices("x", first_year=2015, last_year=2015, get=get,
+                             sleep=lambda s: None)
+    assert "page limit" in str(excinfo.value)
+
+
+def test_fetch_term_pages_every_slice_under_the_limit_and_dedupes():
+    counts = {("2015/01/01", "2015/12/31"): 9_000,
+              ("2016/01/01", "2016/12/31"): 9_000}
+    get, seen = _counting_get(counts, whole=18_000)
+    progress = []
+    total, articles = eutils.fetch_term(
+        "x", sort=None, max_articles=None, first_year=2015, get=get,
+        sleep=lambda s: None, progress=lambda d, t: progress.append((d, t)))
+    assert total == 18_000
+    assert max(seen["retstarts"]) < eutils.PAGE_LIMIT
+    assert len(seen["retstarts"]) == 36                    # 18 pages of 500 per slice
+    # the same fixture on every page collapses to its two PMIDs
+    assert [a.pmid for a in articles] == ["40000001", "40000002"]
+    assert progress[-1] == (18_000, 18_000)
+    assert all(d <= t for d, t in progress)
+
+
+def test_fetch_term_keeps_a_capped_pack_on_one_sorted_handle():
+    urls = []
+
+    def get(url, **kw):
+        urls.append(url)
+        if "esearch" in url:
+            return _esearch_xml(50_000)
+        return (FIX / "efetch_batch.xml").read_bytes()
+
+    total, articles = eutils.fetch_term(
+        "x", sort="pub_date", max_articles=1_000, first_year=None, get=get,
+        sleep=lambda s: None)
+    assert total == 50_000
+    assert sum("esearch" in u for u in urls) == 1
+    assert "sort=pub_date" in urls[0] and "mindate" not in urls[0]
