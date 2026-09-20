@@ -1610,12 +1610,14 @@ def cmd_literature_build_pack(args: argparse.Namespace, cfg: config.Config) -> i
     version = args.version or packs.LATEST_VERSION
     cap = args.max if args.max is not None else spec.max_articles
     try:
-        handle = eutils.search(spec.search_term(), sort=spec.sort)
-        print(f"{handle.count} matching articles; fetching "
-              f"{min(handle.count, cap) if cap else handle.count}", flush=True)
-        articles = eutils.fetch_all(
-            handle, max_articles=cap,
-            progress=lambda done, total: print(f"  {done}/{total}", flush=True))
+        def progress(done: int, total: int) -> None:
+            if done % 5000 == 0 or done == total:
+                print(f"  {done}/{total}", flush=True)
+
+        count, articles = eutils.fetch_term(
+            spec.search_term(), sort=spec.sort, max_articles=cap,
+            first_year=spec.since_year, progress=progress)
+        print(f"{count} matching articles; fetched {len(articles)}", flush=True)
     except Exception as exc:  # noqa: BLE001 - reported, never a traceback
         print(f"Fetch failed: {exc}", file=sys.stderr)
         return 2
