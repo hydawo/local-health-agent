@@ -626,6 +626,17 @@ rewrite pass, then a visible note if that fails.
 
 **What is still genuinely open:**
 
+- **On a real corpus the check almost never runs, and the first real eval
+  showed it.** The check is skipped whenever the turn's literature search
+  returned any finding at all. Against 2,000 real abstracts nearly every
+  query returns something, so asked "is an A1c of 6.7 diabetic?" the model
+  got five diabetes papers, none stating a cutoff, recited "≥6.5%" from
+  memory, and was not flagged (`tests/eval_results.md`, run 4). The tool
+  did its job; the guard switched itself off because the tool worked. The
+  fix, tracked as a guardrail follow-up, is to judge each threshold sentence
+  by whether it carries its own citation rather than gating on the turn.
+  Until that lands, this case is caught by the corpus when it covers the
+  topic and by nothing when it does not.
 - **The corpus is only as good as what has been built into it.** A threshold
   the installed corpus simply doesn't cover cannot be cited, and the tool says
   so. That is a coverage gap, not a fixed leak.
