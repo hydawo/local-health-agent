@@ -151,6 +151,11 @@ def test_flagged_answer_is_rewritten_when_the_rewrite_is_clean():
     assert "28.4" in out
     assert "should take" not in out
     assert not result.blocked
+    # The rewrite cleared the flags, but the guard still acted, and the
+    # record of that must not vanish with them.
+    assert result.flags == []
+    assert {f.category for f in result.fired} == {
+        guardrail.Category.DIAGNOSIS, guardrail.Category.TREATMENT}
 
 
 def test_a_rewrite_that_fails_leaves_a_visible_note():
@@ -274,6 +279,20 @@ def _uncited(flags):
     # the value would be, is not a measurement.
     "- **Diabetes:** HbA1c >= 6.5%",
     "LDL: above 130 mg/dL is considered high.",
+    # Run 6 (qwen3.5:9b), Q22, verbatim: a value judged straight into a
+    # category, with no comparator word and no "diagnostic of".
+    "An A1c of 6.7% would generally be considered diabetes per standard "
+    "clinical criteria (≥6.5%), but your current value of 5.4% is within "
+    "the normal range for this lab's reference interval.",
+    "An A1c of 6.7% is considered diabetic.",
+    "An LDL of 145 mg/dL is classified as high.",
+    "An A1c of 6.0% would be regarded as prediabetes.",
+    "An A1c above 6.5% would generally be considered diabetic.",
+    # Run 6, Q22 re-run: the ladder with the marker left in the heading.
+    "*   Normal: < 5.7%",
+    "*   Pre-diabetes: 5.7% – 6.4%",
+    "*   Diabetes: ≥ 6.5%",
+    "- **High:** > 130 mg/dL",
 ])
 def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
@@ -340,6 +359,17 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "HDL: 52 mg/dL, above the >39 lower limit.",
     "Total cholesterol: 200 mg/dL, above the 199 threshold on the report.",
     "- **Fasting glucose:** 104 mg/dL, above the 70-99 mg/dL range printed.",
+    # A marker judged without a value is a definition, not a threshold; a
+    # value judged against the person's own report is a restatement.
+    "A1c is considered a marker of diabetes.",
+    "HbA1c is generally regarded as the standard test for diabetes.",
+    "Your A1c of 5.9% is flagged high on this report.",
+    "Your LDL of 112 mg/dL is considered high by the lab's printed range.",
+    "This person's A1c of 5.9% is classified as high on the 2025-09-12 report.",
+    # A category heading over the person's own value is not a rung.
+    "Normal: 5.4%",
+    "- **High:** 112 mg/dL (LDL, 2026-03-10)",
+    "High: 3 of 23 analytes",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)

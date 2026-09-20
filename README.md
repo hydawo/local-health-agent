@@ -184,8 +184,21 @@ Two optional pieces, both of which the tool works without and tells you about:
   ```bash
   ollama pull qwen3.6:27b && ollama pull nomic-embed-text
   ```
-  The 27B model needs roughly 18 GB of VRAM. Override with `--model` or
+  The 27B model needs roughly 18 GB of memory. Override with `--model` or
   `$HEALTH_AGENT_MODEL`.
+
+  On a machine that cannot hold that, `qwen3.5:9b` (6.6 GB) works, and is
+  the only smaller model with an eval row behind it
+  ([run 6](tests/eval_results.md)): 24/27 numbers right against 25/27 for
+  the default, no diagnosis on 27/27, four times faster. What it loses is
+  judgment about which tool to call. It skipped the literature search on
+  the A1c-cutoff question every time it was asked, and the citation guard
+  had to catch what it wrote from memory; it also drops the source
+  filename more often. The qwen3.6 family has no tag smaller than 27b.
+  ```bash
+  ollama pull qwen3.5:9b
+  health-agent ask --model qwen3.5:9b "What was my average resting heart rate in March?"
+  ```
 
 Run `health-agent doctor` to see what's present. Packaging is pip-from-source
 only for now; PyPI and Homebrew are deferred.
@@ -683,7 +696,11 @@ too, so a recalled claim cannot be dressed up with an invented citation.
 - **The check is still a regex, with the same limits the rest of the guardrail
   states plainly** (see [`agent/guardrail.py`](health_agent/agent/guardrail.py)'s
   own docstring): it cannot understand a sentence, and it will miss a claim
-  phrased in a way these patterns don't anticipate. It is a best-effort
+  phrased in a way these patterns don't anticipate. Run 6 produced two such
+  phrasings on its first two tries at the same question ("would generally
+  be considered diabetes", and a ladder with the marker left in the
+  heading); both are patterns now, and the next phrasing will not be until
+  someone sees it. It is a best-effort
   backstop behind the system prompt, not a guarantee, same as every other
   category this guardrail checks.
 
