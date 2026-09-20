@@ -167,7 +167,7 @@ note that mentions it come back in one ranked list, each citing its own source.
 ## "Is my setup working?"
 
 ```bash
-health-agent doctor
+health-agent check
 ```
 
 ## Machine-readable output

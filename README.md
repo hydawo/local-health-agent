@@ -62,7 +62,7 @@ Setup and inspection:
 ```bash
 health-agent ingest ~/Downloads/export.zip     # export.xml, export.zip, PDFs, notes, photos, .docx, or a folder
 health-agent literature install sample         # optional: ~2,000 PubMed abstracts, one download, asks first
-health-agent doctor                            # what's installed, what's missing
+health-agent check                             # what's installed, what's missing
 health-agent stats
 ```
 
@@ -200,7 +200,7 @@ Two optional pieces, both of which the tool works without and tells you about:
   health-agent ask --model qwen3.5:9b "What was my average resting heart rate in March?"
   ```
 
-Run `health-agent doctor` to see what's present. Packaging is pip-from-source
+Run `health-agent check` to see what's present. Packaging is pip-from-source
 only for now; PyPI and Homebrew are deferred.
 
 ## Where your data lives
