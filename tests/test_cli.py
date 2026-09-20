@@ -1152,3 +1152,35 @@ def test_check_names_the_two_commands_that_connect(tmp_path, capsys, monkeypatch
     out = capsys.readouterr().out
     assert "literature install" in out and "literature build-pack" in out
     assert "literature-consent" in out
+
+
+def test_visit_prep_writes_a_sheet_from_the_fixtures(cli_records):
+    code, out = cli_records("visit-prep")
+    assert code == 0
+    assert out.startswith("# Questions for your next visit")
+    assert "**Ask whether your LDL cholesterol needs follow-up.**" in out
+    assert "labs_2026-03-10.pdf, p.1" in out
+    assert "No literature corpus is installed" in out
+    assert "not medical advice" in out
+
+
+def test_visit_prep_json_and_out(cli_records, tmp_path):
+    code, out = cli_records("visit-prep", "--json")
+    assert code == 0
+    data = json.loads(out)
+    assert data["prepared"]
+    assert any(s["kind"] == "lab_out_of_range" and s["subject"] == "ldl"
+               for s in data["signals"])
+
+    target = tmp_path / "sheet.md"
+    code, out = cli_records("visit-prep", "--out", str(target))
+    assert code == 0
+    assert out == ""
+    assert target.read_text().startswith("# Questions for your next visit")
+    assert "wrote" in cli_records.err.lower()
+
+
+def test_visit_prep_without_an_index(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "none.db"), "visit-prep"])
+    assert code == 2
+    assert "ingest" in capsys.readouterr().err

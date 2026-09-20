@@ -464,6 +464,44 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+def cmd_visit_prep(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Questions worth asking a clinician, from the index alone (ROADMAP #3).
+
+    No model: see `visit_prep.py`'s docstring for why. Offline: the corpus,
+    when present, is read from disk like everything else here."""
+    from dataclasses import asdict
+
+    from . import visit_prep
+
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    literature_conn = None
+    try:
+        sheet = visit_prep.gather(conn, window_days=args.window)
+        if not args.no_literature:
+            literature_conn = _open_literature_corpus(cfg)
+        if literature_conn is not None:
+            def embedder_factory():
+                return embeddings.get_embedder(args.embedder)
+            visit_prep.attach_literature(
+                sheet, literature_conn,
+                vector_path=cfg.literature_vector_path,
+                embedder_factory=embedder_factory)
+        if args.json:
+            print(json.dumps(asdict(sheet), indent=2))
+            return 0
+        text = visit_prep.render(sheet)
+        if args.out:
+            Path(args.out).write_text(text)
+            print(f"wrote {args.out}", file=sys.stderr)
+        else:
+            print(text, end="")
+        return 0
+    finally:
+        conn.close()
+        if literature_conn is not None:
+            literature_conn.close()
+
+
 def cmd_types(args: argparse.Namespace, cfg: config.Config) -> int:
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
@@ -2111,6 +2149,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_check = sub.add_parser("check", help="what is installed, what is missing, and the fix for each")
     p_check.set_defaults(func=cmd_check)
+
+    p_visit = sub.add_parser(
+        "visit-prep",
+        help="questions worth asking at your next appointment, from your own data",
+        description="Writes a short list of questions to raise with a clinician, "
+                    "each tied to a value in your index: a lab result outside its "
+                    "printed range, one that came back inside it, one drifting "
+                    "toward a limit, or a watch metric that shifted between two "
+                    "windows. No model is involved; every line is a template around "
+                    "your own numbers. Reads the literature corpus when one is "
+                    "installed.")
+    p_visit.add_argument("--window", type=int, default=30,
+                         help="days per HealthKit comparison window (default 30)")
+    p_visit.add_argument("--json", action="store_true", help="the signals as JSON")
+    p_visit.add_argument("--out", help="write the sheet here instead of stdout")
+    p_visit.add_argument("--no-literature", action="store_true",
+                         help="skip the corpus even when one is installed")
+    p_visit.add_argument("--embedder", default="ollama",
+                         choices=("ollama", "hashing"), help=argparse.SUPPRESS)
+    p_visit.set_defaults(func=cmd_visit_prep)
 
     p_offline = sub.add_parser(
         "offline-check", help="prove the local tier makes no network calls",

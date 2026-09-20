@@ -189,30 +189,32 @@ has to happen before literature is surfaced proactively.
 
 ## 3. Physician visit prep — suggested questions to ask
 
-*Depends on: nothing strictly, but much better with #1.*
+**Shipped.** `health-agent visit-prep` writes a short sheet of questions worth
+raising with a clinician, generated entirely from the local index. It draws
+on four kinds of signal:
 
-Given an upcoming appointment (or on request), surface a short list of questions
-worth raising with a clinician, grounded in the user's own data: a lab value
-trending toward an out-of-range threshold, a HealthKit metric that has shifted
-notably, an anomaly the user might not have noticed. Once literature grounding
-exists, the suggestions can also carry relevant evidence.
+- a lab result outside its printed range
+- one that has come back inside it
+- one drifting toward a limit
+- a watch metric (resting heart rate, weight, steps, HRV, sleep) that
+  shifted between two windows
 
-**This stays inside the lane the guardrail already establishes.** The output is
-*questions to ask a clinician* — never answers, never conclusions, never an
-implied diagnosis. That framing is not incidental; it is what keeps the feature
-on the right side of the line. "Ask your doctor whether your LDL trend warrants
-follow-up" is in scope. "Your LDL trend warrants follow-up" is not.
+No model runs in this command. Each line is a fixed sentence around a
+value already in the index. When a literature pack from #1 is installed,
+lab questions also name one finding by title, year, tier, and PMID. See
+the README's [Visit prep](README.md#visit-prep) section and the design at
+[docs/superpowers/specs/2026-09-20-visit-prep-design.md](docs/superpowers/specs/2026-09-20-visit-prep-design.md).
 
-Pairs naturally with #1 and with whatever the person has dropped into the
-data folder: their own documents make the questions specific to the person,
-and literature grounding makes them specific to the evidence. Without either,
-it still works — just from trends and anomalies alone.
-
-Worth noting that the current build already produces something adjacent to this
-by accident: asked "is there anything in my recent labs I should ask my doctor
-about?", the agent lists flagged values and closes by deferring interpretation.
-This item is that behavior made deliberate, proactive, and grounded — not a new
-capability so much as a promoted one.
+**What it does not do.** It does not read notes. Medications and conditions
+written as free text stay `ask`'s territory. A rule cannot tell "stopped
+metformin" from "started metformin". It does not know about an upcoming
+appointment. There is no date input. The sheet is generated fresh each time
+it runs rather than tied to a calendar. It exposes no tool to the model
+either. The command is a standalone CLI path, not something `ask` can call
+on the user's behalf. Every question is phrased as something to ask a
+clinician, never an answer, a conclusion, or an implied diagnosis. That
+boundary comes from the templates themselves, not from the guardrail
+catching a violation after the fact.
 
 ## 4. Literature-grounded context on out-of-range lab values
 
