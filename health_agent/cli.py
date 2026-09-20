@@ -478,7 +478,7 @@ def _positive_int(text: str) -> int:
 def cmd_visit_prep(args: argparse.Namespace, cfg: config.Config) -> int:
     """Questions worth asking a clinician, from the index alone (ROADMAP #3).
 
-    No model: see `visit_prep.py`'s docstring for why. Offline: the corpus,
+    No language model: see `visit_prep.py`'s docstring for why. Offline: the corpus,
     when present, is read from disk like everything else here."""
     from dataclasses import asdict
 
@@ -2166,7 +2166,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "each tied to a value in your index: a lab result outside its "
                     "printed range, one that came back inside it, one drifting "
                     "toward a limit, or a watch metric that shifted between two "
-                    "windows. No model is involved; every line is a template around "
+                    "windows. No language model is involved; every line is a template around "
                     "your own numbers. Reads the literature corpus when one is "
                     "installed.")
     p_visit.add_argument("--window", type=_positive_int, default=30,
