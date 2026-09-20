@@ -525,3 +525,16 @@ def test_returned_pmids_collects_findings_across_steps_and_ignores_misses():
     assert Orchestrator._returned_pmids(answer) == frozenset(
         {"42613609", "42609254", "40000001"})
     assert Orchestrator._returned_pmids(Answer(text="", steps=[])) == frozenset()
+
+
+def test_local_backend_honours_the_model_environment_variable(monkeypatch):
+    """The README has promised `$HEALTH_AGENT_MODEL` since `--model` existed;
+    until this test it was defined and never read."""
+    from health_agent import ollama_client
+    from health_agent.agent import backends
+
+    monkeypatch.setenv(ollama_client.ENV_CHAT_MODEL, "qwen3.5:9b")
+    assert backends.LocalBackend().model == "qwen3.5:9b"
+    assert backends.LocalBackend(model="qwen3.6:27b").model == "qwen3.6:27b"
+    monkeypatch.delenv(ollama_client.ENV_CHAT_MODEL)
+    assert backends.LocalBackend().model == ollama_client.DEFAULT_CHAT_MODEL

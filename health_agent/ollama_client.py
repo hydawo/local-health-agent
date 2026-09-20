@@ -49,6 +49,13 @@ class RemoteHostRefused(RuntimeError):
     """A non-loopback Ollama host was configured without explicit opt-in."""
 
 
+def resolve_chat_model(model: str | None = None) -> str:
+    """`--model`, then `$HEALTH_AGENT_MODEL`, then the default. The README
+    has promised the environment variable since the embed one existed; this
+    is where the promise is kept."""
+    return model or os.environ.get(ENV_CHAT_MODEL) or DEFAULT_CHAT_MODEL
+
+
 def resolve_host(host: str | None = None) -> str:
     resolved = (host or os.environ.get(ENV_HOST) or DEFAULT_HOST).rstrip("/")
     assert_local(resolved)

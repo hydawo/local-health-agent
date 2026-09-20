@@ -74,7 +74,7 @@ class LocalBackend:
     tier = "local"
 
     def __init__(self, model: str | None = None, host: str | None = None) -> None:
-        self.model = model or ollama_client.DEFAULT_CHAT_MODEL
+        self.model = ollama_client.resolve_chat_model(model)
         self.host = ollama_client.resolve_host(host)
         self.name = f"ollama:{self.model}"
 
