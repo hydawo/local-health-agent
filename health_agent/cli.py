@@ -464,6 +464,17 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+def _positive_int(text: str) -> int:
+    """argparse type for a count that has to be at least 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be at least 1, got {value}")
+    return value
+
+
 def cmd_visit_prep(args: argparse.Namespace, cfg: config.Config) -> int:
     """Questions worth asking a clinician, from the index alone (ROADMAP #3).
 
@@ -2158,7 +2169,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "windows. No model is involved; every line is a template around "
                     "your own numbers. Reads the literature corpus when one is "
                     "installed.")
-    p_visit.add_argument("--window", type=int, default=30,
+    p_visit.add_argument("--window", type=_positive_int, default=30,
                          help="days per HealthKit comparison window (default 30)")
     p_visit.add_argument("--json", action="store_true", help="the whole sheet as JSON")
     p_visit.add_argument("--out", help="write the sheet here instead of stdout")

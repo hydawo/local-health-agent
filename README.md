@@ -444,11 +444,13 @@ clinician. Each one ties to a value in your own files:
 Every question opens with "Ask". The sentence after it gives the value, the
 printed range, the date, and the report it came from. When a literature
 pack is installed, each lab question also names one finding by title, year,
-tier, and PMID. It does not quote the finding.
+tier, and PMID. It does not quote the finding. The finding is the corpus's
+best match for the analyte's name. It is not a paper about your own result.
 
-There is no model in this command. The output is a list of your numbers
-with a fixed sentence around each, and a template does that exactly, where
-a model does it approximately, and on the evidence of
+No language model is involved in this command, though the embedding model
+may run for the literature lookup when a pack is installed. The output is a
+list of your numbers with a fixed sentence around each, and a template does
+that exactly, where a model does it approximately, and on the evidence of
 [eval run 6](tests/eval_results.md) sometimes with a recalled threshold
 attached. The sheet also runs on a machine that cannot run the model. The
 guardrail can be run over the finished sheet as a test. A template that

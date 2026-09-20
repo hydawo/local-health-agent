@@ -219,6 +219,18 @@ def test_resting_heart_rate_shift_is_a_signal(tmp_path):
     assert any(g.startswith("Steps") for g in gaps)
 
 
+def test_window_recent_end_is_the_latest_across_metrics(tmp_path):
+    """Metrics anchor their own windows; the sheet reports the latest anchor."""
+    # resting HR is looked at first and ends earlier; weight ends later and
+    # must win regardless of that order
+    hr = [("RestingHeartRate", "count/min", d, "60") for d in _days(date(2025, 1, 1), 60)]
+    weight = [("BodyMass", "lb", d, "170") for d in _days(date(2025, 3, 1), 60)]
+    conn = _synthetic_index(tmp_path, hr + weight)
+    _, _, window = visit_prep.metric_signals(conn, window_days=30)
+    assert window["recent_end"] == "2025-04-29"
+    assert window["recent_start"] == "2025-03-31"
+
+
 def test_metric_windows_anchor_at_the_last_day_present(tmp_path):
     """An export is a snapshot; 'the last 30 days' means its last 30."""
     prior = [("BodyMass", "lb", d, "180") for d in _days(date(2025, 1, 1), 30)]
@@ -304,7 +316,8 @@ def test_rendered_sheet_has_the_sections_and_the_disclaimer():
     assert "Prepared 2026-09-20" in text
     assert "## Looked at" in text
     assert "- 3 lab reports, 2025-03-04 to 2026-03-10, 23 analytes" in text
-    assert "- Apple Health, 2026-08-22 to 2026-09-20 against 2026-07-23 to 2026-08-21" in text
+    assert ("- Apple Health, 30-day windows ending at each metric's last day, "
+            "latest 2026-09-20") in text
     assert "No literature corpus is installed" in text
     assert "## Questions" in text
     assert "## Not enough data to check" in text
@@ -336,13 +349,37 @@ def test_literature_line_when_present():
                       "tier": "meta_analysis", "pmid": "42613609"}
     text = visit_prep.render(_sheet_with(ldl, literature={"packs": ["sample"], "articles": 2000}))
     assert "- Literature: sample (2,000 articles)" in text
-    assert "Evidence you could bring up: *Lipid lowering in adults* (2026, meta_analysis, PMID 42613609)." in text
+    assert "Evidence you could bring up: *Lipid lowering in adults* (2026, meta-analysis, PMID 42613609)." in text
     assert "No literature corpus" not in text
+
+
+def test_tier_is_rendered_as_words():
+    assert visit_prep._tier_label("meta_analysis") == "meta-analysis"
+    assert visit_prep._tier_label("rct") == "randomized trial"
+    assert visit_prep._tier_label("narrative_review") == "review"
+    assert visit_prep._tier_label("observational") == "observational study"
+    assert visit_prep._tier_label("some_new_tier") == "some new tier"
+
+
+def test_values_never_render_in_exponent_notation():
+    assert visit_prep._val({"value": 1250000, "unit": "/uL"}) == "1250000 /uL"
+    assert visit_prep._val({"value": 5.4, "unit": "%"}) == "5.4%"
+    assert visit_prep._val({"value": 112.0, "unit": "mg/dL"}) == "112 mg/dL"
+    assert visit_prep._val({"value": 0.05, "unit": "mIU/L"}) == "0.05 mIU/L"
+
+
+def test_no_watched_metric_data_says_so():
+    sheet = _sheet_with()
+    sheet.healthkit = None
+    text = visit_prep.render(sheet)
+    assert "- No data for the watched metrics in the export" in text
+    assert "No Apple Health export" not in text
 
 
 def test_empty_sheet_says_nothing_stood_out():
     text = visit_prep.render(_sheet_with())
     assert "Nothing stood out" in text
+    assert "it says nothing about your health" in text
     assert "## Questions" not in text
     assert guardrail.check(text, used_tools=True) == []
 
@@ -411,6 +448,94 @@ def test_attach_literature_prefers_the_best_tier_of_the_top_three(corpus, monkey
     ldl = _ldl()
     visit_prep.attach_literature(_sheet_with(ldl), corpus)
     assert ldl.literature["pmid"] == "2"
+
+
+def test_attach_literature_never_chooses_a_retracted_finding(corpus, monkeypatch):
+    from health_agent.literature import store as lit_store
+    from health_agent.literature.store import Finding
+    found = [Finding(1, "1", "pulled", "", "", evidence_tier="meta_analysis",
+                     evidence_rank=1, retracted=True),
+             Finding(2, "2", "obs", "", "", evidence_tier="observational", evidence_rank=6),
+             Finding(3, "3", "plan", "", "", evidence_tier="protocol", evidence_rank=None)]
+    seen = {}
+    def fake_hits(conn, query, *, limit, **kw):
+        seen["limit"] = limit
+        return found
+    monkeypatch.setattr(lit_store, "hits", fake_hits)
+    ldl = _ldl()
+    visit_prep.attach_literature(_sheet_with(ldl), corpus)
+    assert ldl.literature["pmid"] == "2"
+    assert seen["limit"] == 5
+
+
+def test_attach_literature_with_only_protocol_or_unknown_hits_leaves_the_signal_bare(corpus, monkeypatch):
+    from health_agent.literature import store as lit_store
+    from health_agent.literature.store import Finding
+    found = [Finding(1, "1", "plan", "", "", evidence_tier="protocol"),
+             Finding(2, "2", "untiered", "", "", evidence_tier="unknown")]
+    monkeypatch.setattr(lit_store, "hits", lambda *a, **k: found)
+    ldl = _ldl()
+    visit_prep.attach_literature(_sheet_with(ldl), corpus)
+    assert ldl.literature is None
+
+
+def test_attach_literature_resolves_a_dead_embedder_once_per_sheet(corpus, monkeypatch):
+    """A down embedder trips one fallback, and every later lookup is asked
+    for keyword search outright rather than retrying the embedder."""
+    from health_agent.literature import store as lit_store
+    factories_seen = []
+    def fake_hits(conn, query, *, limit, vector_path, embedder_factory):
+        factories_seen.append(embedder_factory)
+        if embedder_factory is not None:
+            try:
+                embedder_factory().embed([query])
+            except Exception:
+                pass  # what `hits` does: warn once and fall back
+        return []
+    monkeypatch.setattr(lit_store, "hits", fake_hits)
+
+    class Dead:
+        name = "dead"
+        def embed(self, texts):
+            raise ConnectionError("no server")
+    visit_prep.attach_literature(_sheet_with(_ldl(), _a1c(), _near()), corpus,
+                                 vector_path="unused", embedder_factory=Dead)
+    assert factories_seen[0] is not None
+    assert factories_seen[1:] == [None, None]
+
+
+def test_attach_literature_keeps_a_working_embedder_for_every_signal(corpus, monkeypatch):
+    from health_agent.literature import store as lit_store
+    calls = []
+    class Live:
+        name = "live"
+        made = 0
+        def __init__(self):
+            Live.made += 1
+        def embed(self, texts):
+            calls.append(texts)
+            return [[0.0] * 4 for _ in texts]
+    def fake_hits(conn, query, *, limit, vector_path, embedder_factory):
+        e = embedder_factory()
+        assert e.name == "live"
+        e.embed([query])
+        return []
+    monkeypatch.setattr(lit_store, "hits", fake_hits)
+    visit_prep.attach_literature(_sheet_with(_ldl(), _a1c()), corpus,
+                                 vector_path="unused", embedder_factory=Live)
+    assert len(calls) == 2
+    assert Live.made == 1
+
+
+def test_the_fixture_sheet_with_the_real_corpus_passes_the_guardrail(fixture_index, corpus):
+    """The oracle over the whole path: gather, attach real findings, render."""
+    sheet = visit_prep.gather(fixture_index, today=date(2026, 9, 20))
+    visit_prep.attach_literature(sheet, corpus)
+    pmids = frozenset(s.literature["pmid"] for s in sheet.signals if s.literature)
+    assert pmids, "the fixture corpus should attach at least one finding"
+    text = visit_prep.render(sheet)
+    flags = guardrail.check(text, used_tools=True, returned_pmids=pmids)
+    assert flags == [], [str(f) for f in flags]
 
 
 def test_attach_literature_with_no_hits_leaves_the_signal_bare(corpus, monkeypatch):

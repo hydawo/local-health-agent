@@ -25,6 +25,7 @@ from datetime import date, timedelta
 
 from . import metrics
 from .agent.guardrail import DISCLAIMER
+from .literature import tiers
 from .store import queries
 from .store.queries import LabPoint, LabTrend
 
@@ -301,8 +302,34 @@ NO_CORPUS = ("No literature corpus is installed; `health-agent literature "
 INTRO = ("Prepared {date} from your own files. Nothing here is a conclusion; "
          "each item is a value that stood out and a question it might be "
          "worth asking. Bring the reports named.")
-NOTHING = ("Nothing stood out in what was looked at. That is a statement about "
-           "this tool's cutoffs, not about your health.")
+NOTHING = ("Nothing stood out in what was looked at. That describes this "
+           "tool's cutoffs; it says nothing about your health.")
+
+# Evidence tier key -> how the sheet says it. A key outside the map is
+# printed with its underscores replaced by spaces.
+TIER_LABELS = {
+    "meta_analysis": "meta-analysis",
+    "systematic_review": "systematic review",
+    "rct": "randomized trial",
+    "clinical_trial": "clinical trial",
+    "guideline": "guideline",
+    "narrative_review": "review",
+    "scoping_review": "scoping review",
+    "observational": "observational study",
+    "case_report": "case report",
+}
+
+
+def _tier_label(tier: str) -> str:
+    return TIER_LABELS.get(tier, tier.replace("_", " "))
+
+
+def _num(v: float) -> str:
+    """`v` as people write it: no exponent, no trailing `.0`. `:g` switches
+    to exponent notation above six significant figures, which turns a
+    platelet count into `1.25e+06`."""
+    text = f"{v:.10f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
 
 
 def _sentence_label(label: str) -> str:
@@ -318,7 +345,7 @@ def _sentence_label(label: str) -> str:
 
 def _val(e: dict) -> str:
     unit = f" {e['unit']}" if e.get("unit") and e["unit"] != "%" else (e.get("unit") or "")
-    return f"{e['value']:g}{unit}"
+    return f"{_num(e['value'])}{unit}"
 
 
 def _range(e: dict) -> str:
@@ -369,8 +396,8 @@ def _evidence_sentence(s: Signal) -> str:
                 f"and closer to its {side} limit than the "
                 f"{_val(prev)} on {prev['date']} {_cite(latest, prev)}.")
     unit = e.get("unit") or ""
-    return (f"It averaged {e['recent_mean']:g} {unit} over {e['recent_start']} to "
-            f"{e['recent_end']} against {e['prior_mean']:g} {unit} over "
+    return (f"It averaged {_num(e['recent_mean'])} {unit} over {e['recent_start']} to "
+            f"{e['recent_end']} against {_num(e['prior_mean'])} {unit} over "
             f"{e['prior_start']} to {e['prior_end']}, a shift larger than this "
             f"tool's cutoff for pointing it out ({e['threshold_text']}). Whether "
             f"that matters is not something this tool can say.").replace("  ", " ")
@@ -387,10 +414,13 @@ def render(sheet: Sheet) -> str:
         lines.append("- No lab reports in the index")
     hk = sheet.healthkit
     if hk:
-        lines.append(f"- Apple Health, {hk['recent_start']} to {hk['recent_end']} "
-                     f"against {hk['prior_start']} to {hk['prior_end']}")
+        # Each metric anchors its own pair of windows at its own last day,
+        # so a single date range would be untrue; say the shape and the
+        # latest anchor instead.
+        lines.append(f"- Apple Health, {sheet.window_days}-day windows ending at "
+                     f"each metric's last day, latest {hk['recent_end']}")
     else:
-        lines.append("- No Apple Health export in the index")
+        lines.append("- No data for the watched metrics in the export")
     if sheet.literature:
         packs = ", ".join(sheet.literature["packs"]) or "corpus"
         lines.append(f"- Literature: {packs} ({sheet.literature['articles']:,} articles)")
@@ -409,7 +439,7 @@ def render(sheet: Sheet) -> str:
                 lit = s.literature
                 year = f"{lit['year']}, " if lit.get("year") else ""
                 lines.append(f"   Evidence you could bring up: *{lit['title']}* "
-                             f"({year}{lit['tier']}, PMID {lit['pmid']}).")
+                             f"({year}{_tier_label(lit['tier'])}, PMID {lit['pmid']}).")
         lines.append("")
     else:
         lines.extend([NOTHING, ""])
@@ -423,10 +453,63 @@ def render(sheet: Sheet) -> str:
     return "\n".join(lines) + "\n"
 
 
+# Tiers that never make it onto the sheet. A protocol is a plan, an
+# `unknown` is an article PubMed recorded no design for; neither is a
+# finding a person should carry into a visit as evidence.
+_UNCITABLE_TIERS = frozenset({tiers.PROTOCOL, tiers.UNKNOWN})
+# `hits` is asked for this many so the filter above has something left to
+# choose from; the best-tiered of what survives is the one printed.
+_LITERATURE_HITS = 5
+
+
+def _citable(finding) -> bool:
+    return not finding.retracted and finding.evidence_tier not in _UNCITABLE_TIERS
+
+
+class _OnceEmbedder:
+    """`hits` decides semantic-versus-keyword on every call, so a corpus
+    whose embedder is down would log the same warning once per question.
+    This proxy sits between `hits` and the real embedder: the first failed
+    `embed` trips a flag, and `factory` then hands `hits` nothing at all,
+    so the rest of the sheet goes straight to keyword search. When the
+    embedder works, `hits` sees exactly what it would have seen."""
+
+    def __init__(self, embedder_factory) -> None:
+        self._make = embedder_factory
+        self._embedder = None
+        self.failed = False
+
+    @property
+    def factory(self):
+        return None if self.failed or self._make is None else self
+
+    def __call__(self):
+        if self._embedder is None:
+            try:
+                self._embedder = self._make()
+            except Exception:
+                self.failed = True
+                raise
+        return self
+
+    @property
+    def name(self) -> str:
+        return self._embedder.name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            return self._embedder.embed(texts)
+        except Exception:
+            self.failed = True
+            raise
+
+
 def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
                       embedder_factory=None) -> None:
-    """One finding per lab signal: the best-tiered of the top three hits for
-    the analyte's label. None for metric shifts: a paper about resting heart
+    """One finding per lab signal: the best-tiered citable hit among the
+    top few for the analyte's label. Retracted articles, protocols and
+    untiered articles are never chosen; when nothing citable comes back the
+    signal is left bare. None for metric shifts: a paper about resting heart
     rate says nothing about this person's watch. In place."""
     from .literature import corpus as lit_corpus
     from .literature import store as lit_store
@@ -434,15 +517,17 @@ def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
     report = lit_corpus.coverage(literature_conn)
     sheet.literature = {"packs": [p.split("@")[0] for p in report["packs"]],
                         "articles": report["article_count"]}
+    once = _OnceEmbedder(embedder_factory)
     for signal in sheet.signals:
         if not signal.kind.startswith("lab_"):
             continue
-        found = lit_store.hits(literature_conn, signal.label, limit=3,
+        found = lit_store.hits(literature_conn, signal.label, limit=_LITERATURE_HITS,
                                vector_path=vector_path,
-                               embedder_factory=embedder_factory)
-        if not found:
+                               embedder_factory=once.factory)
+        citable = [f for f in found if _citable(f)]
+        if not citable:
             continue
-        best = min(found, key=lambda f: (f.evidence_rank is None,
-                                         f.evidence_rank or 0))
+        best = min(citable, key=lambda f: (f.evidence_rank is None,
+                                           f.evidence_rank or 0))
         signal.literature = {"title": best.title, "year": best.year,
                              "tier": best.evidence_tier, "pmid": best.pmid}

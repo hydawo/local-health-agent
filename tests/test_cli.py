@@ -1188,6 +1188,13 @@ def test_visit_prep_json_and_out(cli_records, tmp_path):
     assert "wrote" in cli_records.err.lower()
 
 
+def test_visit_prep_rejects_a_window_below_one(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--index", str(tmp_path / "health.db"), "visit-prep", "--window", "0"])
+    assert exc.value.code == 2
+    assert "window" in capsys.readouterr().err
+
+
 def test_visit_prep_without_an_index(tmp_path, capsys):
     code = main(["--index", str(tmp_path / "none.db"), "visit-prep"])
     assert code == 2
