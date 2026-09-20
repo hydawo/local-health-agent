@@ -189,6 +189,16 @@ def test_metric_shift_rule():
     assert visit_prep.metric_shift_for([79.0] * 20, [80.0] * 20, ("pct", 3)) is False
 
 
+def test_display_converts_sleep_seconds_to_minutes_and_resting_hr_to_bpm():
+    # evidence and threshold_text must agree, so both go through _display.
+    assert visit_prep._display("sleep", 2700, "s") == (45.0, "min")
+    assert visit_prep._threshold_text("sleep", "s") == "45 min"
+    assert visit_prep._display("resting-hr", 64, "count/min") == (64.0, "bpm")
+    assert visit_prep._threshold_text("resting-hr", "count/min") == "5 bpm"
+    # metrics with no DISPLAY_UNIT entry keep the export's own unit
+    assert visit_prep._display("weight", 170, "lb") == (170.0, "lb")
+
+
 def test_resting_heart_rate_shift_is_a_signal(tmp_path):
     prior = [("RestingHeartRate", "count/min", d, "58") for d in _days(date(2026, 5, 1), 30)]
     recent = [("RestingHeartRate", "count/min", d, "64") for d in _days(date(2026, 5, 31), 30)]
@@ -198,6 +208,7 @@ def test_resting_heart_rate_shift_is_a_signal(tmp_path):
     assert signal.kind == "metric_shift"
     assert signal.evidence["recent_mean"] == 64
     assert signal.evidence["prior_mean"] == 58
+    assert signal.evidence["unit"] == "bpm"
     assert signal.evidence["threshold_text"] == "5 bpm"
     assert signal.evidence["recent_start"] == "2026-05-31"
     assert signal.evidence["recent_end"] == "2026-06-29"

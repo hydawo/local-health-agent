@@ -151,18 +151,28 @@ SHIFT_THRESHOLDS: dict[str, tuple[str, float]] = {
 }
 # Both windows need at least this fraction of their days present.
 MIN_WINDOW_FRACTION = 0.5
-# Unit to print for an "abs" threshold, when the export's own unit string
-# (e.g. "count/min") isn't the one people actually say.
-DISPLAY_UNIT: dict[str, str] = {"resting-hr": "bpm"}
+# (display unit, divisor from the export's raw value to that unit), for metrics
+# whose export unit isn't the one people actually say. An alias absent here
+# keeps the export's own unit and value unconverted. `_threshold_text` and the
+# `metric_shift` evidence both go through `_display`, so they always agree.
+DISPLAY_UNIT: dict[str, tuple[str, float]] = {
+    "resting-hr": ("bpm", 1),   # "count/min" in the export, "bpm" to people
+    "sleep": ("min", 60),       # sleep_nights totals seconds
+}
+
+
+def _display(alias: str, value: float, unit: str | None) -> tuple[float, str]:
+    """(value, unit) converted to display units, per DISPLAY_UNIT."""
+    display_unit, divisor = DISPLAY_UNIT.get(alias, (unit or "", 1))
+    return value / divisor, display_unit
 
 
 def _threshold_text(alias: str, unit: str | None) -> str:
     kind, amount = SHIFT_THRESHOLDS[alias]
     if kind == "pct":
         return f"{amount:g}%"
-    if alias == "sleep":
-        return f"{amount / 60:g} min"
-    return f"{amount:g} {DISPLAY_UNIT.get(alias, unit or '')}".strip()
+    display_amount, display_unit = _display(alias, amount, unit)
+    return f"{display_amount:g} {display_unit}".strip()
 
 
 def metric_shift_for(recent: list[float], prior: list[float],
@@ -220,12 +230,14 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
             continue
         identifier = "HKCategoryTypeIdentifierSleepAnalysis" if alias == "sleep" \
             else metrics.resolve(alias).identifier
+        recent_mean, display_unit = _display(alias, sum(recent) / len(recent), unit)
+        prior_mean, _ = _display(alias, sum(prior) / len(prior), unit)
         signals.append(Signal(
             kind="metric_shift", subject=identifier, label=label,
             evidence={
-                "recent_mean": round(sum(recent) / len(recent), 1),
-                "prior_mean": round(sum(prior) / len(prior), 1),
-                "unit": unit, "recent_days": len(recent), "prior_days": len(prior),
+                "recent_mean": round(recent_mean, 1),
+                "prior_mean": round(prior_mean, 1),
+                "unit": display_unit, "recent_days": len(recent), "prior_days": len(prior),
                 "recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                 "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat(),
                 "threshold_text": _threshold_text(alias, unit),
