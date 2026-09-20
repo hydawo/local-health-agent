@@ -43,17 +43,11 @@ def test_tier_source_never_records_an_inference(tmp_path):
 
     conn = schema.connect(tmp_path / "literature.db", create=True)
     schema.initialize(conn)
-    conn.execute("INSERT INTO pack(slug, version, built_at, article_count) "
-                 "VALUES('t', '1', '2026-01-01', 0)")
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(
-            "INSERT INTO article(pack_id, pmid, title, evidence_tier, "
-            "tier_source, license) VALUES(1, '1', 't', 'rct', 'inferred', 'x')")
+            "INSERT INTO article(pmid, title, evidence_tier, "
+            "tier_source, license) VALUES('1', 't', 'rct', 'inferred', 'x')")
     conn.close()
-
-
-def test_schema_version_is_3():
-    assert schema.LITERATURE_SCHEMA_VERSION == 3
 
 
 def test_mesh_term_records_whether_a_term_is_a_major_topic(tmp_path):
@@ -106,4 +100,30 @@ def test_connect_creates_a_fresh_corpus_without_a_version_check(tmp_path):
     assert schema.read_version(conn) is None
     schema.initialize(conn)
     assert schema.read_version(conn) == schema.LITERATURE_SCHEMA_VERSION
+    conn.close()
+
+
+def test_schema_version_is_4():
+    assert schema.LITERATURE_SCHEMA_VERSION == 4
+
+
+def test_articles_are_unique_by_pmid_and_linked_to_packs(tmp_path):
+    """One paper, many packs. An 'exercise and hypertension' article belongs
+    to both `exercise` and `cardiovascular`; storing it twice would return
+    the same finding twice under two pack names."""
+    import sqlite3
+
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(article)")}
+    assert "pack_id" not in columns
+    names = {r["name"] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "article_pack" in names
+    conn.execute("INSERT INTO article(pmid, title, evidence_tier, tier_source, "
+                 "license) VALUES('1', 't', 'rct', 'publication_type', 'x')")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("INSERT INTO article(pmid, title, evidence_tier, "
+                     "tier_source, license) VALUES('1', 't2', 'rct', "
+                     "'publication_type', 'x')")
     conn.close()

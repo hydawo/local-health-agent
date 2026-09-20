@@ -1,0 +1,63 @@
+<?xml version="1.0"?>
+<PubmedArticleSet>
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000001</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2021</Year></PubDate></JournalIssue>
+     <Title>Journal of Synthetic Cardiology</Title>
+    </Journal>
+    <ArticleTitle>Aerobic exercise and blood pressure: a meta-analysis of randomized trials.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="BACKGROUND">Elevated blood pressure is a leading modifiable risk factor for cardiovascular disease, and structured exercise programs are commonly recommended as a first-line intervention.</AbstractText>
+     <AbstractText Label="METHODS">We pooled data from randomized controlled trials comparing supervised aerobic exercise against usual care, measuring change in systolic and diastolic blood pressure.</AbstractText>
+     <AbstractText Label="RESULTS">Aerobic exercise programs were associated with a mean reduction in systolic blood pressure of several millimeters of mercury, with more pronounced effects in participants who began with higher baseline readings.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Meta-Analysis</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Exercise</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000001</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+
+ <PubmedArticle>
+  <MedlineCitation>
+   <PMID>40000002</PMID>
+   <Article>
+    <Journal>
+     <JournalIssue><PubDate><Year>2019</Year></PubDate></JournalIssue>
+     <Title>Synthetic Reviews in Sleep Medicine</Title>
+    </Journal>
+    <ArticleTitle>Sleep duration and metabolic markers: a systematic review.</ArticleTitle>
+    <Abstract>
+     <AbstractText Label="OBJECTIVE">To systematically review studies relating habitual sleep duration to fasting glucose, insulin sensitivity, and lipid profiles in adults.</AbstractText>
+     <AbstractText Label="FINDINGS">Short sleep duration, generally under six hours per night, was consistently associated with worse markers of glucose regulation across the reviewed studies, while long sleep duration showed more inconsistent associations.</AbstractText>
+    </Abstract>
+    <PublicationTypeList>
+     <PublicationType>Journal Article</PublicationType>
+     <PublicationType>Systematic Review</PublicationType>
+    </PublicationTypeList>
+   </Article>
+   <MeshHeadingList>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Sleep</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+   </MeshHeadingList>
+  </MedlineCitation>
+  <PubmedData>
+   <ArticleIdList>
+    <ArticleId IdType="doi">10.9999/synth.40000002</ArticleId>
+   </ArticleIdList>
+  </PubmedData>
+ </PubmedArticle>
+</PubmedArticleSet>

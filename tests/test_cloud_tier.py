@@ -95,6 +95,33 @@ def test_the_notice_does_not_characterize_anthropics_terms():
         assert overclaim not in lowered
 
 
+def test_literature_consent_is_a_separate_record_from_cloud(tmp_path):
+    assert consent.needs_prompt(tmp_path, notice=consent.LITERATURE)
+    consent.record(tmp_path, "", notice=consent.LITERATURE)
+    assert not consent.needs_prompt(tmp_path, notice=consent.LITERATURE)
+    assert consent.needs_prompt(tmp_path)              # cloud still unconsented
+    assert consent.consent_path(tmp_path, notice=consent.LITERATURE).name == "literature_consent.json"
+    assert consent.revoke(tmp_path, notice=consent.LITERATURE)
+    assert consent.needs_prompt(tmp_path, notice=consent.LITERATURE)
+
+
+def test_literature_notice_says_what_leaves_and_when():
+    text = consent.LITERATURE.text.lower()
+    for phrase in ("github.com", "objects.githubusercontent.com",
+                   "eutils.ncbi.nlm.nih.gov", "pack", "ip address",
+                   "ncbi_api_key", "never during", "revoke"):
+        assert phrase in text
+
+
+def test_a_record_for_one_notice_does_not_satisfy_the_other(tmp_path):
+    """The two files are separate, but a file copied or renamed across them
+    must not count either: the record names the notice it answered."""
+    consent.record(tmp_path, "", notice=consent.LITERATURE)
+    lit = consent.consent_path(tmp_path, notice=consent.LITERATURE)
+    lit.rename(consent.consent_path(tmp_path))
+    assert consent.needs_prompt(tmp_path) is True
+
+
 # --------------------------------------------------------------------------- #
 # Wire translation
 # --------------------------------------------------------------------------- #

@@ -40,10 +40,11 @@ that's needed to test a parser.
 3. **The eval set is re-run** (`pytest tests/test_eval.py`, and
    `tests/run_agent_eval.py` for anything touching prompts, tools, or the
    guardrail). Accuracy regressions are otherwise silent.
-4. **Network calls stay in `ollama_client.py` (local) and `agent/backends.py`
-   (cloud).** `test_the_network_surface_is_exactly_two_modules` asserts that
-   exact set, counting vendor SDK imports as well as stdlib transports. A third
-   network module is a design discussion, not a patch.
+4. **Network calls stay in `ollama_client.py` (local), `agent/backends.py`
+   (cloud), and `literature/fetch/client.py` (packs).**
+   `test_the_network_surface_is_exactly_three_modules` asserts that exact set,
+   counting vendor SDK imports as well as stdlib transports. A fourth network
+   module is a design discussion, not a patch.
 5. **No health data in logs.** Log filenames, counts, error types. Never values,
    never query text, never response text. See `health_agent/logging_setup.py`.
 
@@ -66,12 +67,15 @@ health_agent/
 ├── metrics.py         HealthKit metric registry: aliases + aggregation semantics
 ├── labs.py            analyte registry: aliases + expected units
 ├── embeddings.py      embedder contract and backends
-├── consent.py         cloud-tier disclosure and consent record
+├── literature/        corpus schema, MEDLINE parser, tiers, pack catalog (packs.py)
+│   └── fetch/         network: client.py (the one transport), eutils.py, packs.py
+├── consent.py         cloud and literature disclosures and consent records
 ├── ollama_client.py   network: local tier (loopback only)
 └── cli.py
 ```
 
-The network surface is `ollama_client.py` and `agent/backends.py`, nothing else.
+The network surface is `ollama_client.py`, `agent/backends.py`, and
+`literature/fetch/client.py`, nothing else.
 
 ## Working on the agent
 
@@ -143,8 +147,8 @@ ask again, never assume yes. If you add another entry point to the cloud tier,
 it takes the same gate.
 
 **The network-surface test counts vendor SDKs.** `import anthropic` opens
-sockets as surely as `import urllib`. `test_the_network_surface_is_exactly_two_modules`
-asserts the exact set; if you add a third network module, that is a design
+sockets as surely as `import urllib`. `test_the_network_surface_is_exactly_three_modules`
+asserts the exact set; if you add a fourth network module, that is a design
 discussion.
 
 **`anthropic` is imported lazily, inside `CloudBackend.__init__`.** The local
@@ -170,7 +174,8 @@ means nothing:
 
 | Check | Enforces |
 | --- | --- |
-| `test_the_network_surface_is_exactly_two_modules` | Only `ollama_client.py` and `agent/backends.py` import networking, vendor SDKs included |
+| `test_the_network_surface_is_exactly_three_modules` | Only `ollama_client.py`, `agent/backends.py`, and `literature/fetch/client.py` import networking, vendor SDKs included |
+| `test_the_query_path_cannot_reach_a_fetcher` | Nothing on the ask path imports `literature.fetch`, and no file under `literature/` other than `fetch/client.py` imports a transport |
 | `tests/test_no_network.py` | The whole pipeline runs with sockets blocked, plus an OS-sandbox proof where available |
 | `health-agent offline-check` | End-to-end proof, reporting which enforcement mechanism applied |
 
@@ -187,4 +192,47 @@ reasons unrelated to the claim.
 
 If you change what the cloud tier sends, bump `NOTICE_VERSION` in `consent.py`.
 That invalidates recorded consent and re-asks, because the old yes answered a
-different question.
+different question. The literature notice (`consent.LITERATURE`) has its own
+version, and the same rule applies. If `install` or `build-pack` ever sends
+something new, bump it.
+
+## Building and publishing a pack
+
+Packs are built by a maintainer, once, and published as release assets. A
+user's `literature install` downloads the file; it never queries NCBI.
+
+```bash
+health-agent literature build-pack sleep --out dist/packs --version 2026.09
+```
+
+That runs the catalog's query for `sleep` against NCBI E-utilities (after the
+literature notice, the same one users see), parses the results as they
+stream, and writes `dist/packs/sleep-2026.09.jsonl.gz` beside
+`sleep-2026.09.jsonl.gz.sha256`. It never touches your local index. Set
+`NCBI_API_KEY` in the environment if you have one; the delay between pages
+stays either way. `--max` caps the article count, which the catalog already
+does for `sample`. The command reads `https_proxy` from the environment the
+way any `urllib` client does.
+
+Attach both files to the `packs-v1` release. That is the tag
+`fetch/packs.py` derives download URLs from.
+
+```bash
+gh release upload packs-v1 dist/packs/sleep-2026.09.jsonl.gz dist/packs/sleep-2026.09.jsonl.gz.sha256
+```
+
+Publishing is a manual step on purpose. The tool never holds a GitHub token.
+
+In the same PR, bump `LATEST_VERSION` in `health_agent/literature/packs.py`
+to the version you stamped on the files. That constant is what `install`
+defaults to, so a release without the bump is one nobody gets by default, and
+a bump without the release is a download that 404s. Note the measured size
+from the build's output in the README's pack paragraph, since the spec asks
+for sizes to be measured rather than estimated.
+
+**New packs stay at the body-system level.** Which pack a person downloads is
+visible to GitHub. `cardiovascular` says almost nothing about them. A
+`type-2-diabetes` pack would say a lot. Adding a pack below that line is a
+design change, with a spec and a threat-model update, not a catalog entry.
+`sample` aside, a pack is a broad area the tool already holds data for, and
+nothing narrower.

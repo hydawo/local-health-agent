@@ -1,7 +1,8 @@
 # Licenses
 
-This covers the medical literature corpus (`health-agent literature build`),
-not the codebase — see [LICENSE](LICENSE) for that.
+This covers the medical literature corpus (`health-agent literature install`
+and `health-agent literature build`), not the codebase — see
+[LICENSE](LICENSE) for that.
 
 ## Abstracts and metadata vs. full text
 
@@ -42,10 +43,34 @@ redistributes nothing: there is no real article behind any row in it, licensed
 or otherwise. Tests and the demo run against it so that neither requires
 network access or a real corpus build.
 
+## Packs
+
+A pack (`health-agent literature install <slug>`) holds abstracts and MEDLINE
+citation metadata, and nothing else. No full text, from PMC Open Access or
+anywhere. Those records are NLM's, reused under NLM's terms, which are not a
+Creative Commons licence, and this document makes no CC claim about any pack.
+
+Every row a pack installs has `article.license` set to the same string, the
+`PACK_LICENSE` constant in `health_agent/literature/packs.py`:
+
+```
+MEDLINE/PubMed citation record and abstract; NLM terms of use
+```
+
+That is the per-article rule above applied to a pack, rather than an
+exception to it. The pack manifest carries the same string, and the installer
+writes it per row from the manifest rather than assuming it.
+
+The `sample` pack is real MEDLINE records, unlike the fixture corpus in the
+section above. That is why it is published as a release asset and is not
+checked into this repository. The repository holds only invented data. Real
+citation records are redistributed from a release, under the terms above, to
+a person who asked for them.
+
 ## ClinicalTrials.gov (slice 2)
 
-Slice 1 does not fetch ClinicalTrials.gov records. When a later release adds
-them (ROADMAP #1's acquisition half), they are marked accordingly: records
+No pack draws on ClinicalTrials.gov, and nothing fetches its records. When a
+later release adds them (ROADMAP #1a's open half), they are marked accordingly: records
 originating from ClinicalTrials.gov are **US Government works and carry no
 copyright restriction** in the United States, distinct from the mixed
 licensing that applies to PMC Open Access full text. That distinction is

@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-LITERATURE_SCHEMA_VERSION = 3
+LITERATURE_SCHEMA_VERSION = 4
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS corpus_meta (
@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS corpus_meta (
 -- One row per installed pack. Present from v1 even though slice 1 builds only
 -- local packs: without pack identity, both distributable topic packs and corpus
 -- versioning need a migration later.
+-- One installed version per pack: UNIQUE(slug) alone, not (slug, version).
+-- A newer version replaces the older one's row, so this table always says
+-- what is installed rather than accumulating every version ever built.
 CREATE TABLE IF NOT EXISTS pack (
     id                     INTEGER PRIMARY KEY,
     slug                   TEXT NOT NULL,
@@ -29,12 +32,15 @@ CREATE TABLE IF NOT EXISTS pack (
     built_at               TEXT NOT NULL,
     article_count          INTEGER NOT NULL DEFAULT 0,
     source_manifest_sha256 TEXT,
-    UNIQUE(slug, version)
+    UNIQUE(slug)
 );
 
 CREATE TABLE IF NOT EXISTS article (
     id                  INTEGER PRIMARY KEY,
-    pack_id             INTEGER NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
+    -- No pack_id. An article belongs to every pack that holds it, through
+    -- article_pack below, and is stored once by PMID: an "exercise and
+    -- hypertension" paper installed from two packs must be one finding,
+    -- not two. (v4; v1-v3 keyed articles per pack.)
     pmid                TEXT,
     doi                 TEXT,
     nct_id              TEXT,
@@ -65,8 +71,18 @@ CREATE TABLE IF NOT EXISTS article (
     fetched_at          TEXT
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_article_pmid ON article(pack_id, pmid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_article_pmid ON article(pmid);
 CREATE INDEX IF NOT EXISTS idx_article_tier ON article(evidence_rank, pub_year);
+
+-- Which packs hold which articles. Many-to-many: an article stays once it is
+-- stored, and a pack rebuild or removal changes only its rows here.
+CREATE TABLE IF NOT EXISTS article_pack (
+    article_id INTEGER NOT NULL REFERENCES article(id) ON DELETE CASCADE,
+    pack_id    INTEGER NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
+    PRIMARY KEY (article_id, pack_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_article_pack_pack ON article_pack(pack_id);
 
 CREATE TABLE IF NOT EXISTS mesh_term (
     article_id INTEGER NOT NULL REFERENCES article(id) ON DELETE CASCADE,
@@ -169,9 +185,10 @@ def check_version(conn: sqlite3.Connection) -> None:
     if found != LITERATURE_SCHEMA_VERSION:
         raise CorpusSchemaVersionMismatch(
             f"Corpus schema version is {found}, this build expects "
-            f"{LITERATURE_SCHEMA_VERSION}. Run "
+            f"{LITERATURE_SCHEMA_VERSION}. Recreate it with "
+            f"`health-agent literature install <pack> --rebuild`, or "
             f"`health-agent literature build --from <medline.xml> --rebuild` "
-            f"to recreate it."
+            f"from your own MEDLINE export."
         )
 
 

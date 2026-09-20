@@ -42,6 +42,7 @@ log = get_logger("store.vector")
 
 TABLE_NAME = "chunks"
 EMBED_BATCH = 64
+DELETE_BATCH = 500
 
 
 @dataclass
@@ -159,6 +160,36 @@ class VectorStore:
         if self.table_name in _table_names(db):
             db.drop_table(self.table_name)
         self._table = None
+
+    def chunk_ids(self) -> set[int]:
+        """Every chunk_id the table holds, across all embedders.
+
+        Reads one column, not the rows: a vector table is mostly vectors,
+        and the only question a caller asks here is which SQLite chunks the
+        table still refers to.
+        """
+        table = self._open_table()
+        if table is None:
+            return set()
+        column = table.search().select(["chunk_id"]).limit(None).to_arrow()
+        return {int(v) for v in column.column("chunk_id").to_pylist()}
+
+    def delete_chunks(self, chunk_ids: set[int] | list[int],
+                      batch_size: int = DELETE_BATCH) -> int:
+        """Delete every row keyed by one of these chunk ids. Returns how
+        many ids were sent.
+
+        Batched because the filter is an `IN (...)` literal and a corpus
+        reinstall can leave thousands of stale ids behind at once.
+        """
+        ids = sorted({int(c) for c in chunk_ids})
+        table = self._open_table()
+        if table is None or not ids:
+            return 0
+        for start in range(0, len(ids), batch_size):
+            batch = ids[start:start + batch_size]
+            table.delete(f"chunk_id IN ({', '.join(str(c) for c in batch)})")
+        return len(ids)
 
     def search(self, vector: list[float], *, embedder_name: str,
                limit: int = 5) -> list[dict]:

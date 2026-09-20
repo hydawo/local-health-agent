@@ -43,11 +43,10 @@ PubMed results (by journal, or by the `systematic_review` tier plus that
 journal name), not a second integration to build. The corpus module has one
 ingestion path, not two.
 
-**Not shipped — network acquisition, moved to its own item, #1a below.** Slice
-1 reads a MEDLINE XML file you already have; there is no `update-literature`
-command and no code path that reaches NCBI. RAG-vs-fine-tuning, bounded scope,
-and meta-analyses-first were slice 1 design calls and remain the plan for
-slice 2's fetch step:
+**Network acquisition shipped separately, as packs; see #1a below.** Slice
+1 read a MEDLINE XML file you already had and had no code path that reached
+NCBI. RAG-vs-fine-tuning, bounded scope, and meta-analyses-first were slice 1
+design calls, and the packs kept all three:
 
 - **RAG, not fine-tuning.** Fine-tuning is expensive, needs real ML infra, risks
   degrading tool-calling through catastrophic forgetting, would have to be
@@ -72,10 +71,21 @@ slice 1 is the half of it that works without ever opening a socket.
 *Depends on: #1 (slice 1). PubMed and ClinicalTrials.gov, fetched on request
 rather than lazily — see 2a for why lazy fetching is the wrong shape.*
 
-The half of #1 that slice 1 deliberately left out: a command that reaches
-PubMed's E-utilities (and, later, ClinicalTrials.gov) to build or refresh a
-corpus, instead of requiring a MEDLINE XML export supplied by hand. Carries
-forward, unchanged from the original design:
+**Shipped for PubMed, in the packs shape** ([design](docs/superpowers/specs/2026-09-20-literature-packs-design.md)).
+The corpus is not fetched per user from E-utilities. A maintainer runs
+`health-agent literature build-pack <slug>` against NCBI once, publishes the
+file to a GitHub release, and a person installs it with `health-agent
+literature install <slug>`. Five packs, each one broad body-system area
+(`sample`, `cardiovascular`, `metabolic`, `sleep`, `exercise`), abstracts and
+citation metadata only. The one file that can open a socket under
+`literature/` is `fetch/client.py`, and its allow list is two services. Both
+commands ask once before connecting. `THREAT_MODEL.md` Claim 6 has the full
+disclosure. Refresh is a person running `install` again; there is no update
+check.
+
+**Still open: ClinicalTrials.gov.** No pack draws on it, and nothing in the
+fetch client knows its host. Carried forward, unchanged from the original
+design, and now mostly done:
 
 - **Dated citations**, so "a 2019 meta-analysis found…" reads honestly rather
   than as evergreen fact, refreshed by an explicit `update-literature` command
@@ -89,10 +99,11 @@ forward, unchanged from the original design:
   because the fixture corpus and any hand-supplied export raise the same
   question.
 - **Privacy**: this is the first place literature grounding actually reaches
-  the network. `THREAT_MODEL.md` gains a claim here — it correctly has none
-  yet, because slice 1 adds no network call. Query terms sent to PubMed are a
-  new disclosure surface and need the same explicit, versioned consent
-  treatment the cloud tier already has, not a silent default-on fetch.
+  the network. `THREAT_MODEL.md` now has Claim 6 for it. Query terms never
+  leave a user's machine at all. The only terms sent to PubMed are the
+  catalog's fixed MeSH lists, sent by the maintainer's `build-pack`. A user's
+  `install` reveals a pack name, and the versioned consent notice says so
+  before the first connection.
 
 ## 2. Medical intake: retired, and why
 
@@ -129,7 +140,8 @@ Two things from the retired item survive, relocated:
 
 ### 2a. What a literature fetch reveals
 
-*Depends on: #1a. Decide this before building it.*
+*Depends on: #1a. Decided 2026-09-20, with the packs
+([design](docs/superpowers/specs/2026-09-20-literature-packs-design.md)).*
 
 The earlier framing of this item, seeding the corpus from the intake list, no
 longer applies: there is no intake list to turn into queries. What remains is
@@ -143,9 +155,12 @@ buys no speed. What it buys is that no health question ever opens a socket,
 which is what `offline-check` proves today and would stop proving under lazy
 fetching.
 
-**The remaining question: what does a fetch request disclose?** Any request
-to NCBI reveals something about the person making it, keyed to their IP.
-The options, in the order the project currently favours them:
+**The remaining question was what a fetch request discloses, and packs
+answered it.** A user's request goes to GitHub, not NCBI, and names a pack,
+which is a body-system area and never a condition. That is the rule the catalog in
+`health_agent/literature/packs.py` enforces, and adding a pack below that line
+is a design change rather than a catalog edit. The options as they stood
+before that decision, kept for the record:
 
 - **Pre-built topic packs** downloaded wholesale (a "cardiometabolic" pack, a
   "sleep" pack), so a request reveals a category, not a person. The
@@ -162,9 +177,10 @@ The options, in the order the project currently favours them:
   rather than solving it and adds a dependency the project has so far
   avoided.
 
-Whichever is chosen, `THREAT_MODEL.md` gains a claim, and the fetch step gets
-the same consent treatment the cloud tier already has: a versioned notice that
-says exactly what leaves the machine.
+The first option is what shipped. User-typed topics were not built, and no
+proxy or Tor routing was added. `THREAT_MODEL.md` Claim 6 is the claim this
+paragraph promised, and the fetch step has the versioned notice
+(`health-agent literature-consent --show-notice`).
 
 **The synthesis risk does not go away without intake.** A dropped-in file that
 says "type 2 diabetes" next to a diabetes literature pack makes accidental
@@ -273,6 +289,13 @@ an answer to the literature snapshot that existed when it was given.
 Track what was added or changed on each literature refresh, so an answer given
 at one point in time is traceable against the corpus that existed then, rather
 than the corpus being a silent, unversioned blob.
+
+Pack versions are now the lineage unit. Every installed pack carries the
+version it was built at, and `health-agent literature packs` lists them. A
+query change or a parser fix means a new pack version rather than an edit to
+an old one. The maintainer's build is the one point where the corpus changes.
+The changelog itself is still missing, meaning a record per pack version of
+what came in and what went out.
 
 ## 7. Model-agnostic local inference
 
