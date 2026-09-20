@@ -247,3 +247,111 @@ def test_gather_assembles_the_sheet(fixture_index):
     assert sheet.labs["analytes"] >= 20
     assert {s.subject for s in sheet.signals} >= {"ldl", "vitamin_d"}
     assert sheet.literature is None
+
+
+from health_agent.agent import guardrail
+
+
+def _sheet_with(*signals, literature=None, gaps=()):
+    return visit_prep.Sheet(
+        prepared="2026-09-20", window_days=30,
+        labs={"reports": 3, "first": "2025-03-04", "last": "2026-03-10", "analytes": 23},
+        healthkit={"recent_start": "2026-08-22", "recent_end": "2026-09-20",
+                   "prior_start": "2026-07-23", "prior_end": "2026-08-21"},
+        signals=list(signals), gaps=list(gaps), literature=literature)
+
+
+def _ldl():
+    return visit_prep.lab_signals_for(_trend(
+        _point("2025-09-12", 128, 0, 99, "H"), _point("2026-03-10", 112, 0, 99, "H")))[0]
+
+
+def _a1c():
+    return visit_prep.lab_signals_for(_trend(
+        _point("2025-03-04", 5.9, 4.8, 5.6, "H", via_ocr=True, unit="%"),
+        _point("2026-03-10", 5.4, 4.8, 5.6, unit="%"), key="hba1c", label="HbA1c"))[0]
+
+
+def _near():
+    return visit_prep.lab_signals_for(_trend(
+        _point("2025-09-12", 80, 0, 99), _point("2026-03-10", 92, 0, 99)))[0]
+
+
+def _rhr():
+    return visit_prep.Signal(
+        kind="metric_shift", subject="HKQuantityTypeIdentifierRestingHeartRate",
+        label="Resting heart rate",
+        evidence={"recent_mean": 64.0, "prior_mean": 58.0, "unit": "bpm",
+                  "recent_days": 30, "prior_days": 30,
+                  "recent_start": "2026-08-22", "recent_end": "2026-09-20",
+                  "prior_start": "2026-07-23", "prior_end": "2026-08-21",
+                  "threshold_text": "5 bpm"})
+
+
+def test_rendered_sheet_has_the_sections_and_the_disclaimer():
+    text = visit_prep.render(_sheet_with(_ldl(), _a1c(), _near(), _rhr(),
+                                         gaps=["Body mass: none in the export"]))
+    assert text.startswith("# Questions for your next visit")
+    assert "Prepared 2026-09-20" in text
+    assert "## Looked at" in text
+    assert "- 3 lab reports, 2025-03-04 to 2026-03-10, 23 analytes" in text
+    assert "- Apple Health, 2026-08-22 to 2026-09-20 against 2026-07-23 to 2026-08-21" in text
+    assert "No literature corpus is installed" in text
+    assert "## Questions" in text
+    assert "## Not enough data to check" in text
+    assert "- Body mass: none in the export" in text
+    assert text.rstrip().endswith(f"_{guardrail.DISCLAIMER}_")
+
+
+def test_every_question_opens_with_ask_and_cites_its_evidence():
+    text = visit_prep.render(_sheet_with(_ldl(), _a1c(), _near(), _rhr()))
+    questions = [l for l in text.splitlines() if l[:2].rstrip(".").isdigit() or l[:3].rstrip(".").isdigit()]
+    assert len(questions) == 4
+    for q in questions:
+        assert "**Ask" in q, q
+    assert "112 mg/dL on 2026-03-10, flagged H against the printed range of 0-99 mg/dL" in text
+    assert "down from 128 mg/dL on 2025-09-12" in text
+    assert "(labs_2026-03-10.pdf, p.1; labs_2025-09-12.pdf, p.1)" in text
+    assert "5.4% on 2026-03-10, inside the printed range of 4.8-5.6%" in text
+    assert "was 5.9% on 2025-03-04, flagged H" in text
+    assert "read by OCR" in text
+    assert "92 mg/dL on 2026-03-10, inside the printed range of 0-99 mg/dL and closer to its upper limit than the 80 mg/dL on 2025-09-12" in text
+    assert "averaged 64 bpm over 2026-08-22 to 2026-09-20 against 58 bpm over 2026-07-23 to 2026-08-21" in text
+    assert "this tool's cutoff for pointing it out (5 bpm)" in text
+    assert "not something this tool can say" in text
+
+
+def test_literature_line_when_present():
+    ldl = _ldl()
+    ldl.literature = {"title": "Lipid lowering in adults", "year": 2026,
+                      "tier": "meta_analysis", "pmid": "42613609"}
+    text = visit_prep.render(_sheet_with(ldl, literature={"packs": ["sample"], "articles": 2000}))
+    assert "- Literature: sample (2,000 articles)" in text
+    assert "Evidence you could bring up: *Lipid lowering in adults* (2026, meta_analysis, PMID 42613609)." in text
+    assert "No literature corpus" not in text
+
+
+def test_empty_sheet_says_nothing_stood_out():
+    text = visit_prep.render(_sheet_with())
+    assert "Nothing stood out" in text
+    assert "## Questions" not in text
+
+
+@pytest.mark.parametrize("with_literature", [False, True])
+def test_the_guardrail_finds_nothing_to_flag_in_a_rendered_sheet(with_literature):
+    """The argument for having no model in this feature, pinned: the
+    templates never read as interpretation or as a recalled threshold."""
+    ldl = _ldl()
+    if with_literature:
+        ldl.literature = {"title": "Lipid lowering in adults", "year": 2026,
+                          "tier": "meta_analysis", "pmid": "42613609"}
+    text = visit_prep.render(_sheet_with(ldl, _a1c(), _near(), _rhr(),
+                                         gaps=["Body mass: none in the export"]))
+    flags = guardrail.check(text, used_tools=True, returned_pmids=frozenset({"42613609"}))
+    assert flags == [], [str(f) for f in flags]
+
+
+def test_the_fixture_sheet_passes_the_guardrail(fixture_index):
+    sheet = visit_prep.gather(fixture_index, today=date(2026, 9, 20))
+    flags = guardrail.check(visit_prep.render(sheet), used_tools=True)
+    assert flags == [], [str(f) for f in flags]

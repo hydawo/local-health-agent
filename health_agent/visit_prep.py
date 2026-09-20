@@ -270,3 +270,123 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
         signals=lab + shifts,
         gaps=gaps,
     )
+
+from .agent.guardrail import DISCLAIMER
+
+# Every question opens with "Ask". The sentence after it holds only the
+# person's values, the printed range, dates and citations: the register
+# the guardrail's personal and reporting exemptions are written for, and
+# `tests/test_visit_prep.py` runs the guard over a rendered sheet to hold
+# these templates to it.
+QUESTION_TEMPLATES = {
+    "lab_out_of_range": "**Ask whether your {label} needs follow-up.**",
+    "lab_returned_to_range": "**Ask whether your {label} should keep being checked.**",
+    "lab_near_limit": "**Ask whether your {label} is worth watching.**",
+    "metric_shift": "**Ask about your {label}.**",
+}
+NO_CORPUS = ("No literature corpus is installed; `health-agent literature "
+             "packs` lists what is available")
+INTRO = ("Prepared {date} from your own files. Nothing here is a conclusion; "
+         "each item is a value that stood out and a question it might be "
+         "worth asking. Bring the reports named.")
+NOTHING = ("Nothing stood out in what was looked at. That is a statement about "
+           "this tool's cutoffs, not about your health.")
+
+
+def _val(e: dict) -> str:
+    unit = f" {e['unit']}" if e.get("unit") and e["unit"] != "%" else (e.get("unit") or "")
+    return f"{e['value']:g}{unit}"
+
+
+def _range(e: dict) -> str:
+    unit = f" {e['unit']}" if e.get("unit") and e["unit"] != "%" else (e.get("unit") or "")
+    return f"{e['range']}{unit}" if e.get("range") else "no printed range"
+
+
+def _flagged(e: dict) -> str:
+    return f", flagged {e['flag']}" if e.get("flag") else ""
+
+
+def _cite(*evidence: dict | None) -> str:
+    parts = []
+    for e in evidence:
+        if e:
+            file_and_page = ", ".join(e["citation"].split(", ")[:2])
+            parts.append(file_and_page)
+    return f"({'; '.join(parts)})"
+
+
+def _evidence_sentence(s: Signal) -> str:
+    e = s.evidence
+    if s.kind == "lab_out_of_range":
+        latest, prev = e["latest"], e["previous"]
+        text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)} "
+                f"against the printed range of {_range(latest)}")
+        if prev:
+            direction = "down" if latest["value"] < prev["value"] else "up"
+            text += f", {direction} from {_val(prev)} on {prev['date']}"
+        return f"{text} {_cite(latest, prev)}."
+    if s.kind == "lab_returned_to_range":
+        latest, prev = e["latest"], e["previous"]
+        return (f"It was {_val(prev)} on {prev['date']}{_flagged(prev)}, and "
+                f"{_val(latest)} on {latest['date']}, inside the printed range of "
+                f"{_range(latest)} {_cite(prev, latest)}.")
+    if s.kind == "lab_near_limit":
+        latest, prev = e["latest"], e["previous"]
+        side = "upper" if e["limit_side"] == "high" else "lower"
+        return (f"It was {_val(latest)} on {latest['date']}, inside the printed "
+                f"range of {_range(latest)} and closer to its {side} limit than the "
+                f"{_val(prev)} on {prev['date']} {_cite(latest, prev)}.")
+    unit = e.get("unit") or ""
+    return (f"It averaged {e['recent_mean']:g} {unit} over {e['recent_start']} to "
+            f"{e['recent_end']} against {e['prior_mean']:g} {unit} over "
+            f"{e['prior_start']} to {e['prior_end']}, a shift larger than this "
+            f"tool's cutoff for pointing it out ({e['threshold_text']}). Whether "
+            f"that matters is not something this tool can say.").replace("  ", " ")
+
+
+def render(sheet: Sheet) -> str:
+    lines = ["# Questions for your next visit", "",
+             INTRO.format(date=sheet.prepared), "", "## Looked at"]
+    labs = sheet.labs
+    if labs["reports"]:
+        lines.append(f"- {labs['reports']} lab reports, {labs['first']} to "
+                     f"{labs['last']}, {labs['analytes']} analytes")
+    else:
+        lines.append("- No lab reports in the index")
+    hk = sheet.healthkit
+    if hk:
+        lines.append(f"- Apple Health, {hk['recent_start']} to {hk['recent_end']} "
+                     f"against {hk['prior_start']} to {hk['prior_end']}")
+    else:
+        lines.append("- No Apple Health export in the index")
+    if sheet.literature:
+        packs = ", ".join(sheet.literature["packs"]) or "corpus"
+        lines.append(f"- Literature: {packs} ({sheet.literature['articles']:,} articles)")
+    else:
+        lines.append(f"- {NO_CORPUS}")
+    lines.append("")
+
+    if sheet.signals:
+        lines.append("## Questions")
+        for i, s in enumerate(sheet.signals, 1):
+            lines.append(f"{i}. {QUESTION_TEMPLATES[s.kind].format(label=s.label)} "
+                         f"{_evidence_sentence(s)}")
+            for caveat in s.caveats:
+                lines.append(f"   {caveat}")
+            if s.literature:
+                lit = s.literature
+                year = f"{lit['year']}, " if lit.get("year") else ""
+                lines.append(f"   Evidence you could bring up: *{lit['title']}* "
+                             f"({year}{lit['tier']}, PMID {lit['pmid']}).")
+        lines.append("")
+    else:
+        lines.extend([NOTHING, ""])
+
+    if sheet.gaps:
+        lines.append("## Not enough data to check")
+        lines.extend(f"- {g}" for g in sheet.gaps)
+        lines.append("")
+
+    lines.append(f"_{DISCLAIMER}_")
+    return "\n".join(lines) + "\n"
