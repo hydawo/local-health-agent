@@ -1,4 +1,4 @@
-"""One HTTP GET, three allowed hosts.
+"""One HTTP GET, two services, three hostnames.
 
 Every byte the corpus ever fetches goes through `get`. Keeping the transport
 in one function is what lets THREAT_MODEL.md name the network surface as
@@ -9,6 +9,7 @@ URL to anywhere else is refused before a socket opens.
 
 from __future__ import annotations
 
+import http.client
 import urllib.error
 import urllib.request
 from urllib.parse import urlencode, urlparse
@@ -56,17 +57,31 @@ def _allowed(url: str) -> str | None:
 
     `urlparse(...).hostname` is used rather than `netloc` because it strips
     userinfo and port: `https://github.com@evil.com/` has hostname evil.com,
-    and a netloc check would have let it through. Membership is exact, so
+    and a netloc check would have let it through. Any userinfo at all is
+    then refused outright, so the host this function validated is the host
+    urllib will connect to with nothing in between. Membership is exact, so
     `evil.github.com` and `github.com.evil.com` are refused too. The scheme
     is checked separately so a plain-http URL to an allowed host is refused
     as well: the allow list is a promise about who sees the request, and
-    that promise needs TLS.
+    that promise needs TLS. A URL urlparse cannot read (`https://[x]/`)
+    is refused the same way rather than escaping as a ValueError.
     """
-    parsed = urlparse(url)
-    host = parsed.hostname or ""
-    if parsed.scheme != "https" or host not in ALLOWED_HOSTS:
+    try:
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        userinfo = parsed.username is not None or parsed.password is not None
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or userinfo or host not in ALLOWED_HOSTS:
         return None
     return host
+
+
+def _host_for_message(url: str) -> str:
+    try:
+        return urlparse(url).hostname or "?"
+    except ValueError:
+        return "?"
 
 
 class _AllowListRedirects(urllib.request.HTTPRedirectHandler):
@@ -75,7 +90,11 @@ class _AllowListRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         if _allowed(newurl) is None:
-            raise FetchError(urlparse(newurl).hostname or "?", code,
+            # Drain and close as the stock handler does on refusal, so the
+            # connection is not left half-read.
+            fp.read()
+            fp.close()
+            raise FetchError(_host_for_message(newurl), code,
                              "redirect to a host outside the allow list")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
@@ -93,7 +112,7 @@ def get(url: str, *, timeout: float = 60.0) -> bytes:
     any socket is opened."""
     host = _allowed(url)
     if host is None:
-        raise FetchError(urlparse(url).hostname or "?", None,
+        raise FetchError(_host_for_message(url), None,
                          "host is not on the allow list")
     try:
         return _open(url, timeout)
@@ -101,3 +120,9 @@ def get(url: str, *, timeout: float = 60.0) -> bytes:
         raise FetchError(host, exc.code, str(exc.reason)) from exc
     except urllib.error.URLError as exc:
         raise FetchError(host, None, str(exc.reason)) from exc
+    # The read phase can fail after the connection is up: a socket timeout,
+    # a reset, a truncated body. Those arrive as OSError or HTTPException,
+    # not URLError, and callers should see one type for "the network said
+    # no" whichever layer said it.
+    except (OSError, http.client.HTTPException) as exc:
+        raise FetchError(host, None, f"{type(exc).__name__}: {exc}") from exc

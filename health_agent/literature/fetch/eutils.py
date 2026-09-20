@@ -50,8 +50,13 @@ def search(term: str, *, get=client.get) -> SearchHandle:
     webenv = re.search(r"<WebEnv>([^<]+)</WebEnv>", body)
     key = re.search(r"<QueryKey>(\d+)</QueryKey>", body)
     if not (count and webenv and key):
+        # NCBI answers a bad request with HTTP 200 and an <ERROR> element, so
+        # its own explanation is the useful part of the message when present.
+        error = re.search(r"<ERROR>([^<]*)</ERROR>", body)
+        detail = f": {error.group(1).strip()}" if error else ""
         raise client.FetchError("eutils.ncbi.nlm.nih.gov", None,
-                                "esearch response had no Count/WebEnv/QueryKey")
+                                "esearch response had no Count/WebEnv/QueryKey"
+                                + detail)
     return SearchHandle(int(count.group(1)), webenv.group(1), key.group(1))
 
 
