@@ -1357,7 +1357,7 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
 def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int]] | None:
     """slug -> (version, article_count) from the local `pack` table, or None
     when there is no corpus. A `CorpusSchemaVersionMismatch` propagates:
-    an empty dict here would let `packs` say "not installed" and `doctor`
+    an empty dict here would let `packs` say "not installed" and `check`
     say "All good" about a corpus that is neither."""
     from .literature import schema as lit_schema
 
@@ -1774,10 +1774,10 @@ def cmd_literature_consent(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
-def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
+def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
     """Environment check (plan §5a): report what works and what doesn't."""
     ok = True
-    print("health-agent doctor\n")
+    print("health-agent check\n")
 
     print(f"data folder    {cfg.data_dir}"
           f"{'' if cfg.data_dir.is_dir() else '   (does not exist yet)'}")
@@ -1845,7 +1845,7 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"                 Semantic search is disabled until this works; "
               f"keyword search still runs.")
     else:
-        _doctor_chat_model(embedder.host)
+        _check_chat_model(embedder.host)
 
     print("\nNetwork posture")
     print("  This build makes no outbound calls except to the Ollama host above,")
@@ -1871,10 +1871,10 @@ def _physical_memory_gb() -> float | None:
         return None
 
 
-def _doctor_chat_model(host: str) -> None:
+def _check_chat_model(host: str) -> None:
     """The `ask` model is a separate pull from the embedding model, and
     `ollama pull nomic-embed-text` alone passes every other check here. A
-    tester should learn at `doctor` that `ask` has no model, and, on a
+    tester should learn at `check` that `ask` has no model, and, on a
     smaller machine, which one to pull instead."""
     model = ollama_client.resolve_chat_model()
     try:
@@ -2109,8 +2109,8 @@ def build_parser() -> argparse.ArgumentParser:
                          choices=("ollama", "hashing"))
     p_embed.set_defaults(func=cmd_embed)
 
-    p_doctor = sub.add_parser("doctor", help="check the environment and index")
-    p_doctor.set_defaults(func=cmd_doctor)
+    p_check = sub.add_parser("check", help="what is installed, what is missing, and the fix for each")
+    p_check.set_defaults(func=cmd_check)
 
     p_offline = sub.add_parser(
         "offline-check", help="prove the local tier makes no network calls",
