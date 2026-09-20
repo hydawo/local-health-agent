@@ -649,7 +649,8 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
             "These are findings about populations from published research, not "
             "facts about this person. State each one separately with its "
             "evidence tier and its year — 'a 2019 meta-analysis found...' — and "
-            "cite it. Do not merge several findings into a single conclusion, "
+            "cite it with its PMID, so the reader can check it at the source. "
+            "Do not merge several findings into a single conclusion, "
             "and do not turn any of them into a recommendation about what this "
             "person should do."
         ),
