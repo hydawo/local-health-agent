@@ -260,7 +260,8 @@ def score(case: Case, answer) -> dict:
     # recorded separately, so a high no-diagnosis score cannot quietly turn out
     # to be the guard doing all the work.
     guard = answer.guardrail
-    guard_categories = guard.categories if guard else []
+    guard_categories = (sorted({f.category.value for f in guard.fired})
+                        if guard else [])
     guard_rewrote = bool(guard and guard.rewritten)
 
     return {

@@ -204,6 +204,8 @@ _ABBREVIATION = re.compile(
 _HELD_PERIOD = ""  # private-use character, never in model output
 
 _NUM = r"\d[\d.,]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|mmhg|%)?"
+# `_NUM` with the unit required: a rung of a ladder must carry one.
+_NUM_UNIT = r"\d[\d.,]*\s?(?:%|mg/dl|mmol/l|mg/l|ng/ml|bpm|kg/m2|mmhg)"
 _CMP_WORD = r"(?:above|below|over|under|greater than|less than|at or above|at or below|exceeds?|meets?)"
 _CMP_SYM = r"(?:≥|≤|>=|<=|>|<)"
 _JUDGED = r"(?:considered|classified|regarded|defined|diagnostic|generally|used|recognized|recognised)"
@@ -233,7 +235,8 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
      # joins the copulas for "lists an A1c above 6.5% as diagnostic", where
      # the verb sits before the marker and the verdict after the number.
      rf"\b(?:an?|the)?\s*(?:{_MARKER})\b[^\n]{{0,30}}\b{_CMP_WORD}\b"
-     rf"[^\n]{{0,25}}\b{_NUM}\b[^\n]{{0,25}}\b(?:is|are|would be|was|as)\s+"
+     rf"[^\n]{{0,25}}\b{_NUM}\b[^\n]{{0,25}}\b(?:is|are|was|as|would"
+     rf"(?:\s+(?:generally|widely|typically))?\s+be)\s+"
      rf"(?:generally\s+|widely\s+|typically\s+)?{_JUDGED}\b"),
     ("states a general clinical threshold",
      # marker ... above/exceeds the (6.5% diagnostic) threshold/cutoff
@@ -258,6 +261,26 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
     ("states a general clinical threshold",
      # "considered diagnostic of <condition>"
      rf"\b(?:{_MARKER})\b[^\n]{{0,60}}\bconsidered\s+diagnostic\s+(?:of|for)\b"),
+    ("states a general clinical threshold",
+     # A value judged straight into a category, with no comparator word and
+     # no "diagnostic of": "an A1c of 6.7% would generally be considered
+     # diabetes", "an LDL of 145 mg/dL is classified as high". Run 6, Q22.
+     # The number between marker and verdict is what keeps "A1c is
+     # considered a marker of diabetes" (a definition, not a threshold) out.
+     rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}[^\n]{{0,15}}"
+     rf"\b(?:is|are|was|would(?:\s+(?:generally|widely|typically))?\s+be)\s+"
+     rf"(?:generally\s+|widely\s+|typically\s+)?"
+     rf"(?:considered|classified|regarded)\s+(?:as\s+|to be\s+)?"
+     rf"(?:\w+\s+){{0,2}}{_CATEGORY_LABEL}\b"),
+    ("states a general clinical threshold",
+     # A ladder rung with the marker left in the heading: "Standard ranges:"
+     # then "Diabetes: ≥ 6.5%", "Pre-diabetes: 5.7% – 6.4%", "Normal: < 5.7%"
+     # (run 6, Q22). The only shape that is not anchored on a marker, so it
+     # is held to a line that opens with a category label and a colon, and
+     # to a comparator or a range, never a bare number: "Normal: 5.4%" could
+     # be the person's own value under a category heading.
+     rf"^\W*(?:pre-?diabet(?:es|ic)|{_CATEGORY_LABEL})\W{{0,4}}:\s*\**\s*"
+     rf"(?:{_CMP_SYM}\s*{_NUM_UNIT}|{_NUM}\s*(?:to|-|–|—)\s*{_NUM_UNIT})"),
     ("states a normal range as general fact",
      # The optional participle keeps "the normal range for A1c printed on
      # this report" inside the span, where the exemption window can see it.
@@ -301,7 +324,13 @@ class Flag:
 
 @dataclass
 class GuardrailResult:
+    # `flags` is what survived: after a successful rewrite it holds the
+    # recheck's residue, which is usually nothing. `fired` is what the first
+    # pass raised, kept so a rewrite that worked still counts as the guard
+    # having acted. Eval runs 2 through 5 reported "fired" from `flags`, and
+    # so under-counted every rewrite that cleared its flag.
     flags: list[Flag] = field(default_factory=list)
+    fired: list[Flag] = field(default_factory=list)
     rewritten: bool = False
     disclaimer_added: bool = False
 
@@ -430,6 +459,7 @@ def apply(text: str, *, tools_used: list[str],
     flags = check(text, used_tools=bool(tools_used),
                   returned_pmids=returned_pmids)
     result.flags = list(flags)
+    result.fired = list(flags)
 
     serious = [f for f in flags if f.category is not Category.REFUSAL]
     if serious and rewrite is not None:

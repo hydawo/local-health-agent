@@ -927,6 +927,7 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
                 "citations_available": answer.citations,
                 "guardrail": {
                     "flags": [str(f) for f in answer.guardrail.flags],
+                    "fired": [str(f) for f in answer.guardrail.fired],
                     "categories": answer.guardrail.categories,
                     "rewritten": answer.guardrail.rewritten,
                     "disclaimer_added": answer.guardrail.disclaimer_added,
