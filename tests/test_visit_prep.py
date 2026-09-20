@@ -2,6 +2,7 @@
 interpreted. The guardrail is run over the rendered sheet as a test oracle."""
 from __future__ import annotations
 
+from datetime import date, timedelta
 from pathlib import Path
 
 import pytest
@@ -149,3 +150,89 @@ def test_lab_signals_over_the_fixtures(fixture_index):
     assert by_subject["hba1c"] == "lab_returned_to_range"
     # one signal per analyte
     assert len(signals) == len(by_subject)
+
+
+def _export_xml(records: list[tuple[str, str, str, str]]) -> str:
+    """Minimal HealthKit export. records: (type, unit, date YYYY-MM-DD, value)."""
+    body = "".join(
+        f' <Record type="HKQuantityTypeIdentifier{t}" sourceName="Synthetic" '
+        f'unit="{u}" creationDate="{d} 08:05:00 -0500" startDate="{d} 08:00:00 -0500" '
+        f'endDate="{d} 08:00:00 -0500" value="{v}"/>\n'
+        for t, u, d, v in records)
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n'
+            ' <ExportDate value="2026-06-30 09:00:00 -0400"/>\n'
+            ' <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01"/>\n'
+            f'{body}</HealthData>\n')
+
+
+def _synthetic_index(tmp_path, records):
+    from health_agent.ingest import healthkit
+    from health_agent.store import sqlite_schema
+    export = tmp_path / "export.xml"
+    export.write_text(_export_xml(records))
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    healthkit.ingest_file(conn, export)
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+    return conn
+
+
+def _days(start: date, n: int) -> list[str]:
+    return [(start + timedelta(days=i)).isoformat() for i in range(n)]
+
+
+def test_metric_shift_rule():
+    assert visit_prep.metric_shift_for([64.0] * 20, [58.0] * 20, ("abs", 5)) is True
+    assert visit_prep.metric_shift_for([62.0] * 20, [58.0] * 20, ("abs", 5)) is False
+    assert visit_prep.metric_shift_for([77.0] * 20, [80.0] * 20, ("pct", 3)) is True
+    assert visit_prep.metric_shift_for([79.0] * 20, [80.0] * 20, ("pct", 3)) is False
+
+
+def test_resting_heart_rate_shift_is_a_signal(tmp_path):
+    prior = [("RestingHeartRate", "count/min", d, "58") for d in _days(date(2026, 5, 1), 30)]
+    recent = [("RestingHeartRate", "count/min", d, "64") for d in _days(date(2026, 5, 31), 30)]
+    conn = _synthetic_index(tmp_path, prior + recent)
+    signals, gaps, window = visit_prep.metric_signals(conn, window_days=30)
+    (signal,) = [s for s in signals if s.subject == "HKQuantityTypeIdentifierRestingHeartRate"]
+    assert signal.kind == "metric_shift"
+    assert signal.evidence["recent_mean"] == 64
+    assert signal.evidence["prior_mean"] == 58
+    assert signal.evidence["threshold_text"] == "5 bpm"
+    assert signal.evidence["recent_start"] == "2026-05-31"
+    assert signal.evidence["recent_end"] == "2026-06-29"
+    assert signal.evidence["prior_start"] == "2026-05-01"
+    assert window["recent_end"] == "2026-06-29"
+    # the four other metrics were looked for and are reported as gaps
+    assert any(g.startswith("Body mass") for g in gaps)
+    assert any(g.startswith("Steps") for g in gaps)
+
+
+def test_metric_windows_anchor_at_the_last_day_present(tmp_path):
+    """An export is a snapshot; 'the last 30 days' means its last 30."""
+    prior = [("BodyMass", "lb", d, "180") for d in _days(date(2025, 1, 1), 30)]
+    recent = [("BodyMass", "lb", d, "170") for d in _days(date(2025, 1, 31), 30)]
+    conn = _synthetic_index(tmp_path, prior + recent)
+    signals, _, window = visit_prep.metric_signals(conn, window_days=30)
+    assert window["recent_end"] == "2025-03-01"
+    assert [s.subject for s in signals] == ["HKQuantityTypeIdentifierBodyMass"]
+
+
+def test_too_few_days_is_a_gap_not_a_signal(tmp_path):
+    # prior ends well before recent begins so the last-30-days window (anchored
+    # at the last recorded day) doesn't reach back into the prior data.
+    prior = [("RestingHeartRate", "count/min", d, "58") for d in _days(date(2026, 4, 1), 30)]
+    recent = [("RestingHeartRate", "count/min", d, "70") for d in _days(date(2026, 5, 31), 10)]
+    conn = _synthetic_index(tmp_path, prior + recent)
+    signals, gaps, _ = visit_prep.metric_signals(conn, window_days=30)
+    assert signals == []
+    assert any(g.startswith("Resting heart rate: 10 days in the last 30") for g in gaps)
+
+
+def test_gather_assembles_the_sheet(fixture_index):
+    sheet = visit_prep.gather(fixture_index, window_days=30, today=date(2026, 9, 20))
+    assert sheet.prepared == "2026-09-20"
+    assert sheet.labs["reports"] == 3
+    assert sheet.labs["analytes"] >= 20
+    assert {s.subject for s in sheet.signals} >= {"ldl", "vitamin_d"}
+    assert sheet.literature is None

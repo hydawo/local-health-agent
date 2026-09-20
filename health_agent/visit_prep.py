@@ -21,7 +21,9 @@ sheet says so.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 
+from . import metrics
 from .store import queries
 from .store.queries import LabPoint, LabTrend
 
@@ -135,3 +137,124 @@ def lab_signals(conn) -> list[Signal]:
         seen.add(key)
         signals.extend(lab_signals_for(queries.lab_trend(conn, key)))
     return signals
+
+
+# Metric alias -> (kind, amount). "abs" is in the metric's unit; "pct" is a
+# percentage of the prior window's mean. Each is well clear of day-to-day
+# noise for that metric; none is a clinical figure.
+SHIFT_THRESHOLDS: dict[str, tuple[str, float]] = {
+    "resting-hr": ("abs", 5),     # bpm
+    "weight": ("pct", 3),         # a few pounds on most adults
+    "steps": ("pct", 25),         # a quarter of the daily count
+    "hrv": ("pct", 20),           # HRV is noisy; smaller shifts are routine
+    "sleep": ("abs", 45 * 60),    # seconds; three quarters of an hour a night
+}
+# Both windows need at least this fraction of their days present.
+MIN_WINDOW_FRACTION = 0.5
+# Unit to print for an "abs" threshold, when the export's own unit string
+# (e.g. "count/min") isn't the one people actually say.
+DISPLAY_UNIT: dict[str, str] = {"resting-hr": "bpm"}
+
+
+def _threshold_text(alias: str, unit: str | None) -> str:
+    kind, amount = SHIFT_THRESHOLDS[alias]
+    if kind == "pct":
+        return f"{amount:g}%"
+    if alias == "sleep":
+        return f"{amount / 60:g} min"
+    return f"{amount:g} {DISPLAY_UNIT.get(alias, unit or '')}".strip()
+
+
+def metric_shift_for(recent: list[float], prior: list[float],
+                     threshold: tuple[str, float]) -> bool:
+    if not recent or not prior:
+        return False
+    recent_mean = sum(recent) / len(recent)
+    prior_mean = sum(prior) / len(prior)
+    kind, amount = threshold
+    if kind == "abs":
+        return abs(recent_mean - prior_mean) >= amount
+    if prior_mean == 0:
+        return False
+    return abs(recent_mean - prior_mean) / abs(prior_mean) * 100 >= amount
+
+
+def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float]]:
+    """(label, unit, {date: value}) for one metric, sleep via nights."""
+    if alias == "sleep":
+        nights = queries.sleep_nights(conn)
+        return "Sleep", "s", {n["night"]: n["asleep_seconds"] for n in nights
+                              if n["asleep_seconds"]}
+    metric = metrics.resolve(alias)
+    series = queries.metric_series(conn, metric, period="day")
+    values = {p.period_start: p.value for p in series.points if p.value is not None}
+    return metric.label, series.unit, values
+
+
+def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], dict | None]:
+    signals: list[Signal] = []
+    gaps: list[str] = []
+    window: dict | None = None
+    need = max(1, int(window_days * MIN_WINDOW_FRACTION))
+    for alias, threshold in SHIFT_THRESHOLDS.items():
+        label, unit, values = _daily_values(conn, alias)
+        if not values:
+            gaps.append(f"{label}: none in the export")
+            continue
+        last = date.fromisoformat(max(values))
+        recent_start = last - timedelta(days=window_days - 1)
+        prior_start = recent_start - timedelta(days=window_days)
+        prior_end = recent_start - timedelta(days=1)
+        recent = [v for d, v in values.items() if recent_start.isoformat() <= d <= last.isoformat()]
+        prior = [v for d, v in values.items() if prior_start.isoformat() <= d <= prior_end.isoformat()]
+        if window is None or last.isoformat() > window["recent_end"]:
+            window = {"recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
+                      "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat()}
+        if len(recent) < need:
+            gaps.append(f"{label}: {len(recent)} days in the last {window_days}")
+            continue
+        if len(prior) < need:
+            gaps.append(f"{label}: {len(prior)} days in the {window_days} before")
+            continue
+        if not metric_shift_for(recent, prior, threshold):
+            continue
+        identifier = "HKCategoryTypeIdentifierSleepAnalysis" if alias == "sleep" \
+            else metrics.resolve(alias).identifier
+        signals.append(Signal(
+            kind="metric_shift", subject=identifier, label=label,
+            evidence={
+                "recent_mean": round(sum(recent) / len(recent), 1),
+                "prior_mean": round(sum(prior) / len(prior), 1),
+                "unit": unit, "recent_days": len(recent), "prior_days": len(prior),
+                "recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
+                "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat(),
+                "threshold_text": _threshold_text(alias, unit),
+            },
+        ))
+    return signals, gaps, window
+
+
+@dataclass
+class Sheet:
+    prepared: str
+    window_days: int
+    labs: dict
+    healthkit: dict | None
+    signals: list[Signal]
+    gaps: list[str]
+    literature: dict | None = None
+
+
+def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
+    docs = queries.document_summary(conn)
+    lab = lab_signals(conn)
+    shifts, gaps, window = metric_signals(conn, window_days=window_days)
+    return Sheet(
+        prepared=(today or date.today()).isoformat(),
+        window_days=window_days,
+        labs={"reports": docs["documents"], "first": docs["doc_first"],
+              "last": docs["doc_last"], "analytes": docs["analytes"]},
+        healthkit=window,
+        signals=lab + shifts,
+        gaps=gaps,
+    )
