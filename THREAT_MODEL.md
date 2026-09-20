@@ -115,9 +115,13 @@ It refuses. Tests: `test_remote_hosts_are_refused`,
 **Verify:**
 
 ```bash
-grep -rn "urllib\|socket\|requests\|httpx\|aiohttp" health_agent/
+grep -rn "import urllib\|from urllib\|import socket\|import requests\|import httpx\|import aiohttp" health_agent/
 ```
 
+The grep matches imports, as the test does; a bare word like "socket" in a
+help string is not a network call. One extra file appears in the output:
+`offline_check.py` imports `socket` in order to disable it, and the test
+exempts it by name and then checks that it never opens one.
 `test_the_network_surface_is_exactly_three_modules` asserts that exact set and
 fails if it changes. **It counts vendor SDK imports too** — `import anthropic`
 opens sockets as surely as `import urllib`, and a check that only looked for
@@ -189,8 +193,9 @@ Never during `ask`, `ingest`, `search`, or anything else. `offline-check` is
 unchanged and still proves that. Passing `--from` a local file to `install`
 asks for the same consent. It is the same command, and a URL can be passed
 there. Reinstalling a version that is already present stops before any
-request is made. The downloaded file is deleted once its rows are in the
-corpus, so nothing about the download stays on disk beyond the articles.
+request is made, unless you pass `--force` or `--from`. The downloaded file
+is deleted whether or not the install succeeds, so nothing about the download
+stays on disk beyond the articles.
 
 **Where.** Two services, three hostnames, listed in `ALLOWED_HOSTS` in
 `client.py`. Builds go to `eutils.ncbi.nlm.nih.gov`. Downloads go to

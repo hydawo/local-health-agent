@@ -107,9 +107,10 @@ health-agent search "metformin" --kind image   # photos and screenshots only
 
 Everything above is local computation over a SQLite index and a file-based
 vector store. The only process that ever opens a socket is embedding, and only
-to Ollama on localhost (see [Privacy](#privacy)). The one exception is
+to Ollama on localhost (see [Privacy](#privacy)). The two exceptions are
 `literature install`, which downloads a public file once, after a notice, and
-sends nothing of yours (see [Medical literature corpus](#medical-literature-corpus)).
+sends nothing of yours, and `literature build-pack`, a maintainer command that
+queries NCBI (see [Medical literature corpus](#medical-literature-corpus)).
 
 ## Try it without your own data
 
@@ -345,7 +346,7 @@ area, published on this project's GitHub releases:
 
 ```bash
 health-agent literature packs             # the catalog, and what is installed
-health-agent literature install sample    # a first try in under a minute
+health-agent literature install sample    # a first try
 health-agent literature status
 ```
 
@@ -358,15 +359,16 @@ disorders. `exercise` covers physical activity, fitness, training, and
 recovery. The four topical packs hold meta-analyses, systematic reviews,
 guidelines, and randomized controlled trials from 2015 on. Each installs on
 its own, with no dependency on another, and an article in two packs is stored
-once.
+once. Pack sizes, as a download and as an article count, are listed in each
+release's notes.
 
 The first `install` prints a notice and asks before it connects. What the
 download reveals is which pack you chose, your IP address, and the tool's
 version, to GitHub. Nothing from your data folder is sent, and nothing about
 your questions. The pack you pick is visible to the host, which is why packs
 are broad areas and never a single condition. Running `install` again for a
-version you already have makes no request at all. See
-[THREAT_MODEL.md](THREAT_MODEL.md) Claim 6.
+version you already have makes no request at all, unless you pass `--force`
+or `--from`. See [THREAT_MODEL.md](THREAT_MODEL.md) Claim 6.
 
 If you have your own MEDLINE export, `build` still reads it directly:
 
