@@ -397,3 +397,28 @@ def render(sheet: Sheet) -> str:
 
     lines.append(f"_{DISCLAIMER}_")
     return "\n".join(lines) + "\n"
+
+
+def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
+                      embedder_factory=None) -> None:
+    """One finding per lab signal: the best-tiered of the top three hits for
+    the analyte's label. None for metric shifts: a paper about resting heart
+    rate says nothing about this person's watch. In place."""
+    from .literature import corpus as lit_corpus
+    from .literature import store as lit_store
+
+    report = lit_corpus.coverage(literature_conn)
+    sheet.literature = {"packs": [p.split("@")[0] for p in report["packs"]],
+                        "articles": report["article_count"]}
+    for signal in sheet.signals:
+        if not signal.kind.startswith("lab_"):
+            continue
+        found = lit_store.hits(literature_conn, signal.label, limit=3,
+                               vector_path=vector_path,
+                               embedder_factory=embedder_factory)
+        if not found:
+            continue
+        best = min(found, key=lambda f: (f.evidence_rank is None,
+                                         f.evidence_rank or 0))
+        signal.literature = {"title": best.title, "year": best.year,
+                             "tier": best.evidence_tier, "pmid": best.pmid}

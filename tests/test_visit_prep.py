@@ -365,3 +365,48 @@ def test_the_fixture_sheet_passes_the_guardrail(fixture_index):
     sheet = visit_prep.gather(fixture_index, today=date(2026, 9, 20))
     flags = guardrail.check(visit_prep.render(sheet), used_tools=True)
     assert flags == [], [str(f) for f in flags]
+
+
+@pytest.fixture
+def corpus(tmp_path):
+    """The ten-article literature fixture, built without embeddings."""
+    from health_agent.literature import corpus as lit_corpus, medline, packs, schema
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    articles = medline.parse_articles((FIXTURES / "literature" / "corpus.xml").read_bytes())
+    lit_corpus.build(conn, articles, slug="sample", version="1",
+                     license=packs.PACK_LICENSE)
+    conn.commit()
+    return conn
+
+
+def test_attach_literature_fills_lab_signals_only(corpus):
+    ldl, rhr = _ldl(), _rhr()
+    sheet = _sheet_with(ldl, rhr)
+    visit_prep.attach_literature(sheet, corpus)
+    assert sheet.literature["packs"] == ["sample"]
+    assert sheet.literature["articles"] == 10
+    assert ldl.literature is not None
+    assert set(ldl.literature) == {"title", "year", "tier", "pmid"}
+    assert ldl.literature["pmid"].isdigit()
+    assert rhr.literature is None
+
+
+def test_attach_literature_prefers_the_best_tier_of_the_top_three(corpus, monkeypatch):
+    from health_agent.literature import store as lit_store
+    from health_agent.literature.store import Finding
+    found = [Finding(1, "1", "obs", "", "", evidence_tier="observational", evidence_rank=6),
+             Finding(2, "2", "meta", "", "", evidence_tier="meta_analysis", evidence_rank=1),
+             Finding(3, "3", "rct", "", "", evidence_tier="rct", evidence_rank=3)]
+    monkeypatch.setattr(lit_store, "hits", lambda *a, **k: found)
+    ldl = _ldl()
+    visit_prep.attach_literature(_sheet_with(ldl), corpus)
+    assert ldl.literature["pmid"] == "2"
+
+
+def test_attach_literature_with_no_hits_leaves_the_signal_bare(corpus, monkeypatch):
+    from health_agent.literature import store as lit_store
+    monkeypatch.setattr(lit_store, "hits", lambda *a, **k: [])
+    ldl = _ldl()
+    visit_prep.attach_literature(_sheet_with(ldl), corpus)
+    assert ldl.literature is None
