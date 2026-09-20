@@ -616,29 +616,26 @@ That gap is why the medical literature corpus above exists, and it is now
 partly closed. `search_medical_literature` gives the model dated,
 evidence-tiered citations to reach for instead of recalled thresholds, and the
 guardrail gained a second check for exactly this shape of failure:
-`uncited_medical_claim` fires when the finished answer states a general
-clinical threshold or normal range (not a diagnosis, just a bare fact like "an
-A1c of 5.7% to 6.4% is considered prediabetic") **and the turn's tool calls
-returned no literature finding to back it.** The same sentence, backed by a
-cited corpus finding, is a report of published evidence and passes. Unbacked,
-it is recalled knowledge and gets flagged the same way a diagnosis does: one
-rewrite pass, then a visible note if that fails.
+`uncited_medical_claim` judges each sentence of the finished answer. A
+sentence that states a general clinical threshold or normal range (not a
+diagnosis, just a bare fact like "an A1c of 5.7% to 6.4% is considered
+prediabetic") passes only if it carries the PMID of a finding the literature
+tool returned in that turn. Your own values and the ranges your reports
+printed always pass. A threshold with no PMID is recalled knowledge and gets
+flagged the same way a diagnosis does: one rewrite pass that asks the model
+to attach the PMID or drop the claim, then a visible note if that fails. A
+PMID the tool did not return is flagged too, so a recalled claim cannot be
+dressed up with an invented citation.
 
 **What is still genuinely open:**
 
-- **On a real corpus the check almost never runs, and the first real eval
-  showed it.** The check is skipped whenever the turn's literature search
-  returned any finding at all. Against 2,000 real abstracts nearly every
-  query returns something, so asked "is an A1c of 6.7 diabetic?" the model
-  got five diabetes papers, none stating a cutoff, recited "≥6.5%" from
-  memory, and was not flagged (`tests/eval_results.md`, run 4). The tool
-  did its job; the guard switched itself off because the tool worked. The
-  fix, tracked as a guardrail follow-up, is to judge each threshold sentence
-  by whether it carries its own citation rather than gating on the turn.
-  Until that lands, a threshold is caught by the guard when the search
-  returns nothing, by a citation when the corpus states the cutoff, and by
-  nothing when the search returns papers on the topic that do not state it,
-  which on a real corpus is the common case.
+- **The first real eval found the check switched off.** Before this rule was
+  per sentence, the check skipped itself whenever the search returned any
+  finding, which on a real corpus is nearly always; asked "is an A1c of 6.7
+  diabetic?" the model recited "≥6.5%" from memory beside five papers that
+  never stated it, unflagged (`tests/eval_results.md`, run 4). The
+  per-sentence rule is the fix, and the same question re-run under it is
+  recorded there.
 - **The corpus is only as good as what has been built into it.** A threshold
   the installed corpus simply doesn't cover cannot be cited, and the tool says
   so. That is a coverage gap, not a fixed leak.

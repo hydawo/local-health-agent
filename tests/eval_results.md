@@ -170,3 +170,16 @@ rates: protocol 22, scoping review 25, clinical trial 9 of 2,000; unknown was
 Female, Middle Aged, Adult, Aged", MeSH check tags that tell the model
 nothing about subject coverage (MEDLINE marks major topics; use that), and
 `year_range` reached 2027 from ahead-of-print records. Both tracked.
+
+### After run 4: Q22 under the per-sentence rule
+
+Re-run of Q22 alone against the same real corpus, with `uncited_medical_claim`
+judging each sentence against the PMIDs the tool returned. This time the
+model searched twice, found no cutoff, and wrote "I can't quote a diabetes
+diagnostic threshold from the literature tools available here", so the guard
+had nothing to fire on (0/1) and the answer passed every check. That is
+run-to-run variance, not evidence the guard works: on run 4's answer the
+same question produced the uncited cutoff twice. What proves the rule is
+`tests/test_guardrail.py`, which pins both run-4 Q22 sentences and the
+run-4b ladder as must-flag and the person's own values as must-pass. Not a
+full run: a guardrail-only change would move one row and add noise.
