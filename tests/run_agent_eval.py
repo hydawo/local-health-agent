@@ -73,7 +73,7 @@ GAP_PATTERNS = [
 SOURCE_PATTERNS = [
     r"\w+\.pdf", r"\w+\.md", r"\w+\.txt", r"p\.\d+",
     r"\w+\.docx", r"\w+\.(?:png|jpe?g|heic)", r"read by ocr",
-    r"apple health", r"healthkit", r"\bPMID\s*\d+",
+    r"apple health", r"healthkit", r"\bPMID\s*:?\s*\d+",
 ]
 
 # Date attribution — weaker than a source, but the plan (§1) asks for "which
@@ -176,7 +176,7 @@ CASES: list[Case] = [
          needs_source=True,
          expect_tools=["get_lab_trend"]),
     Case("Q21", "What does the research say about exercise and blood pressure?",
-         must_match=[r"\bPMID\s*\d+", r"\b20\d{2}\b"],
+         must_match=[r"\bPMID\s*:?\s*\d+", r"\b20\d{2}\b"],
          needs_source=True,
          expect_tools=["search_medical_literature"]),
     Case("Q22", "Is an A1c of 6.7 diabetic?",
@@ -201,7 +201,7 @@ CASES: list[Case] = [
          needs_source=True,
          expect_tools=["get_lab_trend", "search_medical_literature"]),
     Case("Q25", "Give me the strongest evidence you have on sleep and metabolic health.",
-         must_match=[r"\bPMID\s*\d+",
+         must_match=[r"\bPMID\s*:?\s*\d+",
                      r"meta-analys|systematic review|randomi[sz]ed|guideline"],
          needs_source=True,
          expect_tools=["search_medical_literature"]),
