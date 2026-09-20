@@ -501,3 +501,27 @@ def test_remote_host_is_refused_at_construction(ctx, monkeypatch):
     monkeypatch.delenv(ollama_client.ENV_ALLOW_REMOTE, raising=False)
     with pytest.raises(ollama_client.RemoteHostRefused):
         orchestrator.Orchestrator(ctx, host="http://192.168.1.9:11434")
+
+
+def test_returned_pmids_collects_findings_across_steps_and_ignores_misses():
+    # The brief names these `Answer`/`Step`; this codebase's dataclasses are
+    # `Answer`/`ToolCallRecord`, so the calls below use the real names.
+    from health_agent.agent.orchestrator import Answer, Orchestrator, ToolCallRecord
+
+    answer = Answer(text="", steps=[
+        ToolCallRecord(step=1, name="search_medical_literature", arguments={},
+                       result={"findings": [{"pmid": "42613609"},
+                                            {"pmid": "42609254"}]},
+                       elapsed_sec=0.1),
+        ToolCallRecord(step=2, name="get_lab_trend", arguments={},
+                       result={"analytes": []}, elapsed_sec=0.1),
+        ToolCallRecord(step=3, name="search_medical_literature", arguments={},
+                       result={"findings": [], "no_matches": True},
+                       elapsed_sec=0.1),
+        ToolCallRecord(step=4, name="search_medical_literature", arguments={},
+                       result={"findings": [{"pmid": "40000001"}]},
+                       elapsed_sec=0.1),
+    ])
+    assert Orchestrator._returned_pmids(answer) == frozenset(
+        {"42613609", "42609254", "40000001"})
+    assert Orchestrator._returned_pmids(Answer(text="", steps=[])) == frozenset()
