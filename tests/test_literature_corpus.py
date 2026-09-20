@@ -78,9 +78,57 @@ def test_coverage_reports_what_the_corpus_holds(tmp_path, literature_fixture):
     report = corpus.coverage(conn)
     assert report["article_count"] > 0
     assert "cardiometabolic@2026.02" in report["packs"]
-    assert report["topics"]           # MeSH terms, most common first
+    assert report["topics"]           # major MeSH topics, most common first
+    assert report["topics_from"] == "major_topics"
     assert report["tiers"]            # counts per tier
     assert report["year_range"][0] <= report["year_range"][1]
+    conn.close()
+
+
+def test_coverage_counts_major_topics_not_every_heading(tmp_path):
+    """On 2,000 real abstracts the most common headings were Humans, Male,
+    Female, Middle Aged, Adult, Aged: population check tags, not what the
+    corpus is about. MEDLINE marks the subject headings itself
+    (MajorTopicYN="Y"), so coverage() reads that and infers nothing."""
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    articles = [
+        medline.ParsedArticle(pmid=str(i), title="t", abstract="body",
+                              mesh_terms=["Humans", "Female", "Insomnia"],
+                              major_terms=["Insomnia"])
+        for i in range(3)
+    ]
+    articles.append(medline.ParsedArticle(
+        pmid="9", title="t", abstract="body",
+        mesh_terms=["Humans", "Male", "Gout"], major_terms=["Gout"]))
+    corpus.build(conn, articles, slug="t", version="1", license="CC-BY")
+
+    report = corpus.coverage(conn)
+    assert report["topics"] == ["Insomnia", "Gout"]
+    assert report["topics_from"] == "major_topics"
+    assert report["mesh_terms"] == 5
+    assert report["major_topics"] == 2
+    conn.close()
+
+
+def test_coverage_falls_back_to_every_heading_when_none_is_major(tmp_path,
+                                                                literature_fixture):
+    """An export with no MajorTopicYN attributes at all (older exports, or a
+    hand-built one) would otherwise report no topics for a corpus that has
+    plenty. Falling back to all headings is the only honest alternative;
+    it is labelled so a reader can tell which list they are looking at."""
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    articles = _articles(literature_fixture)
+    for article in articles:
+        article.major_terms = []
+    corpus.build(conn, articles, slug="t", version="1", license="CC-BY")
+
+    report = corpus.coverage(conn)
+    assert report["topics_from"] == "all_mesh_terms"
+    assert report["major_topics"] == 0
+    assert report["topics"] == [
+        "Cholesterol", "Hypertension", "LDL", "Exercise", "Heart Rate", "Sleep"]
     conn.close()
 
 

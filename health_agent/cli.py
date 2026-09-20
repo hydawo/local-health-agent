@@ -1366,7 +1366,13 @@ def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"years:    {report['year_range'][0]}-{report['year_range'][1]}")
         print(f"built:    {report['built']}")
         print("tiers:    " + ", ".join(f"{k}={v}" for k, v in report["tiers"].items()))
-        print("topics:   " + ", ".join(report["topics"][:10]))
+        # Both counts, so a reader can see when the list below is the
+        # fallback (no MajorTopicYN in the export) rather than the subjects.
+        print(f"mesh:     {report['mesh_terms']} distinct terms, "
+              f"{report['major_topics']} marked major")
+        label = ("topics:   " if report["topics_from"] == "major_topics"
+                 else "topics (all MeSH terms, none marked major): ")
+        print(label + ", ".join(report["topics"][:10]))
         return 0
     finally:
         conn.close()

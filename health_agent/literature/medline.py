@@ -28,6 +28,10 @@ class ParsedArticle:
     pub_year: int | None = None
     publication_types: list[str] = field(default_factory=list)
     mesh_terms: list[str] = field(default_factory=list)
+    # The subset of mesh_terms MEDLINE itself marks MajorTopicYN="Y". Kept
+    # as a second list rather than a flag per term so every existing reader
+    # of mesh_terms stays untouched. See _mesh() for why the flag matters.
+    major_terms: list[str] = field(default_factory=list)
     evidence_tier: str = tiers.UNKNOWN
     evidence_rank: int | None = None
     tier_source: str = "unmapped"
@@ -60,7 +64,39 @@ def _abstract(article) -> str:
     return "\n\n".join(parts)
 
 
+def _mesh(citation) -> tuple[list[str], list[str]]:
+    """All MeSH descriptors, and the ones MEDLINE marks as major topics.
+
+    Most headings on a real record are not about the subject at all: on
+    2,000 abstracts the six most common were Humans, Male, Female, Middle
+    Aged, Adult and Aged. MEDLINE distinguishes the subject headings itself
+    with `MajorTopicYN="Y"` on the descriptor, so that distinction is read
+    off the record and never guessed from a title. An absent attribute
+    counts as "N": treating absence as major would put every check tag
+    straight back into the topic list.
+    """
+    terms: list[str] = []
+    major: list[str] = []
+    for node in citation.findall("./MeshHeadingList/MeshHeading/DescriptorName"):
+        term = "".join(node.itertext()).strip()
+        if not term:
+            continue
+        terms.append(term)
+        if (node.get("MajorTopicYN") or "").strip().upper() == "Y":
+            major.append(term)
+    return terms, major
+
+
 def _year(article) -> int | None:
+    """The year as the source states it, future years included.
+
+    Ahead-of-print records carry the year of the issue they are scheduled
+    for, so a fresh export can hold articles dated a year or two ahead (3 of
+    2,000 in one build). That is what PubMed records, and a citation should
+    match its source; clamping to today would make the stored year disagree
+    with the record it claims to cite. coverage()'s year range therefore
+    reports it as is.
+    """
     raw = _text(article, "./Journal/JournalIssue/PubDate/Year")
     if raw and raw.isdigit():
         return int(raw)
@@ -108,6 +144,8 @@ def parse_articles(xml_bytes: bytes) -> list[ParsedArticle]:
         tier, rank, source = tiers.resolve(pub_types)
         retracted, note = _retraction(citation)
 
+        mesh_terms, major_terms = _mesh(citation)
+
         doi = None
         for node in entry.findall("./PubmedData/ArticleIdList/ArticleId"):
             if node.get("IdType") == "doi":
@@ -121,12 +159,8 @@ def parse_articles(xml_bytes: bytes) -> list[ParsedArticle]:
             journal=_text(article, "./Journal/Title"),
             pub_year=_year(article),
             publication_types=pub_types,
-            mesh_terms=[
-                "".join(n.itertext()).strip()
-                for n in citation.findall(
-                    "./MeshHeadingList/MeshHeading/DescriptorName")
-                if "".join(n.itertext()).strip()
-            ],
+            mesh_terms=mesh_terms,
+            major_terms=major_terms,
             evidence_tier=tier,
             evidence_rank=rank,
             tier_source=source,

@@ -20,8 +20,8 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
-    <MeshHeading><DescriptorName>Exercise</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Exercise</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
   <PubmedData>
@@ -50,7 +50,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Sleep</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Sleep</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -80,7 +80,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Cholesterol</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -111,7 +111,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">LDL</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -141,8 +141,8 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Heart Rate</DescriptorName></MeshHeading>
-    <MeshHeading><DescriptorName>Exercise</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Heart Rate</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Exercise</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
   <PubmedData>
@@ -171,7 +171,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Heart Rate</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Heart Rate</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -201,7 +201,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Sleep</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Sleep</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -231,7 +231,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">LDL</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
    </MeshHeadingList>
    <CommentsCorrectionsList>
@@ -265,7 +265,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Hypertension</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>
@@ -297,7 +297,7 @@
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>LDL</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">LDL</DescriptorName></MeshHeading>
     <MeshHeading><DescriptorName>Cholesterol</DescriptorName></MeshHeading>
    </MeshHeadingList>
   </MedlineCitation>

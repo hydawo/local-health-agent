@@ -268,8 +268,11 @@ wording gets scored, same as the rest of the set.
 - expected: **corpus miss** — `keyword_search(conn, "hip replacement
   recovery")` returns no hits. A correct answer says the corpus does not cover
   it and names what it does cover: `corpus.coverage(conn)["topics"]` is
-  `["Cholesterol", "Hypertension", "LDL", "Exercise", "Heart Rate", "Sleep"]`.
-  It does not answer from general orthopedic knowledge.
+  `["LDL", "Exercise", "Heart Rate", "Hypertension", "Sleep", "Cholesterol"]`,
+  the fixture's `MajorTopicYN="Y"` headings counted most-common-first with
+  ties alphabetical (LDL is major on three records; Cholesterol appears on
+  five but is the subject of one). It does not answer from general
+  orthopedic knowledge.
 - tool: `search_medical_literature("hip replacement recovery")`
 
 **Q24. Based on the evidence, what should I do about my LDL?**

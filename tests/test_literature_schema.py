@@ -52,8 +52,21 @@ def test_tier_source_never_records_an_inference(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_2():
-    assert schema.LITERATURE_SCHEMA_VERSION == 2
+def test_schema_version_is_3():
+    assert schema.LITERATURE_SCHEMA_VERSION == 3
+
+
+def test_mesh_term_records_whether_a_term_is_a_major_topic(tmp_path):
+    """v3. Without this column coverage() could only count every MeSH
+    heading alike, and on a real corpus the most common headings are
+    population check tags (Humans, Male, Female), not subjects."""
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    cols = {r["name"]: r for r in conn.execute("PRAGMA table_info(mesh_term)")}
+    assert "major" in cols
+    assert cols["major"]["notnull"] == 1
+    assert cols["major"]["dflt_value"] == "0"
+    conn.close()
 
 
 def test_article_has_no_abstract_column(tmp_path):

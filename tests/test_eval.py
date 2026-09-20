@@ -301,8 +301,12 @@ def test_q23_hip_replacement_recovery_is_a_corpus_miss(litbox):
     hits = lit_store.keyword_search(litbox, "hip replacement recovery")
     assert hits == []
     coverage = lit_corpus.coverage(litbox)
+    # Major topics only (MajorTopicYN="Y" in the fixture), most common
+    # first, ties alphabetical. Cholesterol is on five records but is the
+    # subject of one, which is the whole point of counting major terms.
+    assert coverage["topics_from"] == "major_topics"
     assert coverage["topics"] == [
-        "Cholesterol", "Hypertension", "LDL", "Exercise", "Heart Rate", "Sleep"]
+        "LDL", "Exercise", "Heart Rate", "Hypertension", "Sleep", "Cholesterol"]
 
 
 def test_q24_ldl_findings_and_labs_stay_separate(evalbox, litbox):
