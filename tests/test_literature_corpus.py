@@ -171,3 +171,59 @@ def test_embedding_the_corpus_marks_chunks_and_is_resumable(tmp_path,
     assert first > 0
     assert embed.embed_corpus(conn, store, embedder) == 0  # nothing pending
     conn.close()
+
+
+def _one(pmid: str, title: str = "t") -> medline.ParsedArticle:
+    return medline.ParsedArticle(pmid=pmid, title=title, abstract="Some abstract text.",
+                                 publication_types=["Randomized Controlled Trial"],
+                                 evidence_tier="rct", evidence_rank=3,
+                                 tier_source="publication_type")
+
+
+def test_two_packs_sharing_a_pmid_store_it_once(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, [_one("1"), _one("2")], slug="exercise", version="1", license="x")
+    corpus.build(conn, [_one("2"), _one("3")], slug="cardiovascular", version="1", license="x")
+
+    assert conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] == 3
+    links = conn.execute("SELECT COUNT(*) AS n FROM article_pack").fetchone()["n"]
+    assert links == 4
+    counts = {r["slug"]: r["article_count"] for r in conn.execute("SELECT slug, article_count FROM pack")}
+    assert counts == {"exercise": 2, "cardiovascular": 2}
+    assert corpus.coverage(conn)["shared_articles"] == 1
+    conn.close()
+
+
+def test_rebuilding_a_pack_unlinks_articles_it_no_longer_holds(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, [_one("1"), _one("2")], slug="sleep", version="1", license="x")
+    corpus.build(conn, [_one("2")], slug="sleep", version="1", license="x")
+    assert conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] == 1
+    assert conn.execute("SELECT pmid FROM article").fetchone()["pmid"] == "2"
+    conn.close()
+
+
+def test_removing_a_pack_keeps_articles_another_pack_still_links(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, [_one("1"), _one("2")], slug="exercise", version="1", license="x")
+    corpus.build(conn, [_one("2")], slug="cardiovascular", version="1", license="x")
+    removed = corpus.remove_pack(conn, "exercise")
+    assert removed == 1
+    pmids = {r["pmid"] for r in conn.execute("SELECT pmid FROM article")}
+    assert pmids == {"2"}
+    assert [r["slug"] for r in conn.execute("SELECT slug FROM pack")] == ["cardiovascular"]
+    conn.close()
+
+
+def test_a_newer_pack_version_replaces_the_older_one(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, [_one("1")], slug="sleep", version="2026.09", license="x")
+    corpus.build(conn, [_one("1"), _one("2")], slug="sleep", version="2026.10", license="x")
+    packs = [(r["slug"], r["version"]) for r in conn.execute("SELECT slug, version FROM pack")]
+    assert packs == [("sleep", "2026.10")]
+    assert conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] == 2
+    conn.close()

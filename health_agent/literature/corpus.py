@@ -49,19 +49,36 @@ def _chunks(text: str) -> list[str]:
 def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
           slug: str, version: str, license: str,
           full_text: bool = False) -> BuildStats:
-    """Write a pack and its articles. Re-running with the same pmid updates."""
+    """Write a pack and its articles. One row per PMID, linked to the pack.
+
+    Re-running with the same slug replaces the pack's membership: articles
+    it no longer holds are unlinked, and deleted if no other pack links
+    them. A newer version replaces the older one's row, so the `pack` table
+    always says which version of each pack is installed. Every mutable
+    article column is refreshed on conflict, not just abstract/tier, because
+    a corrected license or a retraction has to land.
+
+    Note on vectors: every write here deletes and re-inserts the article's
+    chunks, even when the article was already present (linked from another
+    pack). The new chunk rows get new ids, so any LanceDB rows embedded
+    under the old ids become orphaned — `embed_corpus` will pick up and
+    embed the new ones, but nothing here reclaims the old vectors. See the
+    task report for why that is left alone in this task.
+    """
     stats = BuildStats()
     built_at = datetime.now().astimezone().isoformat(timespec="seconds")
 
     conn.execute(
         "INSERT INTO pack(slug, title, version, built_at, article_count) "
-        "VALUES(?, ?, ?, ?, 0) ON CONFLICT(slug, version) DO UPDATE SET "
-        "built_at = excluded.built_at",
+        "VALUES(?, ?, ?, ?, 0) ON CONFLICT(slug) DO UPDATE SET "
+        "version = excluded.version, built_at = excluded.built_at",
         (slug, slug, version, built_at),
     )
-    pack_id = conn.execute(
-        "SELECT id FROM pack WHERE slug = ? AND version = ?",
-        (slug, version)).fetchone()["id"]
+    pack_id = conn.execute("SELECT id FROM pack WHERE slug = ?",
+                           (slug,)).fetchone()["id"]
+    previously_linked = {r["article_id"] for r in conn.execute(
+        "SELECT article_id FROM article_pack WHERE pack_id = ?", (pack_id,))}
+    now_linked: set[int] = set()
 
     for article in articles:
         body = article.abstract.strip()
@@ -72,16 +89,15 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             continue
 
         conn.execute(
-            "INSERT INTO article(pack_id, pmid, doi, title, journal, "
-            "pub_year, publication_types, evidence_tier, evidence_rank, "
-            "tier_source, license, full_text_available, retracted, "
-            "retraction_note, fetched_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "INSERT INTO article(pmid, doi, title, journal, pub_year, "
+            "publication_types, evidence_tier, evidence_rank, tier_source, "
+            "license, full_text_available, retracted, retraction_note, "
+            "fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             # Every mutable column is refreshed here, not just abstract/tier. A
             # rebuild that silently kept a stale `license` would defeat the
             # column's whole purpose: the PMC Open Access subset mixes CC-BY,
             # CC-BY-NC and CC-BY-NC-ND, so a corrected license has to land.
-            "ON CONFLICT(pack_id, pmid) DO UPDATE SET "
+            "ON CONFLICT(pmid) DO UPDATE SET "
             "doi = excluded.doi, title = excluded.title, "
             "journal = excluded.journal, "
             "pub_year = excluded.pub_year, "
@@ -93,16 +109,17 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             "retracted = excluded.retracted, "
             "retraction_note = excluded.retraction_note, "
             "fetched_at = excluded.fetched_at",
-            (pack_id, article.pmid, article.doi, article.title,
-             article.journal, article.pub_year,
-             json.dumps(article.publication_types), article.evidence_tier,
-             article.evidence_rank, article.tier_source, license,
-             int(full_text), int(article.retracted), article.retraction_note,
-             built_at),
+            (article.pmid, article.doi, article.title, article.journal,
+             article.pub_year, json.dumps(article.publication_types),
+             article.evidence_tier, article.evidence_rank, article.tier_source,
+             license, int(full_text), int(article.retracted),
+             article.retraction_note, built_at),
         )
-        article_id = conn.execute(
-            "SELECT id FROM article WHERE pack_id = ? AND pmid = ?",
-            (pack_id, article.pmid)).fetchone()["id"]
+        article_id = conn.execute("SELECT id FROM article WHERE pmid = ?",
+                                  (article.pmid,)).fetchone()["id"]
+        conn.execute("INSERT OR IGNORE INTO article_pack(article_id, pack_id) "
+                     "VALUES(?, ?)", (article_id, pack_id))
+        now_linked.add(article_id)
 
         conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
                      (article_id,))
@@ -121,10 +138,11 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
             stats.chunks += 1
         stats.articles += 1
 
-    conn.execute(
-        "UPDATE pack SET article_count = "
-        "(SELECT COUNT(*) FROM article WHERE pack_id = ?) WHERE id = ?",
-        (pack_id, pack_id))
+    for article_id in previously_linked - now_linked:
+        conn.execute("DELETE FROM article_pack WHERE article_id = ? AND pack_id = ?",
+                     (article_id, pack_id))
+    _delete_orphans(conn)
+    _refresh_count(conn, pack_id)
     # rebuild_chunk_fts() issues its own commit, and calling it here — before
     # any commit of ours — makes that commit the one that closes out the whole
     # build. A crash between a separate `conn.commit()` here and the rebuild
@@ -134,6 +152,31 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
     log.info("built pack %s@%s: %d articles, %d chunks, %d skipped",
              slug, version, stats.articles, stats.chunks, stats.skipped)
     return stats
+
+
+def _delete_orphans(conn: sqlite3.Connection) -> int:
+    """An article no pack links is gone with the pack that brought it."""
+    cursor = conn.execute(
+        "DELETE FROM article WHERE id NOT IN (SELECT article_id FROM article_pack)")
+    return cursor.rowcount
+
+
+def _refresh_count(conn: sqlite3.Connection, pack_id: int) -> None:
+    conn.execute(
+        "UPDATE pack SET article_count = "
+        "(SELECT COUNT(*) FROM article_pack WHERE pack_id = ?) WHERE id = ?",
+        (pack_id, pack_id))
+
+
+def remove_pack(conn: sqlite3.Connection, slug: str) -> int:
+    """Drop a pack and the articles only it held. Returns articles removed."""
+    row = conn.execute("SELECT id FROM pack WHERE slug = ?", (slug,)).fetchone()
+    if row is None:
+        raise KeyError(slug)
+    conn.execute("DELETE FROM pack WHERE id = ?", (row["id"],))
+    removed = _delete_orphans(conn)
+    schema.rebuild_chunk_fts(conn)
+    return removed
 
 
 def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
@@ -158,7 +201,7 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
     if not total:
         return {"packs": packs, "article_count": 0, "topics": [],
                 "topics_from": "major_topics", "mesh_terms": 0,
-                "major_topics": 0, "tiers": {},
+                "major_topics": 0, "tiers": {}, "shared_articles": 0,
                 "year_range": [None, None], "built": None}
 
     counts = conn.execute(
@@ -186,6 +229,12 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
         "mesh_terms": counts["all_terms"],
         "major_topics": counts["major_terms"],
         "tiers": tiers_seen,
+        # An article held by more than one pack: it is one finding, not one
+        # per pack that carries it, so a shared-corpus reviewer can tell the
+        # link table is actually doing its job.
+        "shared_articles": conn.execute(
+            "SELECT COUNT(*) AS n FROM (SELECT article_id FROM article_pack "
+            "GROUP BY article_id HAVING COUNT(*) > 1)").fetchone()["n"],
         # As the source states it: ahead-of-print records can carry a future
         # year, and medline._year() explains why that is left alone.
         "year_range": [years["lo"], years["hi"]],

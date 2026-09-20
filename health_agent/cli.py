@@ -1363,6 +1363,9 @@ def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
         report = lit_corpus.coverage(conn)
         print(f"packs:    {', '.join(report['packs']) or '(none)'}")
         print(f"articles: {report['article_count']}")
+        if report["shared_articles"]:
+            print(f"shared:   {report['shared_articles']} article(s) in "
+                  f"more than one pack")
         print(f"years:    {report['year_range'][0]}-{report['year_range'][1]}")
         print(f"built:    {report['built']}")
         print("tiers:    " + ", ".join(f"{k}={v}" for k, v in report["tiers"].items()))
