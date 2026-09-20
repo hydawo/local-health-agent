@@ -17,7 +17,7 @@ model. Three reasons.
   the person and "your LDL is high, consider a statin". Run 6 showed a
   smaller model reaching for recalled thresholds on the first question
   that invited them. A visit-prep sheet is nothing but invitations.
-- It has to work on the machine that cannot run the model. `doctor` now
+- It has to work on the machine that cannot run the model. `check` now
   tells that person which model to pull; `visit-prep` should not need one.
 - Determinism is what makes it testable. The same index produces the same
   sheet, and the guardrail can be run over the rendered output as a test
@@ -169,7 +169,7 @@ contains a threshold, a category word applied to the person ("high",
   moved from `agent/tools.py::_literature_hits`, which becomes a one-line
   call.
 - `health_agent/cli.py`: `cmd_visit_prep` and its parser entry. The
-  `doctor` network posture text stays as it is: this command is offline.
+  `check` network posture text stays as it is: this command is offline.
 - `README.md`: a section after "Medical literature corpus", and the
   roadmap pointer in "What's next" updated.
 - `ROADMAP.md` #3: shipped, with what it does not do (notes) stated.
