@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-LITERATURE_SCHEMA_VERSION = 2
+LITERATURE_SCHEMA_VERSION = 3
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS corpus_meta (
@@ -70,7 +70,12 @@ CREATE INDEX IF NOT EXISTS idx_article_tier ON article(evidence_rank, pub_year);
 
 CREATE TABLE IF NOT EXISTS mesh_term (
     article_id INTEGER NOT NULL REFERENCES article(id) ON DELETE CASCADE,
-    term       TEXT NOT NULL
+    term       TEXT NOT NULL,
+    -- MEDLINE's own MajorTopicYN, as 1/0. coverage() counts only major
+    -- terms: counting every heading alike named the population (Humans,
+    -- Male, Female, Middle Aged) instead of the subject. (v3; v2 had no
+    -- column, so every heading counted the same.)
+    major      INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_mesh_term ON mesh_term(term);

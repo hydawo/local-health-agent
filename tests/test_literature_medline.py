@@ -24,8 +24,9 @@ SAMPLE = b"""<?xml version="1.0"?>
     </PublicationTypeList>
    </Article>
    <MeshHeadingList>
-    <MeshHeading><DescriptorName>Hypertension</DescriptorName></MeshHeading>
-    <MeshHeading><DescriptorName>Exercise</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="Y">Hypertension</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName MajorTopicYN="N">Exercise</DescriptorName></MeshHeading>
+    <MeshHeading><DescriptorName>Humans</DescriptorName></MeshHeading>
    </MeshHeadingList>
    <CommentsCorrectionsList>
     <CommentsCorrections RefType="Cites"><PMID>111</PMID></CommentsCorrections>
@@ -87,7 +88,26 @@ def test_tier_comes_from_publication_types():
 
 def test_mesh_terms_are_captured():
     (article,) = medline.parse_articles(SAMPLE)
-    assert article.mesh_terms == ["Hypertension", "Exercise"]
+    assert article.mesh_terms == ["Hypertension", "Exercise", "Humans"]
+
+
+def test_major_topics_are_read_from_the_majortopicyn_attribute():
+    """Only MajorTopicYN="Y" counts. An absent attribute is not a major
+    topic either: older exports omit it, and treating absence as "Y" would
+    put every check tag (Humans, Male, Female) back into the topic list."""
+    (article,) = medline.parse_articles(SAMPLE)
+    assert article.major_terms == ["Hypertension"]
+
+
+def test_a_record_without_major_flags_has_no_major_terms():
+    """An export that omits the attribute yields terms and no majors;
+    corpus.coverage() handles that case by falling back to every term."""
+    unflagged = SAMPLE.replace(b' MajorTopicYN="Y"', b"").replace(
+        b' MajorTopicYN="N"', b"")
+    assert b"MajorTopicYN" not in unflagged
+    (article,) = medline.parse_articles(unflagged)
+    assert article.mesh_terms == ["Hypertension", "Exercise", "Humans"]
+    assert article.major_terms == []
 
 
 def test_retraction_is_detected_from_comments_corrections():

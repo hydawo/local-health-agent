@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -108,9 +107,11 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
         conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
                      (article_id,))
         conn.execute("DELETE FROM mesh_term WHERE article_id = ?", (article_id,))
+        major = set(article.major_terms)
         conn.executemany(
-            "INSERT INTO mesh_term(article_id, term) VALUES(?, ?)",
-            [(article_id, term) for term in article.mesh_terms])
+            "INSERT INTO mesh_term(article_id, term, major) VALUES(?, ?, ?)",
+            [(article_id, term, int(term in major))
+             for term in article.mesh_terms])
 
         for index, chunk in enumerate(_chunks(body)):
             conn.execute(
@@ -136,15 +137,39 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
 
 
 def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
-    """What this corpus actually holds. Returned whenever a search misses."""
+    """What this corpus actually holds. Returned whenever a search misses.
+
+    `topics` lists subjects, not populations. Counting every MeSH heading
+    alike gave, on 2,000 real abstracts, `Humans, Male, Female, Middle Aged,
+    Adult, Aged, ...`: true of the corpus and useless as an answer to "what
+    does your literature cover?". MEDLINE marks the subject headings itself
+    (`MajorTopicYN="Y"`, stored as `mesh_term.major`), so only those are
+    counted. A corpus with no major flags at all (an export that omits the
+    attribute, or a hand-written one) falls back to every heading rather than
+    reporting nothing; `topics_from` says which list the reader is looking at,
+    and `mesh_terms` / `major_topics` give the distinct counts behind it.
+
+    Ties are broken alphabetically, on purpose: the previous version left the
+    order to whichever index SQLite happened to scan.
+    """
     packs = [f"{r['slug']}@{r['version']}" for r in conn.execute(
         "SELECT slug, version FROM pack ORDER BY slug")]
     total = conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"]
     if not total:
         return {"packs": packs, "article_count": 0, "topics": [],
-                "tiers": {}, "year_range": [None, None], "built": None}
+                "topics_from": "major_topics", "mesh_terms": 0,
+                "major_topics": 0, "tiers": {},
+                "year_range": [None, None], "built": None}
 
-    topics = Counter(r["term"] for r in conn.execute("SELECT term FROM mesh_term"))
+    counts = conn.execute(
+        "SELECT COUNT(DISTINCT term) AS all_terms, "
+        "COUNT(DISTINCT CASE WHEN major = 1 THEN term END) AS major_terms "
+        "FROM mesh_term").fetchone()
+    topics_from = "major_topics" if counts["major_terms"] else "all_mesh_terms"
+    topics = [r["term"] for r in conn.execute(
+        "SELECT term, COUNT(*) AS n FROM mesh_term "
+        + ("WHERE major = 1 " if topics_from == "major_topics" else "")
+        + "GROUP BY term ORDER BY n DESC, term LIMIT ?", (max_topics,))]
     tiers_seen = {r["evidence_tier"]: r["n"] for r in conn.execute(
         "SELECT evidence_tier, COUNT(*) AS n FROM article "
         "GROUP BY evidence_tier ORDER BY n DESC")}
@@ -156,8 +181,13 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
     return {
         "packs": packs,
         "article_count": total,
-        "topics": [term for term, _ in topics.most_common(max_topics)],
+        "topics": topics,
+        "topics_from": topics_from,
+        "mesh_terms": counts["all_terms"],
+        "major_topics": counts["major_terms"],
         "tiers": tiers_seen,
+        # As the source states it: ahead-of-print records can carry a future
+        # year, and medline._year() explains why that is left alone.
         "year_range": [years["lo"], years["hi"]],
         "built": built,
     }
