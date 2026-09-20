@@ -61,6 +61,7 @@ Setup and inspection:
 
 ```bash
 health-agent ingest ~/Downloads/export.zip     # export.xml, export.zip, PDFs, notes, photos, .docx, or a folder
+health-agent literature install sample         # optional: ~2,000 PubMed abstracts, one download, asks first
 health-agent doctor                            # what's installed, what's missing
 health-agent stats
 ```
@@ -106,7 +107,9 @@ health-agent search "metformin" --kind image   # photos and screenshots only
 
 Everything above is local computation over a SQLite index and a file-based
 vector store. The only process that ever opens a socket is embedding, and only
-to Ollama on localhost (see [Privacy](#privacy)).
+to Ollama on localhost (see [Privacy](#privacy)). The one exception is
+`literature install`, which downloads a public file once, after a notice, and
+sends nothing of yours (see [Medical literature corpus](#medical-literature-corpus)).
 
 ## Try it without your own data
 
@@ -337,9 +340,38 @@ as ungrounded rather than presented as though it came from your data.
 about X" from a **local, curated corpus of MEDLINE citations**, dated,
 evidence-tiered, and cited by PMID, instead of the model's training data.
 
+The corpus arrives as packs. Each is one download of abstracts on one broad
+area, published on this project's GitHub releases:
+
+```bash
+health-agent literature packs             # the catalog, and what is installed
+health-agent literature install sample    # a first try in under a minute
+health-agent literature status
+```
+
+There are five. `sample` is about 2,000 recent papers across all four areas
+below, with no evidence filter, so the tiers show as they really are.
+`cardiovascular` covers blood pressure, cholesterol, HDL, LDL, and
+cardiovascular disease. `metabolic` covers blood glucose, HbA1c, type 2
+diabetes, obesity, and thyroid. `sleep` covers sleep duration, quality, and
+disorders. `exercise` covers physical activity, fitness, training, and
+recovery. The four topical packs hold meta-analyses, systematic reviews,
+guidelines, and randomized controlled trials from 2015 on. Each installs on
+its own, with no dependency on another, and an article in two packs is stored
+once.
+
+The first `install` prints a notice and asks before it connects. What the
+download reveals is which pack you chose, your IP address, and the tool's
+version, to GitHub. Nothing from your data folder is sent, and nothing about
+your questions. The pack you pick is visible to the host, which is why packs
+are broad areas and never a single condition. Running `install` again for a
+version you already have makes no request at all. See
+[THREAT_MODEL.md](THREAT_MODEL.md) Claim 6.
+
+If you have your own MEDLINE export, `build` still reads it directly:
+
 ```bash
 health-agent literature build --from medline_export.xml --slug cardiometabolic
-health-agent literature status
 health-agent literature build --from medline_export.xml --slug cardiometabolic --rebuild
 ```
 
@@ -350,9 +382,10 @@ A few things worth stating plainly:
   tells the model not to answer from recalled medical knowledge instead of
   quietly falling back on it. That is the exact failure this tool exists to
   close (see [Not a medical device](#not-a-medical-device)).
-- **`health-agent literature build`** is what creates one, from a MEDLINE XML
-  export you supply. See [LICENSES.md](LICENSES.md) for what's retained and
-  under what terms.
+- **`health-agent literature install`** is how most people get one, and
+  **`health-agent literature build`** creates one from a MEDLINE XML export
+  you supply. See [LICENSES.md](LICENSES.md) for what's retained and under
+  what terms.
   A corpus built by an older release is refused on open, with a message
   naming `--rebuild`, which deletes the corpus (and only the corpus) before
   building.
@@ -372,11 +405,10 @@ A few things worth stating plainly:
   tool says so in its payload whenever a floor is set, and a filtered miss
   is reported as a filter result rather than as "the corpus holds nothing".
   Trial protocols are kept, flagged, and unranked: a plan reports no results.
-- **Slice 1 ships no way to fetch a corpus over the network.** `literature
-  build` reads a MEDLINE XML file you already have; there is no `update` or
-  `fetch` command, and no code path in this release opens a socket to NCBI or
-  anywhere else. Network acquisition, with its own licensing and consent
-  requirements, is the next release. See [ROADMAP.md](ROADMAP.md) #1.
+- **Nothing updates on its own.** There is no update check and no background
+  fetch. A newer pack version reaches you when you run `install` again, and
+  the tool never connects at any other time. `offline-check` still proves
+  that the ask path cannot.
 
 ## Design notes worth knowing
 
@@ -460,19 +492,20 @@ The design commitment (plan §5): the default path makes no outbound network
 calls, and the cloud tier is an explicit, clearly flagged opt-in rather than a
 silent fallback.
 
-**Exactly two modules can reach the network**, and the split is the point:
+**Exactly three modules can reach the network**, and the split is the point:
 
 | Module | Tier | Talks to |
 | --- | --- | --- |
 | `ollama_client.py` | local | Ollama on loopback, on-device inference |
 | `agent/backends.py` | cloud | Anthropic, only after recorded consent |
+| `literature/fetch/client.py` | packs | NCBI and GitHub, from two commands, after a separate notice |
 
 The local one is enforced, not assumed: a non-loopback Ollama host is refused
 unless you explicitly set `HEALTH_AGENT_ALLOW_REMOTE_OLLAMA=1`, because pointing
 this at someone else's inference server would quietly turn the local tier into a
 hybrid one.
 
-A test (`test_the_network_surface_is_exactly_two_modules`) fails if that set
+A test (`test_the_network_surface_is_exactly_three_modules`) fails if that set
 ever changes, **and it counts the vendor SDK**, because `import anthropic`
 opens sockets just as surely as `import urllib`. A check that only looked for
 stdlib transports would have passed while the cloud backend shipped data off the
@@ -640,10 +673,11 @@ too, so a recalled claim cannot be dressed up with an invented citation.
 - **The corpus is only as good as what has been built into it.** A threshold
   the installed corpus simply doesn't cover cannot be cited, and the tool says
   so. That is a coverage gap, not a fixed leak.
-- **Slice 1 has no network fetch.** A corpus has to be built from a MEDLINE
-  export you already have (`health-agent literature build`); there is no
-  `update-literature` command yet, so keeping coverage current is manual. See
-  [ROADMAP.md](ROADMAP.md) #1a.
+- **Coverage is what you have installed.** Packs (`health-agent literature
+  install`, see [Medical literature corpus](#medical-literature-corpus) and
+  [THREAT_MODEL.md](THREAT_MODEL.md) Claim 6) make a corpus one download
+  away, and keeping it current is still a command you run, never something
+  the tool does for you.
 - **The check is still a regex, with the same limits the rest of the guardrail
   states plainly** (see [`agent/guardrail.py`](health_agent/agent/guardrail.py)'s
   own docstring): it cannot understand a sentence, and it will miss a claim
@@ -657,9 +691,8 @@ too, so a recalled claim cannot be dressed up with an invented citation.
 most of the others is **medical literature grounding**: a curated local corpus
 with evidence-graded, dated citations, so the tool can say what published
 research reports about a marker instead of the model recalling it. Retrieval,
-tiering, and the `search_medical_literature` tool are built and described
-above; what is not built is a way to acquire a corpus over the network without
-you supplying the MEDLINE export yourself. That has a concrete motivation from
+tiering, the `search_medical_literature` tool, and packs to install a corpus
+with are built and described above. The motivation was concrete and came from
 this build. Adversarial probing caught the model volunteering a clinical
 threshold from its training data, uncited, undated, and invisible to the
 guardrail's pattern check.
