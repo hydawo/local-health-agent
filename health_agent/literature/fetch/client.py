@@ -1,4 +1,4 @@
-"""One HTTP GET, two services, three hostnames.
+"""One HTTP GET, two services, four hostnames.
 
 Every byte the corpus ever fetches goes through `get`. Keeping the transport
 in one function is what lets THREAT_MODEL.md name the network surface as
@@ -19,9 +19,13 @@ from health_agent import __version__
 USER_AGENT = f"health-agent/{__version__} (+https://github.com/hydawo/local-health-agent)"
 
 # NCBI for pack builds; GitHub for pack downloads. Release assets redirect to
-# objects.githubusercontent.com, which is the only redirect followed.
+# a githubusercontent.com host, and only those redirects are followed. Two
+# names because GitHub has used both: the first real install against the
+# packs-v1 release was refused at release-assets.githubusercontent.com when
+# only objects.* was listed, which is the allow list doing its job.
 ALLOWED_HOSTS: frozenset[str] = frozenset({
-    "eutils.ncbi.nlm.nih.gov", "github.com", "objects.githubusercontent.com",
+    "eutils.ncbi.nlm.nih.gov", "github.com",
+    "objects.githubusercontent.com", "release-assets.githubusercontent.com",
 })
 
 

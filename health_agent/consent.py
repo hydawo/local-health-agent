@@ -114,7 +114,7 @@ it. Two literature commands do, and only when you run them:
 
   health-agent literature install <pack>
     Downloads one pack file from github.com (the project's releases),
-    which hands the file off to objects.githubusercontent.com.
+    which hands the file off to a githubusercontent.com host.
     What the request reveals: which pack you chose, your IP address, and
     this tool's version. Nothing from your data folder. Nothing about
     your questions. Packs are deliberately broad (cardiovascular, sleep)

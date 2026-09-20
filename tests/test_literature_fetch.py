@@ -259,17 +259,33 @@ def test_redirect_refusal_drains_and_closes_the_response(newurl):
     assert fp.read_called and fp.closed
 
 
-def test_redirect_to_the_asset_host_keeps_our_user_agent():
+@pytest.mark.parametrize("host", [
+    "objects.githubusercontent.com",
+    # Where GitHub actually sent the first real install; the allow list
+    # refused it, which is the behaviour, and this is the fix.
+    "release-assets.githubusercontent.com",
+])
+def test_redirect_to_an_asset_host_keeps_our_user_agent(host):
     import urllib.request
     handler = client._AllowListRedirects()
     req = urllib.request.Request("https://github.com/x",
                                  headers={"User-Agent": client.USER_AGENT})
     new = handler.redirect_request(
-        req, _FakeResponse(), 302, "Found", {},
-        "https://objects.githubusercontent.com/asset")
+        req, _FakeResponse(), 302, "Found", {}, f"https://{host}/asset")
     assert isinstance(new, urllib.request.Request)
     assert new.get_header("User-agent") == client.USER_AGENT
-    assert new.full_url == "https://objects.githubusercontent.com/asset"
+    assert new.full_url == f"https://{host}/asset"
+
+
+def test_redirect_to_an_unlisted_githubusercontent_host_is_refused():
+    """The allow list is exact names, not a suffix: `evil.githubusercontent.com`
+    would otherwise pass."""
+    import urllib.request
+    handler = client._AllowListRedirects()
+    req = urllib.request.Request("https://github.com/x")
+    with pytest.raises(client.FetchError):
+        handler.redirect_request(req, _FakeResponse(), 302, "Found", {},
+                                 "https://evil.githubusercontent.com/asset")
 
 
 @pytest.mark.parametrize("url", [

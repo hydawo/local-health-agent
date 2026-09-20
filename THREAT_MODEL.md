@@ -197,10 +197,11 @@ request is made, unless you pass `--force` or `--from`. The downloaded file
 is deleted whether or not the install succeeds, so nothing about the download
 stays on disk beyond the articles.
 
-**Where.** Two services, three hostnames, listed in `ALLOWED_HOSTS` in
+**Where.** Two services, four hostnames, listed in `ALLOWED_HOSTS` in
 `client.py`. Builds go to `eutils.ncbi.nlm.nih.gov`. Downloads go to
 `github.com`, which serves release assets through a redirect to
-`objects.githubusercontent.com`, so that host is allowed as well. A URL to any
+`release-assets.githubusercontent.com` (older releases used
+`objects.githubusercontent.com`), so both are allowed as well. A URL to any
 other host is refused before a socket opens. So is a plain-`http://` URL to an
 allowed host, and so is a URL carrying a username or password. A redirect is a
 second request and gets the same check, so an allowed host cannot bounce the
