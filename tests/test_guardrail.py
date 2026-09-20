@@ -254,6 +254,22 @@ def _uncited(flags):
     # The README's own example of what the guard catches.
     "Clinical definitions often cite specific thresholds (e.g., an A1c of "
     "5.7% to 6.4% is considered prediabetic).",
+    # A guideline dressed as a lab's stock phrase. "reference range" was
+    # briefly an exemption and these leaked through it.
+    "The reference range for diabetes is HbA1c ≥ 6.5%.",
+    "Diabetes reference range: HbA1c ≥ 6.5%",
+    "Reference range for diabetes: an A1c above 6.5% is considered diabetic.",
+    "The reference range for prediabetes is an A1c of 5.7% to 6.4%.",
+    # A bare "lists" is a guideline verb as often as a report verb.
+    "The ADA lists an A1c above 6.5% as the threshold for diabetes.",
+    "The ADA listed an A1c above 6.5% as the diagnostic threshold in 2010.",
+    "Guidelines list an A1c above 6.5% as diagnostic",
+    # Definitional sentences around a range.
+    "Prediabetes is an A1c of 5.7% to 6.4%.",
+    "Prediabetes is defined as an A1c of 5.7% to 6.4%.",
+    "Prediabetes is generally an HbA1c of 5.7% to 6.4%.",
+    "An A1c of 5.7% to 6.4% indicates prediabetes.",
+    "Prediabetes corresponds to HbA1c 5.7-6.4%.",
 ])
 def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
@@ -304,6 +320,9 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "(PMID 42613609).",
     # A table row.
     "| 2026-03-10 | 112 | 0-99 | H | labs_2026-03-10.pdf |",
+    # A category word near a range, but attributed to the person.
+    "Their LDL was high: LDL of 145 to 160 mg/dL across three reports.",
+    "An A1c above 6.5% is considered diabetic (PubMed ID 42613609).",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
@@ -378,6 +397,25 @@ def test_units_still_split_after_the_word_no():
     assert units == ["The answer is no.", "Next sentence.", "See No. 4 here."]
 
 
+def test_sentence_final_etc_still_ends_the_unit():
+    """A held "etc." would glue the two sentences, and the "Your" in the
+    first would then vouch for the recalled claim in the second."""
+    text = ("Your A1c is 6.7%, per the lab, etc. An A1c above 6.5% is "
+            "considered diabetic.")
+    assert guardrail._units(text) == [
+        "Your A1c is 6.7%, per the lab, etc.",
+        "An A1c above 6.5% is considered diabetic."]
+    flags = _uncited(guardrail.check(text, used_tools=True,
+                                     returned_pmids=RETURNED))
+    assert len(flags) == 1
+    assert "6.5" in flags[0].excerpt
+
+
+def test_mid_sentence_etc_and_approx_are_held():
+    units = guardrail._units("Values of approx. 6.5%, 7%, etc. are listed.")
+    assert units == ["Values of approx. 6.5%, 7%, etc. are listed."]
+
+
 @pytest.mark.parametrize("text,expected", [
     ("PMID 42613609", {"42613609"}),
     ("PMID: 42613609", {"42613609"}),
@@ -386,6 +424,8 @@ def test_units_still_split_after_the_word_no():
      {"42613609", "42609254", "99999999"}),
     ("PubMed 42613609", {"42613609"}),
     ("PubMed: 42613609", {"42613609"}),
+    ("PubMed ID 42613609", {"42613609"}),
+    ("PubMed IDs 42613609, 42609254", {"42613609", "42609254"}),
     ("no citation here", set()),
 ])
 def test_cited_reads_every_pmid_form(text, expected):

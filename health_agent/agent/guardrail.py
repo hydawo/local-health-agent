@@ -137,12 +137,14 @@ _REPORTING_CONTEXT = re.compile(
     # to the document even with no verb.
     r"|\b(?:lab|labs|report|reports|record|records|note|notes|file|files|"
     r"chart|charts)'s?\b"
-    # "Reference range" is what a lab calls its own printed range; nobody
-    # states a guideline that way.
-    r"|\breference range\b"
-    # A bare "printed"/"listed" ("over the printed cutoff") is only ever
-    # about a document.
-    r"|\b(?:printed|prints?|lists?|listed)\b",
+    # A bare "printed" ("over the printed cutoff") is only ever about a
+    # document. A bare "lists" is not: "the ADA lists an A1c above 6.5% as
+    # the threshold" is exactly the recalled claim this check exists for,
+    # so "lists" only counts after a report noun (the alternative above).
+    # "Reference range" was tried and dropped for the same reason: "the
+    # reference range for diabetes is HbA1c >= 6.5%" is a guideline in a
+    # lab's clothing.
+    r"|\b(?:printed|prints?)\b",
     re.IGNORECASE,
 )
 
@@ -160,7 +162,8 @@ _PERSONAL_CONTEXT = re.compile(
 # "PMIDs 42613609, 42609254" credits both. "PubMed 42613609" is the other
 # spelling the model reaches for.
 _PMID = re.compile(
-    r"\b(?:PMIDs?|PubMed)\s*:?\s*((?:\d{5,9}\b\s*,?\s*(?:and\s+)?)+)",
+    r"\b(?:PMIDs?|PubMed(?:\s+IDs?)?)\s*:?\s*"
+    r"((?:\d{5,9}\b\s*,?\s*(?:and\s+)?)+)",
     re.IGNORECASE,
 )
 _PMID_NUMBER = re.compile(r"\d{5,9}")
@@ -168,11 +171,16 @@ _UNIT_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
 # Abbreviations whose period is not a sentence end. Splitting after "et al."
 # would cut "(Smith et al. 2024, PMID 42613609)" away from the claim it
 # cites, and a cited sentence being flagged is the worst false positive this
-# check can produce. "No." is only held when a number follows, since a
-# sentence can end in the word "no".
+# check can produce. "etc.", "approx." and "et al." can also end a sentence,
+# and gluing two sentences together lets a "your" in the first vouch for a
+# recalled claim in the second, so those are held only when what follows
+# (a lowercase letter, digit, comma or close paren) says the sentence goes
+# on. "No." is held only before a number, since a sentence can end in "no".
+# Case is explicit rather than IGNORECASE so `[a-z]` means lowercase.
 _ABBREVIATION = re.compile(
-    r"\b(?:e\.g|i\.e|et al|vs|etc|approx|Dr|Fig)\.|\bNo\.(?=\s*\d)",
-    re.IGNORECASE,
+    r"\b(?:[eE]\.g|[iI]\.e|[vV]s|Dr|Fig)\."
+    r"|\b(?:[eE]t al|[eE]tc|[aA]pprox)\.(?=\s*[a-z0-9,)])"
+    r"|\bNo\.(?=\s*\d)"
 )
 _HELD_PERIOD = ""  # private-use character, never in model output
 
@@ -180,13 +188,15 @@ _NUM = r"\d[\d.,]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|mmhg|%)?"
 _CMP_WORD = r"(?:above|below|over|under|greater than|less than|at or above|at or below|exceeds?|meets?)"
 _CMP_SYM = r"(?:≥|≤|>=|<=|>|<)"
 _JUDGED = r"(?:considered|classified|regarded|defined|diagnostic|generally|used|recognized|recognised)"
-# A category label that turns a bare range into a ladder rung: "Prediabetes:
-# HbA1c 5.7%-6.4%". `\W{0,5}` rather than `\W{0,3}` because the model writes
-# the label in bold, and ":** " between label and marker is four characters.
+# A category label that turns a bare range into a ladder rung or a
+# definition: "Prediabetes: HbA1c 5.7%-6.4%", "Prediabetes is an A1c of 5.7%
+# to 6.4%". The label may sit up to 30 characters ahead of the range so the
+# copula, a bold marker, or "defined as" can come between.
 _CATEGORY_LABEL = (
     r"(?:normal|prediabetes|prediabetic|diabetes|diabetic|elevated|high|low|"
-    r"optimal|borderline|target)\W{0,5}"
+    r"optimal|borderline|target)"
 )
+_RANGE_VERDICT = rf"(?:{_JUDGED}|indicates?|corresponds?|means?)"
 _RANGE = rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}\s*(?:to|-|–|—)\s*{_NUM}"
 
 UNCITED_PATTERNS: list[tuple[str, str]] = [
@@ -194,9 +204,11 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
     # spans below use `[^\n]` rather than `[^.]`: a `.` inside "6.7%" must
     # not end the span.
     ("states a general clinical threshold",
-     # marker ... above/below ... number ... is considered/diagnostic
+     # marker ... above/below ... number ... is considered/diagnostic. "as"
+     # joins the copulas for "lists an A1c above 6.5% as diagnostic", where
+     # the verb sits before the marker and the verdict after the number.
      rf"\b(?:an?|the)?\s*(?:{_MARKER})\b[^\n]{{0,30}}\b{_CMP_WORD}\b"
-     rf"[^\n]{{0,25}}\b{_NUM}\b[^\n]{{0,25}}\b(?:is|are|would be|was)\s+"
+     rf"[^\n]{{0,25}}\b{_NUM}\b[^\n]{{0,25}}\b(?:is|are|would be|was|as)\s+"
      rf"(?:generally\s+|widely\s+|typically\s+)?{_JUDGED}\b"),
     ("states a general clinical threshold",
      # marker ... above/exceeds the (6.5% diagnostic) threshold/cutoff
@@ -210,9 +222,14 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
      # enough: "A1c of 5.9% to 5.4% over the year" is a trend in the user's
      # own values, and "Vitamin D of 22 to 28 ng/mL" is a quoted range. The
      # range only reads as a claim with a category label in front
-     # ("Prediabetes: HbA1c 5.7%-6.4%") or a judgment word after it ("an A1c
-     # of 5.7% to 6.4% is considered prediabetic").
-     rf"\b{_CATEGORY_LABEL}{_RANGE}|{_RANGE}[^\n]{{0,40}}\b{_JUDGED}\b"),
+     # ("Prediabetes: HbA1c 5.7%-6.4%", "Prediabetes is an A1c of 5.7% to
+     # 6.4%"), a judgment word after it ("an A1c of 5.7% to 6.4% is
+     # considered prediabetic", "an A1c of 5.7% to 6.4% indicates
+     # prediabetes"), or a judgment word before it ("prediabetes is defined
+     # as an A1c of 5.7% to 6.4%").
+     rf"\b{_CATEGORY_LABEL}\b[^\n]{{0,30}}{_RANGE}"
+     rf"|{_RANGE}[^\n]{{0,40}}\b{_RANGE_VERDICT}\b"
+     rf"|\b{_JUDGED}\b[^\n]{{0,40}}{_RANGE}"),
     ("states a general clinical threshold",
      # "considered diagnostic of <condition>"
      rf"\b(?:{_MARKER})\b[^\n]{{0,60}}\bconsidered\s+diagnostic\s+(?:of|for)\b"),
