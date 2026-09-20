@@ -25,6 +25,15 @@ POLITE_DELAY_SECONDS = 0.4
 # than this is fetched as date slices, each under the cap, which is the
 # route NCBI's own documentation points at.
 PAGE_LIMIT = 10_000
+# NCBI's search backend drops the occasional request outright ("Request to
+# GWSearch failed", an HTTP 5xx, a reset). One such answer cost the whole
+# metabolic pack on the first build night. A transient failure is retried
+# this many times with a growing pause; a refused host, a 4xx, or the page
+# limit is not transient and is raised at once.
+RETRIES = 3
+RETRY_PAUSE_SECONDS = 5.0
+_TRANSIENT_TEXT = ("search backend failed", "gwsearch", "timed out",
+                   "connection reset", "remote end closed")
 
 
 @dataclass(frozen=True)
@@ -46,9 +55,29 @@ def _params(**kw) -> dict:
     return params
 
 
+def _transient(exc: Exception) -> bool:
+    if isinstance(exc, client.FetchError):
+        if exc.status is not None:
+            return exc.status >= 500
+        return any(t in str(exc).lower() for t in _TRANSIENT_TEXT)
+    return False
+
+
+def with_retry(call, *, sleep=time.sleep, retries: int = RETRIES):
+    """Run `call()`; on a transient NCBI failure pause and try again, up to
+    `retries` more times. Anything else propagates on the first raise."""
+    for attempt in range(retries + 1):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - classified below
+            if attempt == retries or not _transient(exc):
+                raise
+            sleep(RETRY_PAUSE_SECONDS * (attempt + 1))
+
+
 def search(term: str, *, sort: str | None = None,
            mindate: str | None = None, maxdate: str | None = None,
-           get=client.get) -> SearchHandle:
+           get=client.get, sleep=time.sleep) -> SearchHandle:
     """Run the query on the history server and return the handle, not the
     IDs: `retmax=0` because the IDs are never needed client-side.
 
@@ -64,19 +93,24 @@ def search(term: str, *, sort: str | None = None,
         # Both are required by esearch; publication date, as YYYY/MM/DD.
         params.update(datetype="pdat", mindate=mindate, maxdate=maxdate)
     url = client.query_url(BASE + "esearch.fcgi", params)
-    body = get(url).decode("utf-8", errors="replace")
-    count = re.search(r"<Count>(\d+)</Count>", body)
-    webenv = re.search(r"<WebEnv>([^<]+)</WebEnv>", body)
-    key = re.search(r"<QueryKey>(\d+)</QueryKey>", body)
-    if not (count and webenv and key):
-        # NCBI answers a bad request with HTTP 200 and an <ERROR> element, so
-        # its own explanation is the useful part of the message when present.
-        error = re.search(r"<ERROR>([^<]*)</ERROR>", body)
-        detail = f": {error.group(1).strip()}" if error else ""
-        raise client.FetchError("eutils.ncbi.nlm.nih.gov", None,
-                                "esearch response had no Count/WebEnv/QueryKey"
-                                + detail)
-    return SearchHandle(int(count.group(1)), webenv.group(1), key.group(1))
+
+    def once() -> SearchHandle:
+        body = get(url).decode("utf-8", errors="replace")
+        count = re.search(r"<Count>(\d+)</Count>", body)
+        webenv = re.search(r"<WebEnv>([^<]+)</WebEnv>", body)
+        key = re.search(r"<QueryKey>(\d+)</QueryKey>", body)
+        if not (count and webenv and key):
+            # NCBI answers a bad request with HTTP 200 and an <ERROR>
+            # element, so its own explanation is the useful part of the
+            # message when present.
+            error = re.search(r"<ERROR>([^<]*)</ERROR>", body)
+            detail = f": {error.group(1).strip()}" if error else ""
+            raise client.FetchError("eutils.ncbi.nlm.nih.gov", None,
+                                    "esearch response had no Count/WebEnv/QueryKey"
+                                    + detail)
+        return SearchHandle(int(count.group(1)), webenv.group(1), key.group(1))
+
+    return with_retry(once, sleep=sleep)
 
 
 def fetch_all(handle: SearchHandle, *, max_articles: int | None,
@@ -103,7 +137,7 @@ def fetch_all(handle: SearchHandle, *, max_articles: int | None,
             query_key=handle.query_key, WebEnv=handle.webenv,
             retstart=start, retmax=size, retmode="xml"))
         try:
-            page = parse_articles(get(url))
+            page = parse_articles(with_retry(lambda: get(url), sleep=sleep))
         except MedlineParseError as exc:
             raise client.FetchError(
                 "eutils.ncbi.nlm.nih.gov", None,
@@ -137,13 +171,14 @@ def search_slices(term: str, *, first_year: int, last_year: int,
     on one body system would be a different problem; it raises rather
     than silently truncating.
     """
-    whole = search(term, get=get)
+    whole = search(term, get=get, sleep=sleep)
     if whole.count <= PAGE_LIMIT:
         return [whole]
     handles: list[SearchHandle] = []
     for year in range(first_year, last_year + 1):
         sleep(POLITE_DELAY_SECONDS)
-        by_year = search(term, mindate=f"{year}/01/01", maxdate=f"{year}/12/31", get=get)
+        by_year = search(term, mindate=f"{year}/01/01", maxdate=f"{year}/12/31",
+                         get=get, sleep=sleep)
         if by_year.count == 0:
             continue
         if by_year.count <= PAGE_LIMIT:
@@ -151,7 +186,7 @@ def search_slices(term: str, *, first_year: int, last_year: int,
             continue
         for lo, hi in _month_slices(year):
             sleep(POLITE_DELAY_SECONDS)
-            by_month = search(term, mindate=lo, maxdate=hi, get=get)
+            by_month = search(term, mindate=lo, maxdate=hi, get=get, sleep=sleep)
             if by_month.count > PAGE_LIMIT:
                 raise client.FetchError(
                     "eutils.ncbi.nlm.nih.gov", None,
@@ -169,7 +204,7 @@ def fetch_term(term: str, *, sort: str | None, max_articles: int | None,
     limit. A capped pack (`max_articles` under the limit) keeps its sort
     and takes one handle, so "the first N" means what the catalog says."""
     if max_articles is not None and max_articles <= PAGE_LIMIT:
-        handle = search(term, sort=sort, get=get)
+        handle = search(term, sort=sort, get=get, sleep=sleep)
         return handle.count, fetch_all(handle, max_articles=max_articles,
                                        get=get, sleep=sleep, progress=progress)
     import datetime
