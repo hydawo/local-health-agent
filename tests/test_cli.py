@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 from pathlib import Path
@@ -726,3 +727,145 @@ def test_notes_listing_includes_photos_marked_as_ocr(tmp_path, capsys):
     assert main(["--index", str(index), "notes"]) == 0
     out = capsys.readouterr().out
     assert "photo.png (OCR)" in out
+
+
+def test_literature_packs_lists_the_catalog_offline(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    from health_agent.literature.fetch import client
+
+    monkeypatch.setattr(client, "_open", lambda *a, **k: (_ for _ in ()).throw(AssertionError("network")))
+    code = main(["--index", str(tmp_path / ".index" / "health.db"), "literature", "packs"])
+    out = capsys.readouterr().out
+    assert code == 0
+    for slug in ("sample", "cardiovascular", "metabolic", "sleep", "exercise"):
+        assert slug in out
+    assert "not installed" in out
+
+
+def test_literature_install_stops_before_any_fetch_without_consent(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    from health_agent.literature.fetch import client, packs as fetch_packs
+
+    calls = []
+    monkeypatch.setattr(fetch_packs, "download", lambda *a, **k: calls.append(a) or None)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))   # not a tty, no --yes
+    code = main(["--index", str(tmp_path / ".index" / "health.db"),
+                 "literature", "install", "sleep"])
+    err = capsys.readouterr().err
+    assert code != 0
+    assert calls == []
+    assert "LITERATURE PACKS" in err
+
+
+def test_literature_install_from_a_local_pack_builds_the_corpus(tmp_path, capsys):
+    from health_agent.cli import main
+    from health_agent.literature import medline, packs, schema as lit_schema
+    from health_agent import config as config_mod
+
+    articles = medline.parse_articles(
+        (Path(__file__).parent / "fixtures" / "literature" / "corpus.xml").read_bytes())
+    pack_path = tmp_path / "sleep-1.jsonl.gz"
+    packs.write_pack(pack_path, packs.CATALOG["sleep"], "1", articles, license=packs.PACK_LICENSE)
+    index = tmp_path / ".index" / "health.db"
+
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "sleep@1" in out or "sleep" in out
+
+    cfg = config_mod.resolve(index_path=str(index))
+    conn = lit_schema.connect(cfg.literature_path)
+    row = conn.execute("SELECT slug, version, article_count FROM pack").fetchone()
+    assert (row["slug"], row["version"]) == ("sleep", "1")
+    assert row["article_count"] == len([a for a in articles if a.abstract.strip()])
+    # Tiers come from publication_types at install, not from the pack.
+    tiers = {r["pmid"]: r["evidence_tier"] for r in conn.execute("SELECT pmid, evidence_tier FROM article")}
+    assert tiers["40000001"] == "meta_analysis" and tiers["40000010"] == "protocol"
+    assert conn.execute("SELECT DISTINCT license FROM article").fetchone()["license"] == packs.PACK_LICENSE
+    conn.close()
+
+    # Same version again is a no-op that says so.
+    code = main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"])
+    assert code == 0
+    assert "already installed" in capsys.readouterr().out
+
+
+def test_literature_install_refuses_an_unknown_pack(tmp_path, capsys):
+    from health_agent.cli import main
+    code = main(["--index", str(tmp_path / ".index" / "health.db"),
+                 "literature", "install", "type-2-diabetes", "--yes"])
+    assert code == 2
+    assert "not a known pack" in capsys.readouterr().err
+
+
+def test_build_pack_writes_a_pack_file_without_touching_the_index(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    from health_agent.literature import packs
+    from health_agent.literature.fetch import eutils
+
+    fix = Path(__file__).parent / "fixtures" / "literature"
+    monkeypatch.setattr(eutils, "search", lambda term, **k: eutils.SearchHandle(2, "W", "1"))
+    monkeypatch.setattr(eutils, "fetch_all", lambda handle, **k: __import__(
+        "health_agent.literature.medline", fromlist=["parse_articles"]
+    ).parse_articles((fix / "efetch_batch.xml").read_bytes()))
+    index = tmp_path / ".index" / "health.db"
+    code = main(["--index", str(index), "literature", "build-pack", "sleep",
+                 "--out", str(tmp_path / "out"), "--version", "2026.09", "--yes"])
+    out = capsys.readouterr().out
+    assert code == 0
+    written = tmp_path / "out" / "sleep-2026.09.jsonl.gz"
+    assert written.exists() and (tmp_path / "out" / "sleep-2026.09.jsonl.gz.sha256").exists()
+    manifest, articles = packs.read_pack(written)
+    assert manifest.article_count == 2 and len(articles) == 2
+    assert not (tmp_path / ".index" / "literature.db").exists()
+    assert "2 articles" in out
+
+
+def test_literature_consent_command_shows_revokes_and_reports(tmp_path, capsys):
+    from health_agent.cli import main
+    from health_agent import consent
+
+    index = str(tmp_path / ".index" / "health.db")
+    assert main(["--index", index, "literature-consent", "--show-notice"]) == 0
+    assert "LITERATURE PACKS" in capsys.readouterr().out
+
+    assert main(["--index", index, "literature-consent"]) == 0
+    assert "not consented" in capsys.readouterr().out
+
+    assert main(["--index", index, "literature-consent", "--revoke"]) == 1
+    capsys.readouterr()
+
+    consent.record(tmp_path / ".index", "", notice=consent.LITERATURE)
+    assert main(["--index", index, "literature-consent"]) == 0
+    assert "consented" in capsys.readouterr().out
+    assert main(["--index", index, "literature-consent", "--revoke"]) == 0
+    assert "withdrawn" in capsys.readouterr().out
+    assert consent.needs_prompt(tmp_path / ".index", notice=consent.LITERATURE)
+
+
+def test_doctor_reports_installed_packs(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    from health_agent.cli import main
+    from health_agent.literature import medline, packs
+
+    # doctor probes Ollama on loopback; this test is about the pack line.
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / ".index" / "health.db"
+    assert "literature packs" not in _doctor_out(main, index, capsys)
+
+    articles = medline.parse_articles(
+        (Path(__file__).parent / "fixtures" / "literature" / "corpus.xml").read_bytes())
+    pack_path = tmp_path / "sleep-1.jsonl.gz"
+    packs.write_pack(pack_path, packs.CATALOG["sleep"], "1", articles, license=packs.PACK_LICENSE)
+    assert main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
+    capsys.readouterr()
+    assert "literature packs: 1 installed (sleep@1)" in _doctor_out(main, index, capsys)
+
+
+def _doctor_out(main, index, capsys) -> str:
+    main(["--index", str(index), "doctor"])
+    return capsys.readouterr().out

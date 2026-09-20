@@ -796,6 +796,47 @@ def _confirm_cloud(cfg: config.Config, model: str, *, assume_yes: bool) -> bool:
     return True
 
 
+def _confirm_literature(cfg: config.Config, *, assume_yes: bool) -> bool:
+    """One-time consent for the two literature commands that use the network.
+
+    Same shape as the cloud tier's: shown in full once, recorded per data
+    folder, re-shown when the notice's substance changes. Kept as a separate
+    function rather than a parameter on `_confirm_cloud` because the prompt
+    wording is the part a reader has to get right, and the two questions
+    (send health data, or connect at all) are not the same question.
+    """
+    if not consent.needs_prompt(cfg.index_dir, notice=consent.LITERATURE):
+        return True
+
+    print(consent.LITERATURE.text, file=sys.stderr)
+
+    if assume_yes:
+        consent.record(cfg.index_dir, "", notice=consent.LITERATURE)
+        print("Consent recorded via --yes.\n", file=sys.stderr)
+        return True
+
+    if not sys.stdin.isatty():
+        print("\nThis command needs a one-time confirmation and this is not an "
+              "interactive terminal. Re-run in a terminal, or pass --yes if you "
+              "have read the notice above.", file=sys.stderr)
+        return False
+
+    try:
+        answer = input("\nConnect to the internet for literature packs? "
+                       "Type 'yes' to agree: ").strip().lower()
+    except EOFError:
+        answer = ""
+    if answer != "yes":
+        print("Cancelled. Nothing was fetched.", file=sys.stderr)
+        return False
+
+    consent.record(cfg.index_dir, "", notice=consent.LITERATURE)
+    print(f"Recorded in {consent.consent_path(cfg.index_dir, notice=consent.LITERATURE)}\n"
+          f"Revoke with `health-agent literature-consent --revoke`.\n",
+          file=sys.stderr)
+    return True
+
+
 def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
     """Natural-language question, answered by a model using the tools."""
     backend = None
@@ -1310,6 +1351,166 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int]] | None:
+    """slug -> (version, article_count) from the local `pack` table, or None
+    when there is no corpus. A schema mismatch is reported and treated as
+    empty so that `packs` and `doctor` still list the catalog."""
+    from .literature import schema as lit_schema
+
+    if not cfg.literature_path.exists():
+        return None
+    try:
+        conn = lit_schema.connect(cfg.literature_path)
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(str(exc), file=sys.stderr)
+        return {}
+    try:
+        return {r["slug"]: (r["version"], r["article_count"]) for r in
+                conn.execute("SELECT slug, version, article_count FROM pack")}
+    finally:
+        conn.close()
+
+
+def cmd_literature_packs(args: argparse.Namespace, cfg: config.Config) -> int:
+    """The catalog and what is installed. Reads only the local pack table."""
+    from .literature import packs
+
+    installed = _installed_packs(cfg) or {}
+    for spec in packs.CATALOG.values():
+        state = (f"installed {installed[spec.slug][0]}, {installed[spec.slug][1]} articles"
+                 if spec.slug in installed else "not installed")
+        print(f"{spec.slug:<16}{state}")
+        print(f"{'':<16}{spec.description}")
+    for slug, (version, count) in installed.items():
+        if slug not in packs.CATALOG:
+            print(f"{slug:<16}installed {version}, {count} articles (built locally)")
+    print("\nInstall with `health-agent literature install <pack>`; the first run "
+          "shows what the download reveals and asks once.")
+    return 0
+
+
+def cmd_literature_install(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Download (or read) a pack and hand its articles to `corpus.build`.
+
+    Consent is checked before anything else that could reach the network,
+    including for a local `--from` file: the command is the same command,
+    and a reader of the record should not have to work out which invocation
+    was the one that connected.
+    """
+    from .literature import corpus as lit_corpus
+    from .literature import embed as lit_embed
+    from .literature import packs, schema as lit_schema
+    from .literature import tiers as lit_tiers
+
+    if args.slug not in packs.CATALOG and not args.source:
+        print(f"{args.slug!r} is not a known pack. `health-agent literature packs` "
+              f"lists them.", file=sys.stderr)
+        return 2
+    if not _confirm_literature(cfg, assume_yes=args.yes):
+        return 1
+
+    version = args.version or packs.LATEST_VERSION
+    if args.source and not args.source.startswith("https://"):
+        pack_path = Path(args.source).expanduser()
+        if not pack_path.is_file():
+            print(f"No such file: {pack_path}", file=sys.stderr)
+            return 2
+    else:
+        from .literature.fetch import packs as fetch_packs
+        try:
+            if args.source:
+                pack_path = fetch_packs.download_url(args.source, cfg.index_dir / "packs")
+            else:
+                print(f"Downloading {args.slug}-{version} from github.com ...", flush=True)
+                pack_path = fetch_packs.download(args.slug, version, cfg.index_dir / "packs")
+        except Exception as exc:  # noqa: BLE001 - reported, never a traceback
+            print(f"Download failed: {exc}", file=sys.stderr)
+            return 2
+
+    try:
+        manifest, articles = packs.read_pack(pack_path)
+    except packs.PackError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    # The pack's stored tier is not trusted; the installed table is the
+    # authority, and publication_types is carried verbatim for exactly this.
+    for article in articles:
+        article.evidence_tier, article.evidence_rank, article.tier_source = \
+            lit_tiers.resolve(article.publication_types)
+
+    try:
+        conn = lit_schema.connect(cfg.literature_path, create=True)
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    try:
+        lit_schema.initialize(conn)
+        row = conn.execute("SELECT version FROM pack WHERE slug = ?",
+                           (manifest.slug,)).fetchone()
+        if row and row["version"] == manifest.version and not args.force:
+            print(f"{manifest.slug}@{manifest.version} is already installed; "
+                  f"pass --force to reinstall.")
+            return 0
+        stats = lit_corpus.build(conn, articles, slug=manifest.slug,
+                                 version=manifest.version, license=manifest.license)
+        print(f"{manifest.slug}@{manifest.version}: {stats.articles} articles, "
+              f"{stats.chunks} chunks"
+              f"{f', {stats.skipped} skipped (no abstract)' if stats.skipped else ''}")
+        if not args.no_embed:
+            embedder = embeddings.get_embedder(args.embed_backend)
+            store = vector_store.VectorStore(cfg.literature_vector_path,
+                                             table_name=lit_embed.TABLE_NAME)
+            try:
+                done = lit_embed.embed_corpus(conn, store, embedder)
+                print(f"embedded {done} chunks with {embedder.name}")
+            except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
+                print("Ollama unavailable; corpus search will use keyword matching "
+                      "until you run this again.", file=sys.stderr)
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_literature_build_pack(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Maintainer: fetch a pack's articles from NCBI and write the pack file.
+
+    Never touches the local index; publishing to a release is a manual step
+    so the tool never holds a GitHub token.
+    """
+    from .literature import packs
+    from .literature.fetch import eutils
+
+    spec = packs.CATALOG.get(args.slug)
+    if spec is None:
+        print(f"{args.slug!r} is not a known pack.", file=sys.stderr)
+        return 2
+    if not _confirm_literature(cfg, assume_yes=args.yes):
+        return 1
+
+    version = args.version or packs.LATEST_VERSION
+    cap = args.max if args.max is not None else spec.max_articles
+    try:
+        handle = eutils.search(spec.search_term())
+        print(f"{handle.count} matching articles; fetching "
+              f"{min(handle.count, cap) if cap else handle.count}", flush=True)
+        articles = eutils.fetch_all(
+            handle, max_articles=cap,
+            progress=lambda done, total: print(f"  {done}/{total}", flush=True))
+    except Exception as exc:  # noqa: BLE001 - reported, never a traceback
+        print(f"Fetch failed: {exc}", file=sys.stderr)
+        return 2
+
+    out_dir = Path(args.out).expanduser()
+    path = out_dir / packs.asset_name(spec.slug, version)
+    manifest = packs.write_pack(path, spec, version, articles,
+                                license=packs.PACK_LICENSE)
+    digest = packs.sha256_file(path)
+    (out_dir / (path.name + ".sha256")).write_text(f"{digest}  {path.name}\n")
+    print(f"wrote {path} ({manifest.article_count} articles, "
+          f"{path.stat().st_size / 1e6:.1f} MB) and {path.name}.sha256")
+    return 0
+
+
 def _delete_literature_corpus(cfg: config.Config) -> None:
     """The corpus and its vector table, and nothing else.
 
@@ -1468,6 +1669,38 @@ def cmd_cloud_consent(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def cmd_literature_consent(args: argparse.Namespace, cfg: config.Config) -> int:
+    if args.show_notice:
+        print(consent.LITERATURE.text)
+        return 0
+
+    if args.revoke:
+        if consent.revoke(cfg.index_dir, notice=consent.LITERATURE):
+            print("Literature network consent withdrawn. The notice will be "
+                  "shown again before the next `literature install` or "
+                  "`build-pack`.")
+            return 0
+        print("No literature consent was recorded; nothing to revoke.")
+        return 1
+
+    record = consent.load(cfg.index_dir, notice=consent.LITERATURE)
+    if record is None:
+        print("Literature packs: not consented.")
+        print("Nothing connects to the internet. `health-agent literature "
+              "install <pack>` shows what the download reveals and asks once.")
+        return 0
+
+    print(f"Literature packs: consented {record.granted_at}")
+    print(f"  recorded in         "
+          f"{consent.consent_path(cfg.index_dir, notice=consent.LITERATURE)}")
+    if not record.is_current(consent.LITERATURE):
+        print("\nWhat the literature commands send has changed since you "
+              "agreed. The notice will be shown again before the next one.")
+    print("\nWithdraw with `health-agent literature-consent --revoke`.")
+    print("Re-read the disclosure with `--show-notice`.")
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
     """Environment check (plan §5a): report what works and what doesn't."""
     ok = True
@@ -1492,6 +1725,12 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
                 sqlite_schema.AggregatesMissing) as exc:
             print(f"               PROBLEM: {exc}")
             ok = False
+
+    installed = _installed_packs(cfg)
+    if installed is not None:
+        listed = ", ".join(f"{slug}@{ver}" for slug, (ver, _) in installed.items())
+        print(f"literature packs: {len(installed)} installed"
+              f"{f' ({listed})' if listed else ''}")
 
     free_gb = shutil.disk_usage(
         cfg.index_dir if cfg.index_dir.exists() else Path.home()
@@ -1774,6 +2013,21 @@ def build_parser() -> argparse.ArgumentParser:
                            help="print the full disclosure and exit")
     p_consent.set_defaults(func=cmd_cloud_consent)
 
+    p_lit_consent = sub.add_parser(
+        "literature-consent",
+        help="show or revoke consent for the literature network commands",
+        description="`literature install` and `literature build-pack` are the "
+                    "only commands that connect to the internet, and they ask "
+                    "once. This shows what was agreed to and when, and can "
+                    "withdraw it.",
+    )
+    p_lit_consent.add_argument("--revoke", action="store_true",
+                               help="withdraw consent; the notice is shown again "
+                                    "before the next install or build-pack")
+    p_lit_consent.add_argument("--show-notice", action="store_true",
+                               help="print the full disclosure and exit")
+    p_lit_consent.set_defaults(func=cmd_literature_consent)
+
     literature = sub.add_parser(
         "literature", help="manage the local medical literature corpus")
     lit_sub = literature.add_subparsers(dest="literature_command", required=True)
@@ -1796,6 +2050,42 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_lit_status = lit_sub.add_parser("status", help="what the corpus holds")
     p_lit_status.set_defaults(func=cmd_literature_status)
+
+    p_lit_packs = lit_sub.add_parser(
+        "packs", help="list the pack catalog and what is installed (no network)")
+    p_lit_packs.set_defaults(func=cmd_literature_packs)
+
+    p_lit_install = lit_sub.add_parser(
+        "install", help="download a pack from the project's releases and build "
+                        "it into the corpus (asks once before connecting)")
+    p_lit_install.add_argument("slug", help="pack name from `literature packs`")
+    p_lit_install.add_argument("--version", default=None,
+                               help="pack version (default: the newest the catalog names)")
+    p_lit_install.add_argument("--from", dest="source", default=None,
+                               help="a local pack file or an https:// URL, "
+                                    "instead of the release asset")
+    p_lit_install.add_argument("--yes", action="store_true",
+                               help="accept the network notice without prompting")
+    p_lit_install.add_argument("--force", action="store_true",
+                               help="reinstall even if this version is present")
+    p_lit_install.add_argument("--no-embed", action="store_true")
+    p_lit_install.add_argument("--embed-backend", default="ollama",
+                               choices=["ollama", "hashing"])
+    p_lit_install.set_defaults(func=cmd_literature_install)
+
+    p_lit_bp = lit_sub.add_parser(
+        "build-pack", help="maintainer: fetch a pack's articles from NCBI and "
+                           "write the pack file (never touches the index)")
+    p_lit_bp.add_argument("slug", help="pack name from the catalog")
+    p_lit_bp.add_argument("--out", required=True, help="directory for the pack file")
+    p_lit_bp.add_argument("--version", default=None,
+                          help="version to stamp on the file (default: the "
+                               "newest the catalog names)")
+    p_lit_bp.add_argument("--max", type=int, default=None,
+                          help="cap the article count (the catalog sets the default)")
+    p_lit_bp.add_argument("--yes", action="store_true",
+                          help="accept the network notice without prompting")
+    p_lit_bp.set_defaults(func=cmd_literature_build_pack)
 
     p_reset = sub.add_parser("reset", help="delete the local index")
     p_reset.add_argument("--yes", action="store_true",
