@@ -288,17 +288,22 @@ def test_the_query_path_cannot_reach_a_fetcher():
     leaked = [n for n in leaked_line[len("LEAKED:"):].split(",") if n]
     assert not leaked, f"the query path imported a fetcher: {leaked}"
 
-    # Nothing under health_agent.literature may reach the network at all. The
-    # corpus is read locally; only slice 2's fetch package will be allowed a
-    # client, and this asserts it has not arrived early or by accident.
+    # Exactly one file under health_agent.literature may import a transport:
+    # fetch/client.py. eutils.py and fetch/packs.py go through it, so the
+    # allow-list of hosts and the user agent live in one place. Everything
+    # else under literature/ is read-only over the local corpus.
     literature_dir = Path(offline_check.__file__).parent / "literature"
+    allowed = literature_dir / "fetch" / "client.py"
     for path in literature_dir.rglob("*.py"):
         text = path.read_text()
-        for forbidden in ("import urllib", "import http", "import socket",
-                          "import requests"):
+        for forbidden in ("import urllib", "from urllib", "import http",
+                          "import socket", "import requests", "import httpx"):
+            if path == allowed:
+                continue
             assert forbidden not in text, (
-                f"{path} imports {forbidden!r}; the corpus must not reach the "
-                f"network")
+                f"{path} imports {forbidden!r}; only fetch/client.py may "
+                f"reach the network")
+    assert "import urllib" in allowed.read_text() or "from urllib" in allowed.read_text()
 
 
 def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):

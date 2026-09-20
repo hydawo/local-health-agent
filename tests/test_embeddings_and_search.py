@@ -49,13 +49,14 @@ def test_remote_host_allowed_only_with_explicit_opt_in(monkeypatch):
     assert embeddings.OllamaEmbedder(host="http://10.0.0.5:11434")
 
 
-def test_the_network_surface_is_exactly_two_modules():
+def test_the_network_surface_is_exactly_three_modules():
     """The privacy claim in plan §5 rests on this staying true.
 
-    Two modules may reach the network, and the split is the product:
+    Three modules may reach the network, and the split is the product:
 
-      ollama_client.py    local tier — loopback only, enforced at runtime
-      agent/backends.py   cloud tier — Anthropic, gated behind explicit consent
+      ollama_client.py             local tier — loopback only, enforced at runtime
+      agent/backends.py            cloud tier — Anthropic, gated behind explicit consent
+      literature/fetch/client.py   packs — NCBI and GitHub, only from two commands, after consent
 
     The vendor SDK counts. `import anthropic` opens sockets just as surely as
     `import urllib`, and a check that only looked for stdlib transports would
@@ -86,7 +87,7 @@ def test_the_network_surface_is_exactly_two_modules():
     # to prove the pipeline runs without one. Exempted by name, and the
     # exemption is then checked rather than trusted, below.
     assert matched == {"ollama_client.py", "agent/backends.py",
-                       "offline_check.py"}, (
+                       "literature/fetch/client.py", "offline_check.py"}, (
         f"the network surface changed: {matched}"
     )
 
