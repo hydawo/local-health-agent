@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from . import metrics
+from .agent.guardrail import DISCLAIMER
 from .store import queries
 from .store.queries import LabPoint, LabTrend
 
@@ -271,8 +272,6 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
         gaps=gaps,
     )
 
-from .agent.guardrail import DISCLAIMER
-
 # Every question opens with "Ask". The sentence after it holds only the
 # person's values, the printed range, dates and citations: the register
 # the guardrail's personal and reporting exemptions are written for, and
@@ -320,22 +319,30 @@ def _evidence_sentence(s: Signal) -> str:
     e = s.evidence
     if s.kind == "lab_out_of_range":
         latest, prev = e["latest"], e["previous"]
-        text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)} "
-                f"against the printed range of {_range(latest)}")
+        if latest.get("range"):
+            text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)} "
+                    f"against the printed range of {_range(latest)}")
+        else:
+            text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)}, "
+                    f"with no printed range")
         if prev:
             direction = "down" if latest["value"] < prev["value"] else "up"
             text += f", {direction} from {_val(prev)} on {prev['date']}"
         return f"{text} {_cite(latest, prev)}."
     if s.kind == "lab_returned_to_range":
         latest, prev = e["latest"], e["previous"]
+        range_clause = (f"inside the printed range of {_range(latest)}"
+                        if latest.get("range") else "with no printed range")
         return (f"It was {_val(prev)} on {prev['date']}{_flagged(prev)}, and "
-                f"{_val(latest)} on {latest['date']}, inside the printed range of "
-                f"{_range(latest)} {_cite(prev, latest)}.")
+                f"{_val(latest)} on {latest['date']}, {range_clause} "
+                f"{_cite(prev, latest)}.")
     if s.kind == "lab_near_limit":
         latest, prev = e["latest"], e["previous"]
         side = "upper" if e["limit_side"] == "high" else "lower"
-        return (f"It was {_val(latest)} on {latest['date']}, inside the printed "
-                f"range of {_range(latest)} and closer to its {side} limit than the "
+        range_clause = (f"inside the printed range of {_range(latest)}"
+                        if latest.get("range") else "with no printed range")
+        return (f"It was {_val(latest)} on {latest['date']}, {range_clause} "
+                f"and closer to its {side} limit than the "
                 f"{_val(prev)} on {prev['date']} {_cite(latest, prev)}.")
     unit = e.get("unit") or ""
     return (f"It averaged {e['recent_mean']:g} {unit} over {e['recent_start']} to "

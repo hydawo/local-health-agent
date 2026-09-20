@@ -335,6 +335,16 @@ def test_empty_sheet_says_nothing_stood_out():
     text = visit_prep.render(_sheet_with())
     assert "Nothing stood out" in text
     assert "## Questions" not in text
+    assert guardrail.check(text, used_tools=True) == []
+
+
+def test_out_of_range_with_no_printed_range_and_no_previous_value():
+    signal = visit_prep.lab_signals_for(_trend(
+        _point("2026-03-10", 112, None, None, "H")))[0]
+    text = visit_prep.render(_sheet_with(signal))
+    assert ("It was 112 mg/dL on 2026-03-10, flagged H, with no printed range "
+            "(labs_2026-03-10.pdf, p.1).") in text
+    assert guardrail.check(text, used_tools=True) == []
 
 
 @pytest.mark.parametrize("with_literature", [False, True])
