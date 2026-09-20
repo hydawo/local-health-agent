@@ -221,61 +221,122 @@ def test_a_paraphrased_diagnosis_slips_through():
 Weighted toward must-pass cases on purpose. Per this module's own doctrine the
 expensive error is the false positive: a guard that fires on ordinary reporting
 trains its author to disable it.
+
+"Cited" is decided per sentence, against the PMIDs the literature tool
+returned this turn. Eval run 4 showed the old per-turn gate skipped the check
+whenever the search returned anything, which on a real corpus is nearly
+always.
 """
+
+RETURNED = frozenset({"42613609", "42609254"})
+
+
+def _uncited(flags):
+    return [f for f in flags if f.category is guardrail.Category.UNCITED]
 
 
 @pytest.mark.parametrize("text", [
+    # The original shapes.
     "An A1c above 6.5% is considered diabetic.",
     "LDL over 130 mg/dL is classified as elevated.",
     "Blood pressure below 120/80 is regarded as normal.",
     "The normal range for fasting glucose is 70 to 99 mg/dL.",
+    # Run 4, Q22, verbatim.
+    "An HbA1c of 6.7% is above the diagnostic threshold for diabetes in most "
+    "clinical guidelines (typically ≥6.5%).",
+    "An HbA1c of 6.7% would generally be considered diagnostic of diabetes, "
+    "but interpretation should be done with your doctor.",
+    # Run 4b, Q22: the ladder, as bullet lines.
+    "- **Normal:** HbA1c < 5.7%",
+    "- **Prediabetes:** HbA1c 5.7%-6.4%",
+    "- **Diabetes:** HbA1c ≥ 6.5%",
+    "An HbA1c of 6.7% exceeds the 6.5% diagnostic cutoff for diabetes mellitus.",
+    # The README's own example of what the guard catches.
+    "Clinical definitions often cite specific thresholds (e.g., an A1c of "
+    "5.7% to 6.4% is considered prediabetic).",
 ])
-def test_flags_a_general_threshold_stated_without_a_citation(text):
-    flags = guardrail.check(text, used_tools=True, literature_cited=False)
-    assert any(f.category is guardrail.Category.UNCITED for f in flags)
+def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
+    flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
+    assert _uncited(flags), text
 
 
 @pytest.mark.parametrize("text", [
     # The user's own values, restated. The single most important must-pass set.
     "Your A1c is 6.7%, above the 4.0-5.6% reference range this report printed.",
     "Your LDL is 145 mg/dL and the lab flagged it High.",
+    "Your LDL is flagged H against the lab's 0-99 range.",
     "Your resting heart rate averaged 61 bpm over the last 30 days.",
     "Your report lists a reference range of 70-99 mg/dL for glucose.",
     "Your weight went from 82.1 kg to 80.4 kg between March and June.",
     "You took 2000 IU of vitamin D daily, according to your notes.",
     "Three of your results were outside their printed ranges.",
+    "Your HbA1c is 5.4%, within the 4.8-5.6% range printed on your report.",
     # Reporting the user's own document back to them, not a general claim.
-    # Each of these must actually match an UNCITED_PATTERNS regex first —
-    # otherwise the case never reaches `_REPORTING_CONTEXT` and passes for
-    # the wrong reason (verified by deleting the suppression and watching
-    # these fail; see the code review that added them).
     "The report prints a target range for LDL of under 100 mg/dL.",
     "Your report lists a target range for glucose of 70-99 mg/dL.",
     "Your report prints a target range for HDL of above 40 mg/dL.",
+    # A quoted finding, cited with a PMID the tool returned.
+    "A 2026 RCT (PMID 42613609) found more participants reached LDL targets "
+    "below 100 mg/dL with structured management.",
+    "An A1c above 6.5% is considered diabetic (Diabetes Care, 2024, "
+    "PMID 42609254).",
+    "According to a 2026 systematic review, PMID 42609254, combined training "
+    "lowered systolic blood pressure below 130 mmHg in more participants.",
 ])
-def test_does_not_flag_the_users_own_values_or_printed_ranges(text):
-    flags = guardrail.check(text, used_tools=True, literature_cited=False)
-    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]
+def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
+    flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
+    assert not _uncited(flags), text
 
 
-def test_does_not_flag_a_threshold_when_literature_was_cited():
-    text = "A 2019 meta-analysis found an A1c above 6.5% is used diagnostically."
-    flags = guardrail.check(text, used_tools=True, literature_cited=True)
-    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]
+def test_a_pmid_the_tool_did_not_return_is_its_own_flag():
+    text = "An A1c above 6.5% is considered diabetic (PMID 99999999)."
+    flags = _uncited(guardrail.check(text, used_tools=True,
+                                     returned_pmids=RETURNED))
+    assert flags
+    assert flags[0].label == "cites a PMID the literature tool did not return"
+
+
+def test_journal_and_year_without_a_pmid_is_not_a_citation():
+    """The tool asks the model to cite with the PMID; a journal name is not
+    checkable against what the tool returned, and journal names collide with
+    marker words ('Blood Pressure' is a journal)."""
+    text = ("A 2019 meta-analysis in Diabetes Care found an A1c above 6.5% is "
+            "used diagnostically.")
+    assert _uncited(guardrail.check(text, used_tools=True,
+                                    returned_pmids=RETURNED))
+
+
+def test_only_the_uncited_sentence_is_flagged_in_a_mixed_answer():
+    text = ("A 2026 RCT (PMID 42613609) found structured management helped "
+            "participants reach LDL targets below 100 mg/dL. Diabetes: HbA1c "
+            "≥ 6.5%. Your own LDL is 112 mg/dL, flagged H on the report.")
+    flags = _uncited(guardrail.check(text, used_tools=True,
+                                     returned_pmids=RETURNED))
+    assert len(flags) == 1
+    assert "6.5" in flags[0].excerpt
+
+
+def test_no_returned_pmids_means_every_threshold_is_uncited():
+    """The default is strict: a caller that says nothing gets the guard, not
+    an exemption. The old boolean defaulted the other way, and every caller
+    that forgot it was silently exempt."""
+    flags = guardrail.check("An A1c above 6.5% is considered diabetic.")
+    assert _uncited(flags)
 
 
 def test_uncited_claim_is_serious_enough_to_trigger_a_rewrite():
-    def rewrite(_instruction):
+    def rewrite(instruction):
+        assert "PMID" in instruction
         return "Your A1c is 6.7%, above the range the report printed."
 
     text, result = guardrail.apply(
         "An A1c above 6.5% is considered diabetic.",
-        tools_used=["get_lab_trend"], literature_cited=False, rewrite=rewrite)
+        tools_used=["get_lab_trend"], returned_pmids=frozenset(),
+        rewrite=rewrite)
     assert result.rewritten
     assert "6.5% is considered" not in text
 
 
-def test_existing_callers_are_unaffected_by_the_new_default():
-    """literature_cited defaults True, so behavior is unchanged without it."""
-    flags = guardrail.check("An A1c above 6.5% is considered diabetic.")
-    assert not [f for f in flags if f.category is guardrail.Category.UNCITED]
+def test_units_split_on_sentences_and_lines():
+    units = guardrail._units("First one. Second one!\n- third\n- fourth? Fifth")
+    assert units == ["First one.", "Second one!", "- third", "- fourth?", "Fifth"]

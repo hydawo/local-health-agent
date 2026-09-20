@@ -288,7 +288,7 @@ class Orchestrator:
 
         text, result = guardrail_module.apply(
             answer.text, tools_used=answer.tools_used,
-            literature_cited=self._cited_literature(answer), rewrite=rewrite)
+            returned_pmids=self._returned_pmids(answer), rewrite=rewrite)
         if result.flags:
             # Categories only — never the flagged text, which is health content
             # (§5a logging policy).
@@ -299,20 +299,25 @@ class Orchestrator:
         return text, result
 
     @staticmethod
-    def _cited_literature(answer: "Answer") -> bool:
-        """True when a literature search actually returned findings this turn.
+    def _returned_pmids(answer: "Answer") -> frozenset[str]:
+        """Every PMID the literature tool handed back this turn.
 
-        Calling the tool is not enough — a call that returned `no_matches` gives
-        the model nothing to cite, and an answer that states a threshold anyway
-        is reciting, which is exactly what the check is for.
+        The guard judges each threshold sentence against this set. Calling
+        the tool is not enough, and neither is the tool returning something:
+        eval run 4 showed a search that returns five papers on the topic and
+        none on the cutoff, after which the model recites the cutoff anyway.
+        Only a sentence that cites one of these PMIDs is reporting evidence.
         """
+        pmids: set[str] = set()
         for step in answer.steps:
             if step.name != "search_medical_literature":
                 continue
             result = step.result if isinstance(step.result, dict) else {}
-            if result.get("findings"):
-                return True
-        return False
+            for finding in result.get("findings") or []:
+                pmid = finding.get("pmid") if isinstance(finding, dict) else None
+                if pmid:
+                    pmids.add(str(pmid))
+        return frozenset(pmids)
 
     def _run_call(self, step: int, call: backends.ToolCall) -> ToolCallRecord:
         name = call.name

@@ -22,6 +22,15 @@ asked whether anything in the labs was worth raising with a doctor, it declined
 to look anything up at all and answered with a question. Over-caution withholds
 information that is already the user's, and no diagnosis-hunting regex would ever
 catch it. So `unhelpful_refusal` is flagged too, and reported the same way.
+
+**A citation is a property of the sentence, not the turn.** The uncited-claim
+check once skipped itself whenever the turn's literature search returned any
+finding. Against an eight-article fixture that meant "usually runs"; against
+2,000 real abstracts it meant "almost never runs", because nearly every query
+returns something, and the first real eval reproduced the exact A1c leak the
+check was built for. Now each threshold sentence must carry a PMID the tool
+actually returned this turn, or it is flagged; a PMID the tool did not return
+is flagged too, so a recalled claim cannot be laundered with an invented one.
 """
 
 from __future__ import annotations
@@ -95,24 +104,25 @@ REFUSAL_PATTERNS = [
     r"\bplease (?:specify|clarify) which\b",
 ]
 
-# General clinical claims stated as fact. Only meaningful when the turn returned
-# no literature findings — with a citation, the same sentence is a report of
-# published evidence rather than recalled knowledge.
+# General clinical claims stated as fact, judged one sentence at a time.
 #
 # The distinguishing signal is a threshold attached to a GENERAL subject rather
 # than to "your". Adversarial probing of v0.1.0 found the model volunteering an
 # A1c threshold from training data, uncited and undated, and nothing in the
-# other patterns could see it. This is that hole.
+# other patterns could see it. This is that hole. Eval run 4 added the shapes
+# the model actually uses on a real corpus: the number after "diagnostic
+# threshold", symbol comparators, and category ladders ("Diabetes: HbA1c ≥
+# 6.5%").
 #
-# `_REPORTING_CONTEXT` is what keeps the false positives away: it matches
-# phrasing that attributes the range to a document ("the report prints...",
-# "your labs list...", "according to..."). Applied as a lookback from the
-# match in `check()`, since Python's `re` only allows fixed-width lookbehind
-# and these phrases vary in length. "The report prints a target range for
-# LDL of under 100 mg/dL." is reporting the user's own document back to them
-# — the single most common thing this tool does with lab data — and must not
-# be flagged even though it names a "target range" the way a from-nowhere
-# claim would.
+# Three things exempt a sentence. `_REPORTING_CONTEXT` matches phrasing that
+# attributes the range to a document ("the report prints...", "according
+# to..."). `_PERSONAL_CONTEXT` matches "you"/"your" shortly before the
+# threshold: "your A1c is 6.7%, above the 4.0-5.6% range this report printed"
+# is a restatement, not a claim. And a `PMID <n>` in the sentence, where <n>
+# is one the literature tool returned this turn, makes it a report of
+# published evidence. Both context checks are lookbacks applied in `check()`,
+# since Python's `re` only allows fixed-width lookbehind and these phrases
+# vary in length.
 _REPORTING_CONTEXT = re.compile(
     r"\b(?:report|reports|lab|labs|document|documents|chart|charts|"
     r"record|records|note|notes|file|files)\b[^.]{0,20}\b(?:prints?|"
@@ -126,23 +136,49 @@ _MARKER = (
     r"systolic|diastolic|bmi|tsh|ferritin|vitamin d|creatinine|egfr|crp"
 )
 
+_PERSONAL_CONTEXT = re.compile(r"\byour?\b", re.IGNORECASE)
+_PMID = re.compile(r"\bPMID\s*:?\s*(\d{5,9})\b", re.IGNORECASE)
+_UNIT_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
+
+_NUM = r"\d[\d.,]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|mmhg|%)?"
+_CMP_WORD = r"(?:above|below|over|under|greater than|less than|at or above|at or below|exceeds?|meets?)"
+_CMP_SYM = r"(?:≥|≤|>=|<=|>|<)"
+_JUDGED = r"(?:considered|classified|regarded|defined|diagnostic|generally|used|recognized|recognised)"
+
 UNCITED_PATTERNS: list[tuple[str, str]] = [
+    # Units are already single sentences or lines (see `_units`), so the
+    # spans below use `[^\n]` rather than `[^.]`: a `.` inside "6.7%" must
+    # not end the span.
     ("states a general clinical threshold",
-     rf"\b(?:an?|the)?\s*(?:{_MARKER})\b[^.]{{0,30}}"
-     rf"\b(?:above|below|over|under|greater than|less than|at or above)\b"
-     rf"[^.]{{0,25}}\b\d[\d./]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|%)?\b"
-     rf"[^.]{{0,25}}\bis\s+(?:considered|classified|regarded|defined|"
-     rf"diagnostic|generally)\b"),
+     # marker ... above/below ... number ... is considered/diagnostic
+     rf"\b(?:an?|the)?\s*(?:{_MARKER})\b[^\n]{{0,30}}\b{_CMP_WORD}\b"
+     rf"[^\n]{{0,25}}\b{_NUM}\b[^\n]{{0,25}}\b(?:is|are|would be|was)\s+"
+     rf"(?:generally\s+|widely\s+|typically\s+)?{_JUDGED}\b"),
+    ("states a general clinical threshold",
+     # marker ... above/exceeds the (6.5% diagnostic) threshold/cutoff
+     rf"\b(?:{_MARKER})\b[^\n]{{0,40}}\b{_CMP_WORD}\b[^\n]{{0,25}}"
+     rf"\b(?:threshold|cut-?off|criteri(?:on|a)|limit)s?\b"),
+    ("states a general clinical threshold",
+     # marker with a symbol comparator: "HbA1c ≥ 6.5%", "LDL > 130 mg/dL"
+     rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_CMP_SYM}\s*{_NUM}"),
+    ("states a general clinical threshold",
+     # a range presented as a category: "HbA1c 5.7%-6.4%",
+     # "an A1c of 5.7% to 6.4% is considered prediabetic"
+     rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}\s*(?:to|-|–|—)\s*{_NUM}"),
+    ("states a general clinical threshold",
+     # "considered diagnostic of <condition>"
+     rf"\b(?:{_MARKER})\b[^\n]{{0,60}}\bconsidered\s+diagnostic\s+(?:of|for)\b"),
     ("states a normal range as general fact",
      rf"\b(?:the\s+)?(?:normal|healthy|optimal|typical|target)\s+"
      rf"(?:range|level|value)s?\s+(?:for|of)\s+(?:\w+\s+)?(?:{_MARKER})\b"),
 ]
 
 UNCITED_REWRITE = (
-    "Your previous answer stated a general medical fact that no literature "
-    "result in this conversation supports. Remove it. Keep only this person's "
-    "own values and the reference ranges their reports printed, and say that "
-    "your literature corpus does not cover the threshold in question."
+    "Your previous answer stated a general medical fact without a citation "
+    "the literature tool returned this turn. For each such statement, either "
+    "attach the PMID of the tool finding it comes from, or remove it and say "
+    "that your literature corpus does not cover it. Keep this person's own "
+    "values and the reference ranges their reports printed."
 )
 
 DISCLAIMER = (
@@ -194,13 +230,49 @@ def _excerpt(text: str, match: re.Match, width: int = 60) -> str:
     return " ".join(text[start:end].split())
 
 
+def _units(text: str) -> list[str]:
+    """Sentences and lines, so a bullet or a table row is judged on its own.
+
+    A parenthetical citation at the end of a sentence stays inside it, which
+    is what lets "(Diabetes Care, 2024, PMID 42609254)" vouch for the claim
+    it follows and for nothing else.
+    """
+    return [u.strip() for u in _UNIT_BOUNDARY.split(text) if u and u.strip()]
+
+
+def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
+    flags: list[Flag] = []
+    for unit in _units(text):
+        for label, pattern in UNCITED_PATTERNS:
+            match = re.search(pattern, unit, re.IGNORECASE)
+            if not match:
+                continue
+            before = unit[max(0, match.start() - 60):match.start()]
+            if _REPORTING_CONTEXT.search(before):
+                break  # reporting the user's own document, not a claim
+            if _PERSONAL_CONTEXT.search(unit[max(0, match.start() - 40):match.start()]):
+                break  # "your A1c is ... above the printed range": theirs, not a claim
+            cited = {m.group(1) for m in _PMID.finditer(unit)}
+            if cited & returned_pmids:
+                break  # a report of a finding the tool returned this turn
+            if cited:
+                flags.append(Flag(Category.UNCITED,
+                                  "cites a PMID the literature tool did not return",
+                                  _excerpt(unit, match)))
+            else:
+                flags.append(Flag(Category.UNCITED, label, _excerpt(unit, match)))
+            break  # one flag per unit
+    return flags
+
+
 def check(text: str, *, used_tools: bool = True,
-          literature_cited: bool = True) -> list[Flag]:
+          returned_pmids: frozenset[str] = frozenset()) -> list[Flag]:
     """Scan a finished answer. Returns every flag raised, possibly empty.
 
-    `literature_cited` reports whether this turn returned any literature
-    finding. When it did, a general clinical claim is a report of published
-    evidence; when it did not, the same sentence is recalled knowledge.
+    `returned_pmids` is the set of PMIDs the literature tool returned this
+    turn. A general threshold passes only in a sentence that cites one of
+    them; the default is the empty set, so a caller that says nothing gets
+    the guard rather than an exemption.
     """
     flags: list[Flag] = []
     for category, label, pattern in PATTERNS:
@@ -208,18 +280,7 @@ def check(text: str, *, used_tools: bool = True,
         if match:
             flags.append(Flag(category, label, _excerpt(text, match)))
 
-    if not literature_cited:
-        for label, pattern in UNCITED_PATTERNS:
-            for match in re.finditer(pattern, text, re.IGNORECASE):
-                context = text[max(0, match.start() - 60):match.start()]
-                if _REPORTING_CONTEXT.search(context):
-                    continue  # reporting the user's own document, not a claim
-                flags.append(Flag(Category.UNCITED, label,
-                                  _excerpt(text, match)))
-                break
-            else:
-                continue
-            break
+    flags.extend(_uncited_flags(text, frozenset(returned_pmids)))
 
     # An answer that declines *and* looked nothing up is withholding, not
     # protecting. With tool results present, declining to interpret is correct.
@@ -244,7 +305,8 @@ def needs_disclaimer(tools_used: list[str]) -> bool:
     return "get_lab_trend" in tools_used
 
 
-def apply(text: str, *, tools_used: list[str], literature_cited: bool = True,
+def apply(text: str, *, tools_used: list[str],
+          returned_pmids: frozenset[str] = frozenset(),
           rewrite: "callable | None" = None) -> tuple[str, GuardrailResult]:
     """Run the guard over an answer and return the text to show the user.
 
@@ -255,7 +317,7 @@ def apply(text: str, *, tools_used: list[str], literature_cited: bool = True,
     """
     result = GuardrailResult()
     flags = check(text, used_tools=bool(tools_used),
-                  literature_cited=literature_cited)
+                  returned_pmids=returned_pmids)
     result.flags = list(flags)
 
     serious = [f for f in flags if f.category is not Category.REFUSAL]
@@ -272,7 +334,7 @@ def apply(text: str, *, tools_used: list[str], literature_cited: bool = True,
             revised = ""
         if revised.strip():
             recheck = check(revised, used_tools=bool(tools_used),
-                            literature_cited=literature_cited)
+                            returned_pmids=returned_pmids)
             still_serious = [f for f in recheck
                              if f.category is not Category.REFUSAL]
             if len(still_serious) < len(serious):
