@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import sys
@@ -1805,10 +1806,12 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"literature packs: PROBLEM: {exc}")
         ok = False
     else:
-        if installed is not None:
+        if installed:
             listed = ", ".join(f"{slug}@{ver}" for slug, (ver, _) in installed.items())
-            print(f"literature packs: {len(installed)} installed"
-                  f"{f' ({listed})' if listed else ''}")
+            print(f"literature packs: {len(installed)} installed ({listed})")
+        else:
+            print("literature packs: none installed   "
+                  "(`health-agent literature packs` lists them)")
 
     free_gb = shutil.disk_usage(
         cfg.index_dir if cfg.index_dir.exists() else Path.home()
@@ -1841,6 +1844,8 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
         print(f"                 {exc}")
         print(f"                 Semantic search is disabled until this works; "
               f"keyword search still runs.")
+    else:
+        _doctor_chat_model(embedder.host)
 
     print("\nNetwork posture")
     print("  This build makes no outbound calls except to the Ollama host above,")
@@ -1851,6 +1856,45 @@ def cmd_doctor(args: argparse.Namespace, cfg: config.Config) -> int:
 
     print(f"\n{'All good.' if ok else 'Some checks reported problems (above).'}")
     return 0 if ok else 1
+
+
+# Memory the default chat model needs, and the model to name when the
+# machine has less. Both figures are in the README, next to eval run 6.
+_CHAT_MODEL_GB = 18
+_LITE_CHAT_MODEL = "qwen3.5:9b"
+
+
+def _physical_memory_gb() -> float | None:
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def _doctor_chat_model(host: str) -> None:
+    """The `ask` model is a separate pull from the embedding model, and
+    `ollama pull nomic-embed-text` alone passes every other check here. A
+    tester should learn at `doctor` that `ask` has no model, and, on a
+    smaller machine, which one to pull instead."""
+    model = ollama_client.resolve_chat_model()
+    try:
+        names = ollama_client.list_models(host)
+    except ollama_client.OllamaUnavailable:
+        return  # already reported under embeddings
+    present = model in names or f"{model}:latest" in names
+    if present:
+        print(f"  chat model     {model}")
+    else:
+        print(f"  chat model     {model} NOT pulled: `ask` will fail")
+        print(f"                 ollama pull {model}")
+    memory = _physical_memory_gb()
+    if memory is not None and model == ollama_client.DEFAULT_CHAT_MODEL:
+        if memory < _CHAT_MODEL_GB:
+            print(f"  memory         {memory:,.0f} GB; {model} needs about "
+                  f"{_CHAT_MODEL_GB} GB. `--model {_LITE_CHAT_MODEL}` (6.6 GB) "
+                  f"is the smaller option with an eval row behind it.")
+        else:
+            print(f"  memory         {memory:,.0f} GB")
 
 
 def cmd_reset(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -2001,7 +2045,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="cloud only: reasoning effort")
     p_ask.add_argument("--model",
                        help=f"model name (local default: "
-                            f"{ollama_client.DEFAULT_CHAT_MODEL}; cloud default: "
+                            f"{ollama_client.DEFAULT_CHAT_MODEL}, or "
+                            f"${ollama_client.ENV_CHAT_MODEL}; cloud default: "
                             f"{agent.backends.DEFAULT_CLOUD_MODEL})")
     p_ask.add_argument("--think", action="store_true",
                        help="enable the model's reasoning mode (slower)")

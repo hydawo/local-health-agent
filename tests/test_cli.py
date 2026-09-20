@@ -854,7 +854,7 @@ def test_doctor_reports_installed_packs(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
                         lambda self: "stubbed")
     index = tmp_path / ".index" / "health.db"
-    assert "literature packs" not in _doctor_out(main, index, capsys)
+    assert "literature packs: none installed" in _doctor_out(main, index, capsys)
 
     articles = medline.parse_articles(
         (Path(__file__).parent / "fixtures" / "literature" / "corpus.xml").read_bytes())
@@ -869,6 +869,43 @@ def test_doctor_reports_installed_packs(tmp_path, capsys, monkeypatch):
 def _doctor_out(main, index, capsys) -> str:
     main(["--index", str(index), "doctor"])
     return capsys.readouterr().out
+
+
+def test_doctor_reports_no_packs_when_none_installed(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    from health_agent.cli import main
+
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / ".index" / "health.db"
+    assert "literature packs: none installed" in _doctor_out(main, index, capsys)
+
+
+def test_doctor_checks_the_chat_model_separately(tmp_path, capsys, monkeypatch):
+    """`ollama pull nomic-embed-text` alone passes the embedding check;
+    `ask` still needs its own model, and doctor must say which."""
+    from health_agent import cli, embeddings, ollama_client
+    from health_agent.cli import main
+
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    monkeypatch.setattr(ollama_client, "list_models",
+                        lambda host: ["nomic-embed-text:latest", "qwen3.5:9b"])
+    monkeypatch.setattr(cli, "_physical_memory_gb", lambda: 16.0)
+    monkeypatch.delenv(ollama_client.ENV_CHAT_MODEL, raising=False)
+    index = tmp_path / ".index" / "health.db"
+
+    out = _doctor_out(main, index, capsys)
+    assert f"chat model     {ollama_client.DEFAULT_CHAT_MODEL} NOT pulled" in out
+    assert f"ollama pull {ollama_client.DEFAULT_CHAT_MODEL}" in out
+    assert "memory         16 GB" in out
+    assert "--model qwen3.5:9b" in out
+
+    monkeypatch.setenv(ollama_client.ENV_CHAT_MODEL, "qwen3.5:9b")
+    out = _doctor_out(main, index, capsys)
+    assert "chat model     qwen3.5:9b\n" in out
+    assert "NOT pulled" not in out
+    assert "--model qwen3.5:9b" not in out  # already on the lite model
 
 
 def _write_sleep_pack(tmp_path, version="1"):
