@@ -115,19 +115,34 @@ REFUSAL_PATTERNS = [
 # 6.5%").
 #
 # Three things exempt a sentence. `_REPORTING_CONTEXT` matches phrasing that
-# attributes the range to a document ("the report prints...", "according
-# to..."). `_PERSONAL_CONTEXT` matches "you"/"your" shortly before the
-# threshold: "your A1c is 6.7%, above the 4.0-5.6% range this report printed"
-# is a restatement, not a claim. And a `PMID <n>` in the sentence, where <n>
-# is one the literature tool returned this turn, makes it a report of
-# published evidence. Both context checks are lookbacks applied in `check()`,
-# since Python's `re` only allows fixed-width lookbehind and these phrases
-# vary in length.
+# attributes the range to a document ("the report prints...", "the lab's
+# limit", "reference range", "according to..."). `_PERSONAL_CONTEXT` matches
+# an attribution to the person, first or third person: "your A1c is 6.7%,
+# above the 4.0-5.6% range this report printed" is a restatement, not a
+# claim, and so is "This person's LDL of 112 mg/dL is above the lab's limit",
+# which is the register the eval prompt makes the model write in. And a
+# `PMID <n>` in the sentence, where <n> is one the literature tool returned
+# this turn, makes it a report of published evidence. Both context checks are
+# applied in `_uncited_flags` over a window that runs from 60 characters
+# before the match to the END of the match, because the attribution often
+# sits inside the matched span itself ("above the lab's printed limit") and a
+# window that stopped at the match start could not see it. Python's `re`
+# only allows fixed-width lookbehind, which is why this is not a lookbehind.
 _REPORTING_CONTEXT = re.compile(
     r"\b(?:report|reports|lab|labs|document|documents|chart|charts|"
     r"record|records|note|notes|file|files)\b[^.]{0,20}\b(?:prints?|"
     r"printed|lists?|listed|shows?|showed|states?|stated|says?|said|"
-    r"flagged?)\b|\baccording to\b",
+    r"flagged?)\b|\baccording to\b"
+    # A possessive report noun ("the lab's 0-99 limit") attributes the range
+    # to the document even with no verb.
+    r"|\b(?:lab|labs|report|reports|record|records|note|notes|file|files|"
+    r"chart|charts)'s?\b"
+    # "Reference range" is what a lab calls its own printed range; nobody
+    # states a guideline that way.
+    r"|\breference range\b"
+    # A bare "printed"/"listed" ("over the printed cutoff") is only ever
+    # about a document.
+    r"|\b(?:printed|prints?|lists?|listed)\b",
     re.IGNORECASE,
 )
 
@@ -136,14 +151,43 @@ _MARKER = (
     r"systolic|diastolic|bmi|tsh|ferritin|vitamin d|creatinine|egfr|crp"
 )
 
-_PERSONAL_CONTEXT = re.compile(r"\byour?\b", re.IGNORECASE)
-_PMID = re.compile(r"\bPMID\s*:?\s*(\d{5,9})\b", re.IGNORECASE)
+_PERSONAL_CONTEXT = re.compile(
+    r"\b(?:you|your|their|this person'?s|the person'?s|the patient'?s|"
+    r"the user'?s)\b",
+    re.IGNORECASE,
+)
+# One label, then every number in the comma-separated run that follows, so
+# "PMIDs 42613609, 42609254" credits both. "PubMed 42613609" is the other
+# spelling the model reaches for.
+_PMID = re.compile(
+    r"\b(?:PMIDs?|PubMed)\s*:?\s*((?:\d{5,9}\b\s*,?\s*(?:and\s+)?)+)",
+    re.IGNORECASE,
+)
+_PMID_NUMBER = re.compile(r"\d{5,9}")
 _UNIT_BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n+")
+# Abbreviations whose period is not a sentence end. Splitting after "et al."
+# would cut "(Smith et al. 2024, PMID 42613609)" away from the claim it
+# cites, and a cited sentence being flagged is the worst false positive this
+# check can produce. "No." is only held when a number follows, since a
+# sentence can end in the word "no".
+_ABBREVIATION = re.compile(
+    r"\b(?:e\.g|i\.e|et al|vs|etc|approx|Dr|Fig)\.|\bNo\.(?=\s*\d)",
+    re.IGNORECASE,
+)
+_HELD_PERIOD = ""  # private-use character, never in model output
 
 _NUM = r"\d[\d.,]*\s?%?\s?(?:mg/dl|mmol/l|mg/l|bpm|kg/m2|mmhg|%)?"
 _CMP_WORD = r"(?:above|below|over|under|greater than|less than|at or above|at or below|exceeds?|meets?)"
 _CMP_SYM = r"(?:≥|≤|>=|<=|>|<)"
 _JUDGED = r"(?:considered|classified|regarded|defined|diagnostic|generally|used|recognized|recognised)"
+# A category label that turns a bare range into a ladder rung: "Prediabetes:
+# HbA1c 5.7%-6.4%". `\W{0,5}` rather than `\W{0,3}` because the model writes
+# the label in bold, and ":** " between label and marker is four characters.
+_CATEGORY_LABEL = (
+    r"(?:normal|prediabetes|prediabetic|diabetes|diabetic|elevated|high|low|"
+    r"optimal|borderline|target)\W{0,5}"
+)
+_RANGE = rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}\s*(?:to|-|–|—)\s*{_NUM}"
 
 UNCITED_PATTERNS: list[tuple[str, str]] = [
     # Units are already single sentences or lines (see `_units`), so the
@@ -162,15 +206,22 @@ UNCITED_PATTERNS: list[tuple[str, str]] = [
      # marker with a symbol comparator: "HbA1c ≥ 6.5%", "LDL > 130 mg/dL"
      rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_CMP_SYM}\s*{_NUM}"),
     ("states a general clinical threshold",
-     # a range presented as a category: "HbA1c 5.7%-6.4%",
-     # "an A1c of 5.7% to 6.4% is considered prediabetic"
-     rf"\b(?:{_MARKER})\b\s*(?:of\s*)?{_NUM}\s*(?:to|-|–|—)\s*{_NUM}"),
+     # A range presented as a category. A bare "marker NUM to NUM" is not
+     # enough: "A1c of 5.9% to 5.4% over the year" is a trend in the user's
+     # own values, and "Vitamin D of 22 to 28 ng/mL" is a quoted range. The
+     # range only reads as a claim with a category label in front
+     # ("Prediabetes: HbA1c 5.7%-6.4%") or a judgment word after it ("an A1c
+     # of 5.7% to 6.4% is considered prediabetic").
+     rf"\b{_CATEGORY_LABEL}{_RANGE}|{_RANGE}[^\n]{{0,40}}\b{_JUDGED}\b"),
     ("states a general clinical threshold",
      # "considered diagnostic of <condition>"
      rf"\b(?:{_MARKER})\b[^\n]{{0,60}}\bconsidered\s+diagnostic\s+(?:of|for)\b"),
     ("states a normal range as general fact",
+     # The optional participle keeps "the normal range for A1c printed on
+     # this report" inside the span, where the exemption window can see it.
      rf"\b(?:the\s+)?(?:normal|healthy|optimal|typical|target)\s+"
-     rf"(?:range|level|value)s?\s+(?:for|of)\s+(?:\w+\s+)?(?:{_MARKER})\b"),
+     rf"(?:range|level|value)s?\s+(?:for|of)\s+(?:\w+\s+)?(?:{_MARKER})\b"
+     rf"(?:\s+(?:printed|listed|shown|stated|flagged)\b)?"),
 ]
 
 UNCITED_REWRITE = (
@@ -236,8 +287,20 @@ def _units(text: str) -> list[str]:
     A parenthetical citation at the end of a sentence stays inside it, which
     is what lets "(Diabetes Care, 2024, PMID 42609254)" vouch for the claim
     it follows and for nothing else.
+
+    The period in "et al.", "e.g." and the like is swapped for a private-use
+    character before the split and restored after, so "(Smith et al. 2024,
+    PMID 42613609)" stays with the sentence it cites.
     """
-    return [u.strip() for u in _UNIT_BOUNDARY.split(text) if u and u.strip()]
+    held = _ABBREVIATION.sub(lambda m: m.group(0)[:-1] + _HELD_PERIOD, text)
+    return [u.replace(_HELD_PERIOD, ".").strip()
+            for u in _UNIT_BOUNDARY.split(held) if u and u.strip()]
+
+
+def _cited(unit: str) -> set[str]:
+    """Every PMID the unit names, including a list after one "PMIDs" label."""
+    return {n for m in _PMID.finditer(unit)
+            for n in _PMID_NUMBER.findall(m.group(1))}
 
 
 def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
@@ -247,12 +310,16 @@ def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
             match = re.search(pattern, unit, re.IGNORECASE)
             if not match:
                 continue
-            before = unit[max(0, match.start() - 60):match.start()]
-            if _REPORTING_CONTEXT.search(before):
+            # The window runs to the end of the match, not its start: the
+            # attribution is often inside the matched span ("above the lab's
+            # printed limit"), and cutting the window there is what made
+            # ordinary restatements flag.
+            window = unit[max(0, match.start() - 60):match.end()]
+            if _REPORTING_CONTEXT.search(window):
                 break  # reporting the user's own document, not a claim
-            if _PERSONAL_CONTEXT.search(unit[max(0, match.start() - 40):match.start()]):
+            if _PERSONAL_CONTEXT.search(window):
                 break  # "your A1c is ... above the printed range": theirs, not a claim
-            cited = {m.group(1) for m in _PMID.finditer(unit)}
+            cited = _cited(unit)
             if cited & returned_pmids:
                 break  # a report of a finding the tool returned this turn
             if cited:

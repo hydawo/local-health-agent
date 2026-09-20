@@ -282,6 +282,28 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "PMID 42609254).",
     "According to a 2026 systematic review, PMID 42609254, combined training "
     "lowered systolic blood pressure below 130 mmHg in more participants.",
+    # Third-person attribution, the register the eval prompt produces, and
+    # attribution that sits inside the matched span ("the lab's printed
+    # limit"). Review probing found every one of these flagging.
+    "This person's A1c of 5.9% exceeds the reference limit printed on the report.",
+    "This person's LDL of 112 mg/dL is above the lab's 0-99 mg/dL limit.",
+    "Their LDL is 112 mg/dL, over the printed cutoff of 99 mg/dL.",
+    "The A1c on your 2026-03-10 report is 6.7%, above the lab's printed limit.",
+    "The latest A1c (6.7%) is above the lab's printed upper limit of 5.6%.",
+    # Possessive and "reference range" attribution to the document.
+    "The lab's normal range for A1c is 4.8-5.6%.",
+    "The normal range for A1c printed on this report is 4.8-5.6%.",
+    "Reference range: A1c 4.8-5.6%.",
+    "Lab reference range: LDL 0-99 mg/dL.",
+    # Two values joined by "to" are a trend or a quoted range, not a category.
+    "A1c of 5.9% to 5.4% over the year.",
+    "Vitamin D of 22 to 28 ng/mL over the year, per the reports.",
+    # "et al." must not end the sentence before its citation.
+    "An A1c above 6.5% is considered diabetic (Smith et al. 2024, PMID 42613609).",
+    "An A1c above 6.5% is considered diabetic, e.g. in the ADA standard "
+    "(PMID 42613609).",
+    # A table row.
+    "| 2026-03-10 | 112 | 0-99 | H | labs_2026-03-10.pdf |",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
@@ -307,9 +329,11 @@ def test_journal_and_year_without_a_pmid_is_not_a_citation():
 
 
 def test_only_the_uncited_sentence_is_flagged_in_a_mixed_answer():
-    text = ("A 2026 RCT (PMID 42613609) found structured management helped "
-            "participants reach LDL targets below 100 mg/dL. Diabetes: HbA1c "
-            "≥ 6.5%. Your own LDL is 112 mg/dL, flagged H on the report.")
+    # Sentence one would flag on its own if it were uncited; the returned
+    # PMID must vouch for it and for nothing else.
+    text = ("An LDL above 130 mg/dL is considered high (PMID 42613609). "
+            "Diabetes: HbA1c ≥ 6.5%. Your own LDL is 112 mg/dL, flagged H on "
+            "the report.")
     flags = _uncited(guardrail.check(text, used_tools=True,
                                      returned_pmids=RETURNED))
     assert len(flags) == 1
@@ -340,3 +364,43 @@ def test_uncited_claim_is_serious_enough_to_trigger_a_rewrite():
 def test_units_split_on_sentences_and_lines():
     units = guardrail._units("First one. Second one!\n- third\n- fourth? Fifth")
     assert units == ["First one.", "Second one!", "- third", "- fourth?", "Fifth"]
+
+
+def test_units_do_not_split_after_abbreviations():
+    """"et al." and "e.g." end no sentence; splitting there would cut a
+    citation away from the claim it vouches for."""
+    units = guardrail._units("A is 6.5%.\nB. e.g. c vs. d. 1. one")
+    assert units == ["A is 6.5%.", "B.", "e.g. c vs. d.", "1.", "one"]
+
+
+def test_units_still_split_after_the_word_no():
+    units = guardrail._units("The answer is no. Next sentence. See No. 4 here.")
+    assert units == ["The answer is no.", "Next sentence.", "See No. 4 here."]
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("PMID 42613609", {"42613609"}),
+    ("PMID: 42613609", {"42613609"}),
+    ("PMIDs 42613609, 99999999", {"42613609", "99999999"}),
+    ("PMIDs: 42613609, 42609254, and 99999999",
+     {"42613609", "42609254", "99999999"}),
+    ("PubMed 42613609", {"42613609"}),
+    ("PubMed: 42613609", {"42613609"}),
+    ("no citation here", set()),
+])
+def test_cited_reads_every_pmid_form(text, expected):
+    assert guardrail._cited(text) == expected
+
+
+def test_plural_pmid_label_vouches_for_the_sentence():
+    text = "An A1c above 6.5% is considered diabetic (PMIDs 42613609, 42609254)."
+    assert not _uncited(guardrail.check(text, used_tools=True,
+                                        returned_pmids=RETURNED))
+
+
+def test_plural_pmid_label_with_no_returned_pmid_is_still_flagged():
+    text = "An A1c above 6.5% is considered diabetic (PMIDs 11111111, 99999999)."
+    flags = _uncited(guardrail.check(text, used_tools=True,
+                                     returned_pmids=RETURNED))
+    assert flags
+    assert flags[0].label == "cites a PMID the literature tool did not return"

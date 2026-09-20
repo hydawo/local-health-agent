@@ -621,11 +621,12 @@ sentence that states a general clinical threshold or normal range (not a
 diagnosis, just a bare fact like "an A1c of 5.7% to 6.4% is considered
 prediabetic") passes only if it carries the PMID of a finding the literature
 tool returned in that turn. Your own values and the ranges your reports
-printed always pass. A threshold with no PMID is recalled knowledge and gets
-flagged the same way a diagnosis does: one rewrite pass that asks the model
-to attach the PMID or drop the claim, then a visible note if that fails. A
-PMID the tool did not return is flagged too, so a recalled claim cannot be
-dressed up with an invented citation.
+printed pass when the sentence attributes them to you, to the person, or to
+the report, which is how the tool's answers are written. A threshold with no
+PMID is recalled knowledge and gets flagged the same way a diagnosis does:
+one rewrite pass that asks the model to attach the PMID or drop the claim,
+then a visible note if that fails. A PMID the tool did not return is flagged
+too, so a recalled claim cannot be dressed up with an invented citation.
 
 **What is still genuinely open:**
 
