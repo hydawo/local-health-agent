@@ -159,10 +159,15 @@ _MARKER = (
 # it, which is the failure the docstring says gets a guard disabled. The
 # colon must be followed by the number itself (bold markers and spaces
 # allowed, no comparator), and the number by a unit, so a category ladder
+# stays out. Up to two words may precede the marker ("Total cholesterol",
+# "Fasting glucose"), the qualifiers labs actually print. Known cost: a rule
+# written as a value row ("LDL: 130 mg/dL or above is considered high") is
+# exempt too; the false positive is the expensive error, and that shape is
+# not one the model has produced.
 # ("Diabetes: HbA1c >= 6.5%") and a bare rule ("LDL: > 130 is high") stay
 # outside the exemption.
 _VALUE_ROW = re.compile(
-    rf"^\W*(?:{_MARKER})\b[^\n:]{{0,25}}:\s*\**\s*\d[\d.,]*\s?"
+    rf"^\W*(?:\w+\s+){{0,2}}(?:{_MARKER})\b[^\n:]{{0,25}}:\s*\**\s*\d[\d.,]*\s?"
     rf"(?:mg/dl|mmol/l|mg/l|ng/ml|%|bpm|mmhg|kg/m2|kg|lb|iu/l|u/l)\b",
     re.IGNORECASE,
 )

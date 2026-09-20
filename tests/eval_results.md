@@ -15,7 +15,7 @@ python tests/run_agent_eval.py --index ~/HealthData/.index/health.db --out /tmp/
 | 2 | M6 (after fixes) | qwen3.6:27b | **20/20** | **19/20** | 16/20 | **20/20** | **20/20** | **20/20** | **19/20** | 22.2 min |
 | 3 | M10 (release) | qwen3.6:27b | **20/20** | 18/20 | 16/20 | **20/20** | **20/20** | **20/20** | 18/20 | 18.9 min |
 | 4 | Real corpus, 27 questions | qwen3.6:27b | 25/27 | 25/27 | 22/27 | 25/27 | 25/27 | **27/27** | 21/27 | 33.3 min |
-| 5 | `sample` pack, reproducible | qwen3.6:27b | 25/27 | 23/27 | 22/27 | **27/27** | **27/27** | **27/27** | 21/27 | 41.8 min |
+| 5 | `sample` pack, reproducible | qwen3.6:27b | 25/27 | 23/27 | 22/27 | **27/27** | **27/27** | **27/27** | 22/27 | 41.8 min |
 
 Thinking mode off for all three. "Clean" means all five checks passed. The
 guardrail fired on 0/20 in runs 2 and 3 — worth stating explicitly, because a

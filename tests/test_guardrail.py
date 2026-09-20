@@ -338,6 +338,8 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "- **LDL cholesterol:** 112 mg/dL — **still flagged high** (range 0–99 mg/dL), though it came down from 128 mg/dL.",
     "Total cholesterol: 186 mg/dL, within range and trending down from 212.",
     "HDL: 52 mg/dL, above the >39 lower limit.",
+    "Total cholesterol: 200 mg/dL, above the 199 threshold on the report.",
+    "- **Fasting glucose:** 104 mg/dL, above the 70-99 mg/dL range printed.",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
