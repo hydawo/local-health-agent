@@ -270,6 +270,10 @@ def _uncited(flags):
     "Prediabetes is generally an HbA1c of 5.7% to 6.4%.",
     "An A1c of 5.7% to 6.4% indicates prediabetes.",
     "Prediabetes corresponds to HbA1c 5.7-6.4%.",
+    # Row-shaped rules stay rules: a category label, or a comparator where
+    # the value would be, is not a measurement.
+    "- **Diabetes:** HbA1c >= 6.5%",
+    "LDL: above 130 mg/dL is considered high.",
 ])
 def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)
@@ -328,6 +332,14 @@ def test_flags_a_general_threshold_stated_without_a_returned_pmid(text):
     "Used the same lab; LDL of 112 to 130 mg/dL over the year.",
     "A1c of 5.9% to 5.4% over the year, generally improving.",
     "An A1c above 6.5% is considered diabetic (PubMed ID 42613609).",
+    # Eval run 5: value rows restating the person's own result against the
+    # lab's range, flagged and annotated on a correct answer.
+    "- **HDL cholesterol:** 52 mg/dL — well above the >39 threshold; it has been rising steadily.",
+    "- **LDL cholesterol:** 112 mg/dL — **still flagged high** (range 0–99 mg/dL), though it came down from 128 mg/dL.",
+    "Total cholesterol: 186 mg/dL, within range and trending down from 212.",
+    "HDL: 52 mg/dL, above the >39 lower limit.",
+    "Total cholesterol: 200 mg/dL, above the 199 threshold on the report.",
+    "- **Fasting glucose:** 104 mg/dL, above the 70-99 mg/dL range printed.",
 ])
 def test_does_not_flag_own_values_printed_ranges_or_returned_citations(text):
     flags = guardrail.check(text, used_tools=True, returned_pmids=RETURNED)

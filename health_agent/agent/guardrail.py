@@ -153,6 +153,25 @@ _MARKER = (
     r"systolic|diastolic|bmi|tsh|ferritin|vitamin d|creatinine|egfr|crp"
 )
 
+# A line that opens "<marker>: <number><unit>" is a value being reported,
+# not a rule being stated. Eval run 5 flagged "HDL cholesterol: 52 mg/dL,
+# well above the >39 threshold" on a correct answer and stapled a note to
+# it, which is the failure the docstring says gets a guard disabled. The
+# colon must be followed by the number itself (bold markers and spaces
+# allowed, no comparator), and the number by a unit, so a category ladder
+# stays out. Up to two words may precede the marker ("Total cholesterol",
+# "Fasting glucose"), the qualifiers labs actually print. Known cost: a rule
+# written as a value row ("LDL: 130 mg/dL or above is considered high") is
+# exempt too; the false positive is the expensive error, and that shape is
+# not one the model has produced.
+# ("Diabetes: HbA1c >= 6.5%") and a bare rule ("LDL: > 130 is high") stay
+# outside the exemption.
+_VALUE_ROW = re.compile(
+    rf"^\W*(?:\w+\s+){{0,2}}(?:{_MARKER})\b[^\n:]{{0,25}}:\s*\**\s*\d[\d.,]*\s?"
+    rf"(?:mg/dl|mmol/l|mg/l|ng/ml|%|bpm|mmhg|kg/m2|kg|lb|iu/l|u/l)\b",
+    re.IGNORECASE,
+)
+
 _PERSONAL_CONTEXT = re.compile(
     r"\b(?:you|your|their|this person'?s|the person'?s|the patient'?s|"
     r"the user'?s)\b",
@@ -338,6 +357,8 @@ def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
             # printed limit"), and cutting the window there is what made
             # ordinary restatements flag.
             window = unit[max(0, match.start() - 60):match.end()]
+            if _VALUE_ROW.search(unit):
+                break  # "HDL: 52 mg/dL, above the >39 threshold": a value, not a rule
             if _REPORTING_CONTEXT.search(window):
                 break  # reporting the user's own document, not a claim
             if _PERSONAL_CONTEXT.search(window):
