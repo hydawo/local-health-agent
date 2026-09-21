@@ -148,6 +148,15 @@ def test_render_matches_the_block_shape():
             "  no citable finding in the installed packs.") in text
 
 
+def test_render_matches_the_block_shape_for_one_finding():
+    text = context.render([
+        _ctx([{"title": "Title one", "year": 2026, "tier": "meta_analysis",
+              "pmid": "42613609"}]),
+    ])
+    assert ("- **LDL cholesterol**, 112 mg/dL on 2026-03-10, flagged H:\n"
+            "  *Title one* (2026, meta-analysis, PMID 42613609).") in text
+
+
 def test_render_of_nothing_is_empty():
     assert context.render([]) == ""
 
@@ -157,16 +166,45 @@ def test_the_guardrail_finds_nothing_to_flag_in_the_block(with_findings):
     findings = ([{"title": "An A1c above 6.5% is considered diabetic: a meta-analysis",
                   "year": 2026, "tier": "meta_analysis", "pmid": "42613609"}]
                 if with_findings else [])
+    contexts = [_ctx(findings)]
+    text = context.render(contexts)
+    flags = guardrail.check(text, used_tools=True,
+                            returned_pmids=context.pmids(contexts))
+    assert flags == [], [str(f) for f in flags]
+
+
+def test_the_guardrail_finds_nothing_to_flag_with_two_threshold_titles():
+    findings = [{"title": "An A1c above 6.5% is considered diabetic: a meta-analysis",
+                "year": 2026, "tier": "meta_analysis", "pmid": "42613609"},
+                {"title": "LDL over 130 mg/dL is classified as elevated: a cohort study",
+                "year": 2025, "tier": "observational", "pmid": "42609254"}]
+    contexts = [_ctx(findings)]
+    text = context.render(contexts)
+    flags = guardrail.check(text, used_tools=True,
+                            returned_pmids=context.pmids(contexts))
+    assert flags == [], [str(f) for f in flags]
+
+
+def test_without_the_tools_pmids_the_guard_would_flag_a_threshold_title():
+    """Proves the guard is doing real work here: without the block's own
+    PMIDs passed as `returned_pmids`, the exact same threshold-shaped title
+    IS flagged. `context.pmids` is what clears it."""
+    findings = [{"title": "An A1c above 6.5% is considered diabetic: a meta-analysis",
+                "year": 2026, "tier": "meta_analysis", "pmid": "42613609"},
+                {"title": "LDL over 130 mg/dL is classified as elevated: a cohort study",
+                "year": 2025, "tier": "observational", "pmid": "42609254"}]
     text = context.render([_ctx(findings)])
     flags = guardrail.check(text, used_tools=True, returned_pmids=frozenset())
-    assert flags == [], [str(f) for f in flags]
+    assert flags != []
 
 
 def test_the_fixture_corpus_block_passes_the_guardrail(corpus_conn):
     steps = [_batch(_row("ldl", "LDL cholesterol", 112.0, "mg/dL", "H"),
                     _row("hba1c", "Hemoglobin A1c", 6.1, "%", "H"))]
-    text = context.render(context.lab_context(steps, corpus_conn))
-    flags = guardrail.check(text, used_tools=True, returned_pmids=frozenset())
+    contexts = context.lab_context(steps, corpus_conn)
+    text = context.render(contexts)
+    flags = guardrail.check(text, used_tools=True,
+                            returned_pmids=context.pmids(contexts))
     assert flags == [], [str(f) for f in flags]
 
 

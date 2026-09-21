@@ -122,6 +122,15 @@ def _finding_text(f: dict) -> str:
     return f"*{f['title']}* ({year}{store.tier_label(f['tier'])}, PMID {f['pmid']})"
 
 
+def pmids(contexts: list[AnalyteContext]) -> frozenset[str]:
+    """Every PMID the block cites, across all analytes. The tool pulled
+    each of these from the corpus itself, so this is the block's own
+    `returned_pmids`: a threshold-shaped title is a report of a finding the
+    tool produced this turn, not a recalled claim, and the guard's
+    per-sentence check needs exactly this set to see that."""
+    return frozenset(f["pmid"] for c in contexts for f in c.findings)
+
+
 def render(contexts: list[AnalyteContext]) -> str:
     if not contexts:
         return ""
@@ -134,16 +143,7 @@ def render(contexts: list[AnalyteContext]) -> str:
         lines.append(head + ":")
         if not c.findings:
             lines.append(f"  {NONE_FOUND}")
-        elif len(c.findings) == 1:
-            # A single line, attributed in the same sentence rather than a
-            # list: a quoted title can itself read as a clinical claim (a
-            # study titled "An A1c above 6.5% is considered diabetic..."),
-            # and the guard's per-sentence check only sees this one line, so
-            # the attribution has to live here rather than in the framing
-            # paragraph above, which is a separate line the guard cannot
-            # see from this one.
-            lines.append(f"  According to the corpus, {_finding_text(c.findings[0])}.")
-        else:
-            parts = [f"  {_finding_text(f)}" for f in c.findings]
-            lines.append(";\n".join(parts) + ".")
+            continue
+        parts = [f"  {_finding_text(f)}" for f in c.findings]
+        lines.append(";\n".join(parts) + ".")
     return "\n".join(lines) + "\n"
