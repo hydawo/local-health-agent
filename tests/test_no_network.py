@@ -379,3 +379,21 @@ def test_visit_prep_imports_no_fetcher_and_no_model():
     for forbidden in ("literature.fetch", "fetch import", "orchestrator", "backends",
                       "import urllib", "from urllib", "import http"):
         assert forbidden not in text, f"visit_prep.py mentions {forbidden!r}"
+
+
+def test_cli_imports_fetch_only_inside_function_bodies():
+    """`cli.py` is imported by every command, including ones that never touch
+    the network (stats, ask, notes). A module-level `from .literature.fetch
+    import ...` would make every invocation pay for importing the fetcher,
+    and would put a fetch import on the same footing as the always-safe
+    imports at the top of the file. Every such line must be indented, i.e.
+    inside a function."""
+    cli_path = Path(offline_check.__file__).parent / "cli.py"
+    for line in cli_path.read_text().splitlines():
+        if line.startswith("from .literature.fetch") or line.startswith(
+                "from .literature import fetch"):
+            assert False, f"module-level fetch import in cli.py: {line!r}"
+        stripped = line.lstrip()
+        if stripped.startswith("from .literature.fetch") or stripped.startswith(
+                "from .literature import fetch"):
+            assert line != stripped, f"unindented fetch import: {line!r}"

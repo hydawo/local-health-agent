@@ -20,6 +20,7 @@ import os
 import shutil
 import sqlite3
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 from . import (__version__, agent, config, consent, embeddings, labs, metrics,
@@ -845,7 +846,7 @@ def _confirm_cloud(cfg: config.Config, model: str, *, assume_yes: bool) -> bool:
 
 
 def _confirm_literature(cfg: config.Config, *, assume_yes: bool) -> bool:
-    """One-time consent for the two literature commands that use the network.
+    """One-time consent for the three literature commands that use the network.
 
     Same shape as the cloud tier's: shown in full once, recorded per data
     folder, re-shown when the notice's substance changes. Kept as a separate
@@ -1401,19 +1402,38 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
-def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int]] | None:
-    """slug -> (version, article_count) from the local `pack` table, or None
-    when there is no corpus. A `CorpusSchemaVersionMismatch` propagates:
-    an empty dict here would let `packs` say "not installed" and `check`
-    say "All good" about a corpus that is neither."""
+def _refresh_note(slug: str, refreshed_at: str | None) -> str:
+    """', refreshed N days ago' (or 'today') or ', never refreshed' for a
+    topical pack; empty for a fixed snapshot like `sample`, which is never
+    refreshed."""
+    from .literature import packs
+
+    spec = packs.CATALOG.get(slug)
+    if spec is not None and spec.max_articles is not None:
+        return ""
+    if not refreshed_at:
+        return ", never refreshed"
+    days = (datetime.now().astimezone() - datetime.fromisoformat(refreshed_at)).days
+    if days <= 0:
+        return ", refreshed today"
+    return f", refreshed {days} day{'s' if days != 1 else ''} ago"
+
+
+def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int, str | None]] | None:
+    """slug -> (version, article_count, refreshed_at) from the local `pack`
+    table, or None when there is no corpus. A `CorpusSchemaVersionMismatch`
+    propagates: an empty dict here would let `packs` say "not installed" and
+    `check` say "All good" about a corpus that is neither."""
     from .literature import schema as lit_schema
 
     if not cfg.literature_path.exists():
         return None
     conn = lit_schema.connect(cfg.literature_path)
     try:
-        return {r["slug"]: (r["version"], r["article_count"]) for r in
-                conn.execute("SELECT slug, version, article_count FROM pack")}
+        return {r["slug"]: (r["version"], r["article_count"], r["refreshed_at"])
+                for r in conn.execute(
+                    "SELECT slug, version, article_count, refreshed_at "
+                    "FROM pack ORDER BY id")}
     finally:
         conn.close()
 
@@ -1428,11 +1448,17 @@ def cmd_literature_packs(args: argparse.Namespace, cfg: config.Config) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     for spec in packs.CATALOG.values():
-        state = (f"installed {installed[spec.slug][0]}, {installed[spec.slug][1]} articles"
-                 if spec.slug in installed else "not installed")
+        if spec.slug in installed:
+            version, count, refreshed_at = installed[spec.slug]
+            state = f"installed {version}, {count} articles"
+            if spec.max_articles is None:
+                state += (f", refreshed {refreshed_at[:10]}" if refreshed_at
+                          else ", never refreshed")
+        else:
+            state = "not installed"
         print(f"{spec.slug:<16}{state}")
         print(f"{'':<16}{spec.description}")
-    for slug, (version, count) in installed.items():
+    for slug, (version, count, _) in installed.items():
         if slug not in packs.CATALOG:
             print(f"{slug:<16}installed {version}, {count} articles (built locally)")
     print("\nInstall with `health-agent literature install <pack>`; the first run "
@@ -1576,6 +1602,119 @@ def _install_pack_file(args: argparse.Namespace, cfg: config.Config,
         conn.close()
 
 
+def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Ask NCBI for what each installed pack's query has gained since the
+    last refresh, and for retractions, and fold both in.
+
+    Slugs are checked against the catalog and the installed set before
+    consent and before any request, so a typo costs nothing. Each pack is
+    committed as it completes; a failure on one leaves the earlier ones
+    refreshed and that one untouched.
+    """
+    from .literature import embed as lit_embed
+    from .literature import packs, schema as lit_schema
+
+    if args.since:
+        try:
+            date.fromisoformat(args.since)
+        except ValueError:
+            print("error: --since must be YYYY-MM-DD", file=sys.stderr)
+            return 2
+
+    try:
+        installed = _installed_packs(cfg)
+    except lit_schema.CorpusSchemaVersionMismatch as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    if not installed:
+        print("No packs installed; `health-agent literature install <pack>` first.",
+              file=sys.stderr)
+        return 2
+
+    slugs = args.slugs or [s for s in installed if s in packs.CATALOG
+                           and packs.CATALOG[s].max_articles is None]
+    if not slugs:
+        # The default resolution above only ever picks topical packs, so an
+        # empty result here means the installed set is nothing but fixed
+        # snapshots (e.g. only `sample`). Reported and exited before any
+        # consent prompt: there is nothing this run could connect for.
+        sample_count = packs.CATALOG["sample"].max_articles
+        print(f"No topical packs installed; `sample` is a fixed snapshot of "
+              f"{sample_count:,} articles. Install a topical pack to have "
+              f"something to refresh.")
+        return 0
+    for slug in slugs:
+        if slug not in packs.CATALOG:
+            print(f"{slug!r} is not a known pack.", file=sys.stderr)
+            return 2
+        # A fixed snapshot like `sample` is reported and skipped below
+        # whether or not it happens to be installed; only a topical pack
+        # needs to already be present to be worth checking for.
+        if packs.CATALOG[slug].max_articles is None and slug not in installed:
+            print(f"{slug} is not installed; nothing to refresh.", file=sys.stderr)
+            return 2
+
+    if all(packs.CATALOG[slug].max_articles is not None for slug in slugs):
+        # Every named slug is a fixed snapshot: nothing here will ever
+        # connect, so the network notice never has to be shown, let alone
+        # consented to, for this run.
+        for slug in slugs:
+            spec = packs.CATALOG[slug]
+            print(f"{slug} is a fixed snapshot of {spec.max_articles} articles; "
+                  f"install a topical pack to have something to refresh.")
+        return 0
+
+    if not _confirm_literature(cfg, assume_yes=args.yes):
+        return 1
+
+    from .literature.fetch import refresh as lit_refresh
+
+    conn = lit_schema.connect(cfg.literature_path)
+    failed = False
+    try:
+        for slug in slugs:
+            spec = packs.CATALOG[slug]
+            if spec.max_articles is not None:
+                print(f"{slug} is a fixed snapshot of {spec.max_articles} articles; "
+                      f"install a topical pack to have something to refresh.")
+                continue
+
+            def report_progress(done, total):
+                if done != 0 and (done % 5000 == 0 or done == total):
+                    print(f"  {done}/{total}", flush=True)
+
+            try:
+                stats = lit_refresh.refresh_pack(
+                    conn, spec, since=args.since, progress=report_progress)
+            except Exception as exc:  # noqa: BLE001 - reported, never a traceback
+                # `refresh_pack` commits in stages (add, mark, correct);
+                # a failure between them leaves the current stage's writes
+                # uncommitted, and the next pack's `conn.commit()` would
+                # otherwise carry them along. Stages already committed are
+                # consistent on their own.
+                conn.rollback()
+                print(f"{slug}: refresh failed: {exc}", file=sys.stderr)
+                failed = True
+                continue
+            print(f"{slug}: {stats.window_from} to {stats.window_to}, "
+                  f"{stats.matched} matched, {stats.added} added, "
+                  f"{stats.retracted} retracted, {stats.chunks} chunks")
+        if not args.no_embed:
+            embedder = embeddings.get_embedder(args.embed_backend)
+            store = vector_store.VectorStore(cfg.literature_vector_path,
+                                             table_name=lit_embed.TABLE_NAME)
+            try:
+                done = lit_embed.embed_corpus(conn, store, embedder)
+                print(f"embedded {done} chunks with {embedder.name}")
+            except (embeddings.EmbeddingUnavailable, embeddings.RemoteHostRefused):
+                print("Ollama unavailable; new articles are keyword-searchable "
+                      "until you run this again.", file=sys.stderr)
+            _reclaim_literature_vectors(conn, store)
+    finally:
+        conn.close()
+    return 2 if failed else 0
+
+
 def _reclaim_literature_vectors(conn, store: vector_store.VectorStore) -> None:
     """Drop the vectors a build left without a chunk, and say so.
 
@@ -1666,7 +1805,8 @@ def _open_literature_corpus(cfg: config.Config):
         return lit_schema.connect(cfg.literature_path)
     except lit_schema.CorpusNotFound:
         return None
-    except lit_schema.CorpusSchemaVersionMismatch as exc:
+    except (lit_schema.CorpusSchemaVersionMismatch,
+            sqlite3.OperationalError) as exc:
         print(f"warning: literature corpus not used: {exc}", file=sys.stderr)
         return None
 
@@ -1685,6 +1825,15 @@ def cmd_literature_status(args: argparse.Namespace, cfg: config.Config) -> int:
     try:
         report = lit_corpus.coverage(conn)
         print(f"packs:    {', '.join(report['packs']) or '(none)'}")
+        for row in report["pack_rows"]:
+            last = row["last_refresh"]
+            if last:
+                note = (f"refreshed {last['ran_at'][:10]} "
+                        f"(+{last['added']}, {last['retracted']} retracted)")
+            else:
+                note = "never refreshed"
+            print(f"  {row['slug']}@{row['version']}  "
+                  f"built {row['built_at'][:10]}  {note}")
         print(f"articles: {report['article_count']}")
         if report["shared_articles"]:
             print(f"shared:   {report['shared_articles']} article(s) in "
@@ -1856,7 +2005,9 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
         ok = False
     else:
         if installed:
-            listed = ", ".join(f"{slug}@{ver}" for slug, (ver, _) in installed.items())
+            listed = "; ".join(
+                f"{slug}@{ver}{_refresh_note(slug, refreshed_at)}"
+                for slug, (ver, _, refreshed_at) in installed.items())
             print(f"literature packs: {len(installed)} installed ({listed})")
         else:
             print("literature packs: none installed   "
@@ -1899,9 +2050,10 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
     print("\nNetwork posture")
     print("  This build makes no outbound calls except to the Ollama host above,")
     print("  which is refused unless it is loopback. Ingestion and all queries")
-    print("  are pure local computation. Two commands connect to the internet,")
-    print("  `literature install` and `literature build-pack`, and only after a")
-    print("  one-time notice; `literature-consent` shows or withdraws it.")
+    print("  are pure local computation. Three commands connect to the internet,")
+    print("  `literature install`, `literature refresh` and `literature build-pack`,")
+    print("  and only after a one-time notice; `literature-consent` shows or")
+    print("  withdraws it.")
 
     print(f"\n{'All good.' if ok else 'Some checks reported problems (above).'}")
     return 0 if ok else 1
@@ -2210,14 +2362,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_lit_consent = sub.add_parser(
         "literature-consent",
         help="show or revoke consent for the literature network commands",
-        description="`literature install` and `literature build-pack` are the "
-                    "only commands that connect to the internet, and they ask "
-                    "once. This shows what was agreed to and when, and can "
-                    "withdraw it.",
+        description="`literature install`, `literature refresh` and "
+                    "`literature build-pack` are the only commands that connect "
+                    "to the internet, and they ask once. This shows what was "
+                    "agreed to and when, and can withdraw it.",
     )
     p_lit_consent.add_argument("--revoke", action="store_true",
                                help="withdraw consent; the notice is shown again "
-                                    "before the next install or build-pack")
+                                    "before the next install, refresh, or "
+                                    "build-pack")
     p_lit_consent.add_argument("--show-notice", action="store_true",
                                help="print the full disclosure and exit")
     p_lit_consent.set_defaults(func=cmd_literature_consent)
@@ -2270,6 +2423,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_lit_install.add_argument("--embed-backend", default="ollama",
                                choices=["ollama", "hashing"])
     p_lit_install.set_defaults(func=cmd_literature_install)
+
+    p_lit_refresh = lit_sub.add_parser(
+        "refresh",
+        help="fetch what PubMed has added to your installed packs since the "
+             "last refresh, and mark retractions (asks once before connecting)",
+        description="For each installed pack, asks NCBI for records added to "
+                    "PubMed since the pack was built or last refreshed, adds "
+                    "them to the corpus, and marks any of the pack's articles "
+                    "that PubMed now lists as retracted. `sample` is a fixed "
+                    "snapshot and is skipped. Sends the pack's fixed search "
+                    "terms and a date range to eutils.ncbi.nlm.nih.gov.")
+    p_lit_refresh.add_argument("slugs", nargs="*", metavar="slug",
+                               help="packs to refresh (default: every installed topical pack)")
+    p_lit_refresh.add_argument("--since", metavar="YYYY-MM-DD",
+                               help="start of the window, instead of the last refresh or build")
+    p_lit_refresh.add_argument("--yes", action="store_true",
+                               help="accept the network notice without prompting")
+    p_lit_refresh.add_argument("--no-embed", action="store_true")
+    p_lit_refresh.add_argument("--embed-backend", default="ollama",
+                               choices=("ollama", "hashing"))
+    p_lit_refresh.set_defaults(func=cmd_literature_refresh)
 
     p_lit_bp = lit_sub.add_parser(
         "build-pack", help="maintainer: fetch a pack's articles from NCBI and "

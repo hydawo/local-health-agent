@@ -24,9 +24,21 @@ log = get_logger("literature.corpus")
 MAX_CHUNK_CHARS = 2000
 
 
+class PackNotInstalled(RuntimeError):
+    """Raised when `add` is asked to refresh a pack that was never built."""
+
+
 @dataclass
 class BuildStats:
     articles: int = 0
+    chunks: int = 0
+    skipped: int = 0
+
+
+@dataclass
+class AddStats:
+    articles: int = 0  # upserted (new + existing)
+    added: int = 0      # PMIDs not in the corpus before
     chunks: int = 0
     skipped: int = 0
 
@@ -44,6 +56,73 @@ def _chunks(text: str) -> list[str]:
     if current:
         parts.append(current)
     return parts
+
+
+def _upsert(conn: sqlite3.Connection, article: ParsedArticle, *, pack_id: int,
+            license: str, full_text: bool, stamp: str, stats) -> int | None:
+    """Write one article and link it to the pack. Returns the article id,
+    or None when it was skipped for having no abstract."""
+    body = article.abstract.strip()
+    if not body:
+        # Nothing to retrieve means nothing to cite. A title-only record
+        # would be findable and then useless.
+        stats.skipped += 1
+        return None
+
+    conn.execute(
+        "INSERT INTO article(pmid, doi, title, journal, pub_year, "
+        "publication_types, evidence_tier, evidence_rank, tier_source, "
+        "license, full_text_available, retracted, retraction_note, "
+        "fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+        # Every mutable column is refreshed here, not just abstract/tier. A
+        # rebuild that silently kept a stale `license` would defeat the
+        # column's whole purpose: the PMC Open Access subset mixes CC-BY,
+        # CC-BY-NC and CC-BY-NC-ND, so a corrected license has to land.
+        "ON CONFLICT(pmid) DO UPDATE SET "
+        "doi = excluded.doi, title = excluded.title, "
+        "journal = excluded.journal, "
+        "pub_year = excluded.pub_year, "
+        "publication_types = excluded.publication_types, "
+        "evidence_tier = excluded.evidence_tier, "
+        "evidence_rank = excluded.evidence_rank, "
+        "tier_source = excluded.tier_source, license = excluded.license, "
+        "full_text_available = excluded.full_text_available, "
+        "retracted = excluded.retracted, "
+        "retraction_note = excluded.retraction_note, "
+        "fetched_at = excluded.fetched_at",
+        (article.pmid, article.doi, article.title, article.journal,
+         article.pub_year, json.dumps(article.publication_types),
+         article.evidence_tier, article.evidence_rank, article.tier_source,
+         license, int(full_text), int(article.retracted),
+         article.retraction_note, stamp),
+    )
+    article_id = conn.execute("SELECT id FROM article WHERE pmid = ?",
+                              (article.pmid,)).fetchone()["id"]
+    conn.execute("INSERT OR IGNORE INTO article_pack(article_id, pack_id) "
+                 "VALUES(?, ?)", (article_id, pack_id))
+
+    conn.execute("DELETE FROM mesh_term WHERE article_id = ?", (article_id,))
+    major = set(article.major_terms)
+    conn.executemany(
+        "INSERT INTO mesh_term(article_id, term, major) VALUES(?, ?, ?)",
+        [(article_id, term, int(term in major))
+         for term in article.mesh_terms])
+
+    chunks = _chunks(body)
+    existing = [r["text"] for r in conn.execute(
+        "SELECT text FROM article_chunk WHERE article_id = ? "
+        "ORDER BY chunk_index", (article_id,))]
+    if existing != chunks:
+        conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
+                     (article_id,))
+        for index, chunk in enumerate(chunks):
+            conn.execute(
+                "INSERT INTO article_chunk(article_id, section, chunk_index, "
+                "text, char_count) VALUES(?, ?, ?, ?, ?)",
+                (article_id, "abstract", index, chunk, len(chunk)))
+    stats.chunks += len(chunks)
+    stats.articles += 1
+    return article_id
 
 
 def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
@@ -82,67 +161,10 @@ def build(conn: sqlite3.Connection, articles: list[ParsedArticle], *,
     now_linked: set[int] = set()
 
     for article in articles:
-        body = article.abstract.strip()
-        if not body:
-            # Nothing to retrieve means nothing to cite. A title-only record
-            # would be findable and then useless.
-            stats.skipped += 1
-            continue
-
-        conn.execute(
-            "INSERT INTO article(pmid, doi, title, journal, pub_year, "
-            "publication_types, evidence_tier, evidence_rank, tier_source, "
-            "license, full_text_available, retracted, retraction_note, "
-            "fetched_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-            # Every mutable column is refreshed here, not just abstract/tier. A
-            # rebuild that silently kept a stale `license` would defeat the
-            # column's whole purpose: the PMC Open Access subset mixes CC-BY,
-            # CC-BY-NC and CC-BY-NC-ND, so a corrected license has to land.
-            "ON CONFLICT(pmid) DO UPDATE SET "
-            "doi = excluded.doi, title = excluded.title, "
-            "journal = excluded.journal, "
-            "pub_year = excluded.pub_year, "
-            "publication_types = excluded.publication_types, "
-            "evidence_tier = excluded.evidence_tier, "
-            "evidence_rank = excluded.evidence_rank, "
-            "tier_source = excluded.tier_source, license = excluded.license, "
-            "full_text_available = excluded.full_text_available, "
-            "retracted = excluded.retracted, "
-            "retraction_note = excluded.retraction_note, "
-            "fetched_at = excluded.fetched_at",
-            (article.pmid, article.doi, article.title, article.journal,
-             article.pub_year, json.dumps(article.publication_types),
-             article.evidence_tier, article.evidence_rank, article.tier_source,
-             license, int(full_text), int(article.retracted),
-             article.retraction_note, built_at),
-        )
-        article_id = conn.execute("SELECT id FROM article WHERE pmid = ?",
-                                  (article.pmid,)).fetchone()["id"]
-        conn.execute("INSERT OR IGNORE INTO article_pack(article_id, pack_id) "
-                     "VALUES(?, ?)", (article_id, pack_id))
-        now_linked.add(article_id)
-
-        conn.execute("DELETE FROM mesh_term WHERE article_id = ?", (article_id,))
-        major = set(article.major_terms)
-        conn.executemany(
-            "INSERT INTO mesh_term(article_id, term, major) VALUES(?, ?, ?)",
-            [(article_id, term, int(term in major))
-             for term in article.mesh_terms])
-
-        chunks = _chunks(body)
-        existing = [r["text"] for r in conn.execute(
-            "SELECT text FROM article_chunk WHERE article_id = ? "
-            "ORDER BY chunk_index", (article_id,))]
-        if existing != chunks:
-            conn.execute("DELETE FROM article_chunk WHERE article_id = ?",
-                         (article_id,))
-            for index, chunk in enumerate(chunks):
-                conn.execute(
-                    "INSERT INTO article_chunk(article_id, section, chunk_index, "
-                    "text, char_count) VALUES(?, ?, ?, ?, ?)",
-                    (article_id, "abstract", index, chunk, len(chunk)))
-        stats.chunks += len(chunks)
-        stats.articles += 1
+        article_id = _upsert(conn, article, pack_id=pack_id, license=license,
+                             full_text=full_text, stamp=built_at, stats=stats)
+        if article_id is not None:
+            now_linked.add(article_id)
 
     for article_id in previously_linked - now_linked:
         conn.execute("DELETE FROM article_pack WHERE article_id = ? AND pack_id = ?",
@@ -172,6 +194,50 @@ def _refresh_count(conn: sqlite3.Connection, pack_id: int) -> None:
         "UPDATE pack SET article_count = "
         "(SELECT COUNT(*) FROM article_pack WHERE pack_id = ?) WHERE id = ?",
         (pack_id, pack_id))
+
+
+def add(conn: sqlite3.Connection, articles: list[ParsedArticle], *, slug: str,
+        license: str, window_from: str, window_to: str, matched: int,
+        retracted: int = 0, full_text: bool = False) -> AddStats:
+    """`literature refresh`: upsert and link, never unlink. The pack's
+    version and built_at are untouched; refreshed_at and one refresh_log
+    row record what happened."""
+    row = conn.execute("SELECT id FROM pack WHERE slug = ?", (slug,)).fetchone()
+    if row is None:
+        raise PackNotInstalled(f"{slug} is not installed")
+    pack_id = row["id"]
+    stats = AddStats()
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    for article in articles:
+        existed = conn.execute("SELECT 1 FROM article WHERE pmid = ?",
+                               (article.pmid,)).fetchone() is not None
+        article_id = _upsert(conn, article, pack_id=pack_id, license=license,
+                             full_text=full_text, stamp=stamp, stats=stats)
+        if article_id is not None and not existed:
+            stats.added += 1
+    conn.execute("UPDATE pack SET refreshed_at = ? WHERE id = ?", (stamp, pack_id))
+    conn.execute(
+        "INSERT INTO refresh_log(pack_id, ran_at, window_from, window_to, "
+        "matched, added, retracted) VALUES(?,?,?,?,?,?,?)",
+        (pack_id, stamp, window_from, window_to, matched, stats.added, retracted))
+    _refresh_count(conn, pack_id)
+    schema.rebuild_chunk_fts(conn)
+    log.info("refreshed pack %s: %d matched, %d added, %d retracted",
+             slug, matched, stats.added, retracted)
+    return stats
+
+
+def mark_retracted(conn: sqlite3.Connection, notes: dict[str, str | None]) -> int:
+    """Flip `retracted` on the rows that exist and are not already marked.
+    Returns how many changed."""
+    flipped = 0
+    for pmid, note in notes.items():
+        cur = conn.execute(
+            "UPDATE article SET retracted = 1, retraction_note = ? "
+            "WHERE pmid = ? AND retracted = 0", (note, pmid))
+        flipped += cur.rowcount
+    conn.commit()
+    return flipped
 
 
 def remove_pack(conn: sqlite3.Connection, slug: str) -> int:
@@ -208,10 +274,20 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
     """
     packs = [f"{r['slug']}@{r['version']}" for r in conn.execute(
         "SELECT slug, version FROM pack ORDER BY slug")]
+    pack_rows = [dict(r) for r in conn.execute(
+        "SELECT id, slug, version, built_at, refreshed_at, article_count FROM pack "
+        "ORDER BY slug")]
+    for row in pack_rows:
+        last = conn.execute(
+            "SELECT added, retracted, ran_at FROM refresh_log "
+            "WHERE pack_id = ? ORDER BY ran_at DESC, id DESC LIMIT 1",
+            (row["id"],)).fetchone()
+        row["last_refresh"] = dict(last) if last else None
+        del row["id"]
     total = conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"]
     if not total:
-        return {"packs": packs, "article_count": 0, "topics": [],
-                "topics_from": "major_topics", "mesh_terms": 0,
+        return {"packs": packs, "pack_rows": pack_rows, "article_count": 0,
+                "topics": [], "topics_from": "major_topics", "mesh_terms": 0,
                 "major_topics": 0, "tiers": {}, "shared_articles": 0,
                 "year_range": [None, None], "built": None}
 
@@ -234,6 +310,7 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
 
     return {
         "packs": packs,
+        "pack_rows": pack_rows,
         "article_count": total,
         "topics": topics,
         "topics_from": topics_from,

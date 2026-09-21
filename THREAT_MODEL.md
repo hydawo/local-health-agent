@@ -110,7 +110,7 @@ It refuses. Tests: `test_remote_hosts_are_refused`,
 | --- | --- | --- |
 | `health_agent/ollama_client.py` | local | Ollama, loopback only |
 | `health_agent/agent/backends.py` | cloud | Anthropic, after consent |
-| `health_agent/literature/fetch/client.py` | packs | NCBI E-utilities (`build-pack`, maintainer) and GitHub Releases (`install`), after consent |
+| `health_agent/literature/fetch/client.py` | packs | NCBI E-utilities (`build-pack`, maintainer, and `refresh`) and GitHub Releases (`install`), after consent |
 
 **Verify:**
 
@@ -165,7 +165,7 @@ requirement for changes.
 
 ---
 
-## Claim 6: literature packs, what two commands send, and nothing else does
+## Claim 6: literature packs, what three commands send, and nothing else does
 
 The literature corpus is public PubMed abstracts, and since the packs feature
 it can be fetched rather than built by hand. That is the first network code
@@ -186,8 +186,18 @@ before it connects (`health-agent literature-consent --show-notice`).
   catalog that is the same for everyone, to `eutils.ncbi.nlm.nih.gov`, with
   your IP address and the tool's version. If `NCBI_API_KEY` is set in your
   environment, the key is sent as well. That is the whole request.
+- `health-agent literature refresh [pack ...]` sends each installed pack's
+  search terms (the same fixed catalog list `build-pack` sends) with a date
+  range, `datetype=edat`, to `eutils.ncbi.nlm.nih.gov`, then a second query
+  for the pack's topic with `"Retracted Publication"[Publication Type]`.
+  Both carry your IP address and the tool's version, and `NCBI_API_KEY` if
+  set. Because only installed packs are refreshed, NCBI can infer which
+  broad areas you chose: the same class of fact GitHub sees at install,
+  from a second party, repeated on every refresh. The response is parsed
+  and written to the corpus; the log row records the window and counts,
+  not the request.
 
-**When.** Only when you run one of those two commands, and only after a
+**When.** Only when you run one of those three commands, and only after a
 one-time notice you accept by typing `yes` (or passing `--yes` for scripts).
 Never during `ask`, `ingest`, `search`, or anything else. `offline-check` is
 unchanged and still proves that. Passing `--from` a local file to `install`
@@ -195,7 +205,9 @@ asks for the same consent. It is the same command, and a URL can be passed
 there. Reinstalling a version that is already present stops before any
 request is made, unless you pass `--force` or `--from`. The downloaded file
 is deleted whether or not the install succeeds, so nothing about the download
-stays on disk beyond the articles.
+stays on disk beyond the articles. Nothing schedules a refresh and nothing
+checks whether one is due; `check` reports how long since each pack was
+refreshed and stops there.
 
 **Where.** Two services, four hostnames, listed in `ALLOWED_HOSTS` in
 `client.py`. Builds go to `eutils.ncbi.nlm.nih.gov`. Downloads go to

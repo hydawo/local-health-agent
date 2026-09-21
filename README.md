@@ -108,10 +108,11 @@ health-agent search "metformin" --kind image   # photos and screenshots only
 
 Everything above is local computation over a SQLite index and a file-based
 vector store. The only process that ever opens a socket is embedding, and only
-to Ollama on localhost (see [Privacy](#privacy)). The two exceptions are
+to Ollama on localhost (see [Privacy](#privacy)). The three exceptions are
 `literature install`, which downloads a public file once, after a notice, and
-sends nothing of yours, and `literature build-pack`, a maintainer command that
-queries NCBI (see [Medical literature corpus](#medical-literature-corpus)).
+sends nothing of yours; `literature build-pack`, a maintainer command that
+queries NCBI; and `literature refresh`, which queries NCBI for what changed
+since the last refresh (see [Medical literature corpus](#medical-literature-corpus)).
 
 ## Try it without your own data
 
@@ -387,6 +388,17 @@ are broad areas and never a single condition. Running `install` again for a
 version you already have makes no request at all, unless you pass `--force`
 or `--from`. See [THREAT_MODEL.md](THREAT_MODEL.md) Claim 6.
 
+Packs go stale at the rate PubMed grows. `health-agent literature refresh`
+asks NCBI, from your machine, for what has been added to each installed
+pack's query since the pack was built or last refreshed, adds those
+abstracts, and marks any of the pack's articles PubMed now lists as
+retracted. It sends the pack's fixed search terms and a date range, so
+NCBI learns which broad areas you have installed; that is the same kind
+of fact GitHub sees at install, and it repeats each time you run the
+command. It never runs on its own. `sample` is a fixed snapshot and is
+skipped. `literature status` shows when each pack was last refreshed and
+what that added; `check` says how long ago.
+
 If you have your own MEDLINE export, `build` still reads it directly:
 
 ```bash
@@ -558,7 +570,7 @@ silent fallback.
 | --- | --- | --- |
 | `ollama_client.py` | local | Ollama on loopback, on-device inference |
 | `agent/backends.py` | cloud | Anthropic, only after recorded consent |
-| `literature/fetch/client.py` | packs | NCBI and GitHub, from two commands, after a separate notice |
+| `literature/fetch/client.py` | packs | NCBI and GitHub, from three commands, after a separate notice |
 
 The local one is enforced, not assumed: a non-loopback Ollama host is refused
 unless you explicitly set `HEALTH_AGENT_ALLOW_REMOTE_OLLAMA=1`, because pointing

@@ -78,18 +78,21 @@ file to a GitHub release, and a person installs it with `health-agent
 literature install <slug>`. Five packs, each one broad body-system area
 (`sample`, `cardiovascular`, `metabolic`, `sleep`, `exercise`), abstracts and
 citation metadata only. The one file that can open a socket under
-`literature/` is `fetch/client.py`, and its allow list is two services. Both
-commands ask once before connecting. `THREAT_MODEL.md` Claim 6 has the full
-disclosure. Refresh is a person running `install` again; there is no update
-check.
+`literature/` is `fetch/client.py`, and its allow list is two services. All
+three commands ask once before connecting. `THREAT_MODEL.md` Claim 6 has the full
+disclosure. **Shipped: `health-agent literature refresh`**
+([design](docs/superpowers/specs/2026-09-20-literature-refresh-design.md)),
+which fetches what PubMed added to each installed pack's query since the
+pack was built or last refreshed and marks retractions. Nothing schedules
+it; a person runs it.
 
 **Still open: ClinicalTrials.gov.** No pack draws on it, and nothing in the
 fetch client knows its host. Carried forward, unchanged from the original
 design, and now mostly done:
 
 - **Dated citations**, so "a 2019 meta-analysis found…" reads honestly rather
-  than as evergreen fact, refreshed by an explicit `update-literature` command
-  rather than aging invisibly.
+  than as evergreen fact, refreshed by the explicit `literature refresh`
+  command above rather than aging invisibly.
 - **Evidence tiers on every citation** (meta-analysis / systematic review > RCT
   > observational > case report) rather than presenting all sources as equally
   weighted — already built in slice 1, unaffected by where the XML comes from.
@@ -298,6 +301,11 @@ query change or a parser fix means a new pack version rather than an edit to
 an old one. The maintainer's build is the one point where the corpus changes.
 The changelog itself is still missing, meaning a record per pack version of
 what came in and what went out.
+
+`health-agent literature refresh` now writes a `refresh_log` row per pack per
+run, with the window queried and the counts added and retracted. That is the
+smallest form of this tracking, a log of runs, not of articles. A per-article
+"what changed" view, which abstract arrived on which run, is still open.
 
 ## 7. Model-agnostic local inference
 

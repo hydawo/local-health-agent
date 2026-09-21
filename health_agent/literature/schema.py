@@ -2,7 +2,9 @@
 
 Versioned independently of the personal index (`store/sqlite_schema.py`, v4),
 because the two have unrelated lifecycles: a corpus refresh is not an ingest,
-and a personal schema change must not invalidate a large download.
+and a personal schema change must not invalidate a large download. Now at v5:
+earlier bumps refused an older file outright, but v4 to v5 migrates in place
+instead, since a corpus is no longer a small download that is cheap to redo.
 """
 
 from __future__ import annotations
@@ -10,7 +12,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-LITERATURE_SCHEMA_VERSION = 4
+LITERATURE_SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS corpus_meta (
@@ -32,6 +34,9 @@ CREATE TABLE IF NOT EXISTS pack (
     built_at               TEXT NOT NULL,
     article_count          INTEGER NOT NULL DEFAULT 0,
     source_manifest_sha256 TEXT,
+    -- Set by `literature refresh`; null until the first one. built_at is
+    -- the version's build, this is the last time NCBI was asked for more.
+    refreshed_at           TEXT,
     UNIQUE(slug)
 );
 
@@ -83,6 +88,21 @@ CREATE TABLE IF NOT EXISTS article_pack (
 );
 
 CREATE INDEX IF NOT EXISTS idx_article_pack_pack ON article_pack(pack_id);
+
+-- One row per pack per `literature refresh`: the window asked for, how
+-- many PubMed matched, how many were new here, how many existing rows were
+-- marked retracted. The smallest useful form of "what changed on each
+-- refresh" (ROADMAP #5). (v5.)
+CREATE TABLE IF NOT EXISTS refresh_log (
+    id          INTEGER PRIMARY KEY,
+    pack_id     INTEGER NOT NULL REFERENCES pack(id) ON DELETE CASCADE,
+    ran_at      TEXT NOT NULL,
+    window_from TEXT NOT NULL,
+    window_to   TEXT NOT NULL,
+    matched     INTEGER NOT NULL,
+    added       INTEGER NOT NULL,
+    retracted   INTEGER NOT NULL DEFAULT 0
+);
 
 CREATE TABLE IF NOT EXISTS mesh_term (
     article_id INTEGER NOT NULL REFERENCES article(id) ON DELETE CASCADE,
@@ -152,7 +172,7 @@ def connect(path: Path, *, create: bool = False) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     if existed:
         try:
-            check_version(conn)
+            migrate(conn)
         except CorpusSchemaVersionMismatch:
             conn.close()
             raise
@@ -190,6 +210,29 @@ def check_version(conn: sqlite3.Connection) -> None:
             f"`health-agent literature build --from <medline.xml> --rebuild` "
             f"from your own MEDLINE export."
         )
+
+
+# Versions this build can bring forward in place. Every earlier bump
+# refused the file and asked for --rebuild; that was fine at 1.6 MB and is
+# not at 62 MB. Below the floor the file is still refused.
+MIGRATABLE_FROM = 4
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Bring a corpus at MIGRATABLE_FROM up to the current version in place.
+    No-op when already current; raises for anything older."""
+    found = read_version(conn)
+    if found == LITERATURE_SCHEMA_VERSION:
+        return
+    if found != MIGRATABLE_FROM:
+        check_version(conn)  # raises with the --rebuild message
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pack)")}
+    if "refreshed_at" not in cols:
+        conn.execute("ALTER TABLE pack ADD COLUMN refreshed_at TEXT")
+    conn.executescript(SCHEMA_SQL)  # CREATE IF NOT EXISTS: adds refresh_log, touches nothing else
+    conn.execute("UPDATE corpus_meta SET value = ? WHERE key = 'schema_version'",
+                 (str(LITERATURE_SCHEMA_VERSION),))
+    conn.commit()
 
 
 def rebuild_chunk_fts(conn: sqlite3.Connection) -> None:

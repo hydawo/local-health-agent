@@ -113,6 +113,13 @@ def test_literature_notice_says_what_leaves_and_when():
         assert phrase in text
 
 
+def test_literature_notice_is_version_2_and_names_refresh():
+    assert consent.LITERATURE.version == 2
+    assert "literature refresh" in consent.LITERATURE.text
+    assert "eutils.ncbi.nlm.nih.gov" in consent.LITERATURE.text
+    assert "refresh" in consent.LITERATURE.summary
+
+
 def test_a_record_for_one_notice_does_not_satisfy_the_other(tmp_path):
     """The two files are separate, but a file copied or renamed across them
     must not count either: the record names the notice it answered."""
