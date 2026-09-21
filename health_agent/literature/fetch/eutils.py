@@ -1,5 +1,5 @@
 """NCBI E-utilities for pack builds: esearch with the history server, then
-efetch in pages. Called only by `literature build-pack`.
+efetch in pages. Called by `literature build-pack` and `literature refresh`.
 
 The polite delay between pages is NCBI's stated limit for callers without an
 API key (three calls a second). With `NCBI_API_KEY` in the environment

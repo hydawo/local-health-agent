@@ -78,8 +78,8 @@ file to a GitHub release, and a person installs it with `health-agent
 literature install <slug>`. Five packs, each one broad body-system area
 (`sample`, `cardiovascular`, `metabolic`, `sleep`, `exercise`), abstracts and
 citation metadata only. The one file that can open a socket under
-`literature/` is `fetch/client.py`, and its allow list is two services. Both
-commands ask once before connecting. `THREAT_MODEL.md` Claim 6 has the full
+`literature/` is `fetch/client.py`, and its allow list is two services. All
+three commands ask once before connecting. `THREAT_MODEL.md` Claim 6 has the full
 disclosure. **Shipped: `health-agent literature refresh`**
 ([design](docs/superpowers/specs/2026-09-20-literature-refresh-design.md)),
 which fetches what PubMed added to each installed pack's query since the

@@ -1432,7 +1432,8 @@ def _installed_packs(cfg: config.Config) -> dict[str, tuple[str, int, str | None
     try:
         return {r["slug"]: (r["version"], r["article_count"], r["refreshed_at"])
                 for r in conn.execute(
-                    "SELECT slug, version, article_count, refreshed_at FROM pack")}
+                    "SELECT slug, version, article_count, refreshed_at "
+                    "FROM pack ORDER BY id")}
     finally:
         conn.close()
 
@@ -1679,13 +1680,18 @@ def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
                 continue
 
             def report_progress(done, total):
-                if done % 5000 == 0 or done == total:
+                if done != 0 and (done % 5000 == 0 or done == total):
                     print(f"  {done}/{total}", flush=True)
 
             try:
                 stats = lit_refresh.refresh_pack(
                     conn, spec, since=args.since, progress=report_progress)
             except Exception as exc:  # noqa: BLE001 - reported, never a traceback
+                # `refresh_pack` writes (upserts, the `pack` row, the
+                # `refresh_log` insert) before its own commit; a failure
+                # partway through leaves those uncommitted, and the next
+                # pack's `conn.commit()` would otherwise carry them along.
+                conn.rollback()
                 print(f"{slug}: refresh failed: {exc}", file=sys.stderr)
                 failed = True
                 continue
@@ -1798,7 +1804,8 @@ def _open_literature_corpus(cfg: config.Config):
         return lit_schema.connect(cfg.literature_path)
     except lit_schema.CorpusNotFound:
         return None
-    except lit_schema.CorpusSchemaVersionMismatch as exc:
+    except (lit_schema.CorpusSchemaVersionMismatch,
+            sqlite3.OperationalError) as exc:
         print(f"warning: literature corpus not used: {exc}", file=sys.stderr)
         return None
 

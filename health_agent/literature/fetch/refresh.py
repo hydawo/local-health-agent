@@ -92,10 +92,11 @@ def refresh_pack(conn, spec: PackSpec, *, since: str | None = None,
     # once the real count is known.
     # This is three separate commits (add, mark, correct); a crash between
     # them leaves that refresh's logged retracted count at 0 even though
-    # the corpus itself is right. The next refresh's retraction query has
-    # no window, so it re-finds and re-marks the same retraction, and the
-    # corpus self-heals; only the historical log row for the interrupted
-    # run stays wrong.
+    # the corpus itself is already right. The next refresh's retraction
+    # query has no window, so it finds the same retraction again, but
+    # `mark_retracted`'s `AND retracted = 0` means it is already marked and
+    # is simply not counted again; only the historical log row for the
+    # interrupted run stays wrong.
     stats = corpus.add(conn, additions, slug=spec.slug, license=PACK_LICENSE,
                        window_from=window_from, window_to=window_to,
                        matched=matched, retracted=0)

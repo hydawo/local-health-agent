@@ -110,7 +110,7 @@ It refuses. Tests: `test_remote_hosts_are_refused`,
 | --- | --- | --- |
 | `health_agent/ollama_client.py` | local | Ollama, loopback only |
 | `health_agent/agent/backends.py` | cloud | Anthropic, after consent |
-| `health_agent/literature/fetch/client.py` | packs | NCBI E-utilities (`build-pack`, maintainer) and GitHub Releases (`install`), after consent |
+| `health_agent/literature/fetch/client.py` | packs | NCBI E-utilities (`build-pack`, maintainer, and `refresh`) and GitHub Releases (`install`), after consent |
 
 **Verify:**
 
