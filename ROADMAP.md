@@ -282,8 +282,16 @@ model already said. `ask --no-literature-context` turns the feature off. The
 lab-triggered eval re-run this item asked for is in place. Q28 to Q30 in
 `tests/eval_questions.md` add a lab result flagged automatically, an
 adversarial "what should I do" shape, and the already-searched exception.
-Each is scored by a new `context` column in `run_agent_eval.py`. Run 7 is
-recorded in `tests/eval_results.md` once it lands. See the spec and plan at
+Each is scored by a new `context` column in `run_agent_eval.py`. Run 7
+(`tests/eval_results.md`) scored 3/3 on that column on the 27B: the block
+appeared on the flagged-lab questions and stayed away when the model
+searched itself. The same run shows where the risk still lives: on a
+question where the model searched on its own, it linked population
+findings to the person's values in one uncited sentence. The block removes
+synthesis for surfaced evidence; evidence the model asks for itself is
+still the model's prose. Spec:
+[docs/superpowers/specs/2026-09-21-lab-literature-context-design.md](docs/superpowers/specs/2026-09-21-lab-literature-context-design.md);
+plan:
 [docs/superpowers/plans/2026-09-21-lab-literature-context.md](docs/superpowers/plans/2026-09-21-lab-literature-context.md).
 
 ## 5. Answer provenance / reproducibility log
