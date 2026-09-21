@@ -494,3 +494,168 @@ def test_a_refused_host_or_a_4xx_is_not_retried():
     with pytest.raises(client.FetchError):
         eutils.search("x", get=refused, sleep=lambda s: None)
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------- #
+# refresh
+# --------------------------------------------------------------------------- #
+
+from datetime import date
+
+from health_agent.literature import corpus, medline, schema
+from health_agent.literature.fetch import refresh
+
+
+def _medline_xml(articles) -> bytes:
+    """A minimal PubmedArticleSet that medline.parse_articles reads back,
+    including the RetractionIn element _retraction() looks for."""
+    parts = ["<PubmedArticleSet>"]
+    for a in articles:
+        retraction = (
+            f'<CommentsCorrectionsList><CommentsCorrections RefType="RetractionIn">'
+            f'<RefSource>{a.retraction_note or ""}</RefSource>'
+            f'</CommentsCorrections></CommentsCorrectionsList>' if a.retracted else "")
+        types = "".join(f"<PublicationType>{t}</PublicationType>"
+                        for t in a.publication_types)
+        parts.append(
+            f'<PubmedArticle><MedlineCitation><PMID>{a.pmid}</PMID><Article>'
+            f'<Journal><JournalIssue><PubDate><Year>{a.pub_year or 2020}</Year>'
+            f'</PubDate></JournalIssue></Journal>'
+            f'<ArticleTitle>{a.title}</ArticleTitle>'
+            f'<PublicationTypeList>{types}</PublicationTypeList></Article>'
+            f'{retraction}</MedlineCitation></PubmedArticle>')
+    parts.append("</PubmedArticleSet>")
+    return "".join(parts).encode()
+
+
+def test_esearch_sends_the_window_with_the_named_datetype():
+    urls = []
+    eutils.search("x", mindate="2026/09/19", maxdate="2026/10/04", datetype="edat",
+                  get=lambda url, **kw: (urls.append(url), (FIX / "esearch.xml").read_bytes())[1],
+                  sleep=lambda s: None)
+    assert "datetype=edat" in urls[0] and "mindate=2026%2F09%2F19" in urls[0]
+
+
+def test_window_for_starts_one_day_before_the_last_refresh_or_build():
+    assert refresh.window_for("2026-09-20T20:00:00-04:00", None, since=None,
+                              today=date(2026, 10, 4)) == ("2026/09/19", "2026/10/04")
+    assert refresh.window_for("2026-09-20T20:00:00-04:00", "2026-10-01T09:00:00-04:00",
+                              since=None, today=date(2026, 10, 4)) == ("2026/09/30", "2026/10/04")
+    assert refresh.window_for("2026-09-20T20:00:00-04:00", "2026-10-01T09:00:00-04:00",
+                              since="2026-01-01", today=date(2026, 10, 4)) == ("2026/01/01", "2026/10/04")
+
+
+def test_retraction_term_has_no_window_and_no_evidence_filter():
+    spec = pack_format.CATALOG["sleep"]
+    term = refresh.retraction_term(spec)
+    assert term.startswith(f"({spec.query}) AND ")
+    assert "Retracted Publication" in term
+    assert "Meta-Analysis" not in term and "[dp]" not in term
+
+
+def _fake_ncbi(additions_xml: bytes, retractions_xml: bytes, *, add_count: int,
+               ret_count: int):
+    """esearch answers the additions query (has mindate) with add_count and
+    the retractions query (has 'Retracted') with ret_count; efetch serves
+    the matching fixture."""
+    from urllib.parse import parse_qs, unquote, urlparse
+    seen = {"esearch": [], "efetch": []}
+
+    def get(url, **kw):
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        if "esearch" in url:
+            seen["esearch"].append(q)
+            count = ret_count if "Retracted" in unquote(q["term"]) else add_count
+            web = "RET" if "Retracted" in unquote(q["term"]) else "ADD"
+            return (f"<eSearchResult><Count>{count}</Count><WebEnv>{web}</WebEnv>"
+                    f"<QueryKey>1</QueryKey></eSearchResult>").encode()
+        seen["efetch"].append(q)
+        return retractions_xml if q["WebEnv"] == "RET" else additions_xml
+    return get, seen
+
+
+def test_refresh_pack_adds_marks_retractions_and_logs(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    fixture = medline.parse_articles((FIX / "corpus.xml").read_bytes())
+    # the corpus holds the fixture's first two articles; one of them will be retracted
+    corpus.build(conn, fixture[:2], slug="sleep", version="2026.09", license="L")
+    existing = [a.pmid for a in fixture[:2]]
+
+    additions = (FIX / "efetch_batch.xml").read_bytes()      # PMIDs 40000001, 40000002
+    ret = fixture[0]
+    ret.retracted, ret.retraction_note = True, "Retraction in: J 2026"
+    retractions_xml = _medline_xml([ret])                     # see helper below
+    get, seen = _fake_ncbi(additions, retractions_xml, add_count=2, ret_count=1)
+
+    stats = refresh.refresh_pack(conn, pack_format.CATALOG["sleep"], today=date(2026, 10, 4),
+                                 get=get, sleep=lambda s: None)
+
+    add_q = next(q for q in seen["esearch"] if "mindate" in q)
+    assert add_q["datetype"] == "edat" and add_q["maxdate"] == "2026/10/04"
+    assert "hasabstract" in add_q["term"]
+    ret_q = next(q for q in seen["esearch"] if "mindate" not in q)
+    assert "Retracted" in ret_q["term"]
+    assert stats.matched == 2 and stats.retracted == 1
+    assert stats.added == len({"40000001", "40000002"} - set(existing))
+    row = conn.execute("SELECT retracted FROM article WHERE pmid = ?", (existing[0],)).fetchone()
+    assert row["retracted"] == 1
+    assert conn.execute("SELECT added, retracted FROM refresh_log").fetchone()[:] == (stats.added, 1)
+
+
+def test_refresh_pack_with_nothing_new_still_logs_and_checks_retractions(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, medline.parse_articles((FIX / "corpus.xml").read_bytes())[:1],
+                 slug="sleep", version="2026.09", license="L")
+    get, seen = _fake_ncbi(b"", b"", add_count=0, ret_count=0)
+    stats = refresh.refresh_pack(conn, pack_format.CATALOG["sleep"], today=date(2026, 10, 4),
+                                 get=get, sleep=lambda s: None)
+    assert (stats.matched, stats.added, stats.retracted) == (0, 0, 0)
+    assert seen["efetch"] == []                      # nothing to fetch, nothing fetched
+    assert conn.execute("SELECT COUNT(*) FROM refresh_log").fetchone()[0] == 1
+
+
+def test_refresh_pack_leaves_the_corpus_alone_when_the_fetch_fails(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    corpus.build(conn, medline.parse_articles((FIX / "corpus.xml").read_bytes())[:1],
+                 slug="sleep", version="2026.09", license="L")
+
+    def broken(url, **kw):
+        raise client.FetchError("eutils.ncbi.nlm.nih.gov", 400, "Bad Request")
+
+    with pytest.raises(client.FetchError):
+        refresh.refresh_pack(conn, pack_format.CATALOG["sleep"], today=date(2026, 10, 4),
+                             get=broken, sleep=lambda s: None)
+    assert conn.execute("SELECT COUNT(*) FROM refresh_log").fetchone()[0] == 0
+    assert conn.execute("SELECT refreshed_at FROM pack").fetchone()[0] is None
+
+
+def test_refresh_pack_refuses_sample():
+    with pytest.raises(refresh.NotRefreshable):
+        refresh.refresh_pack(None, pack_format.CATALOG["sample"], today=date(2026, 10, 4),
+                             get=lambda *a, **k: b"", sleep=lambda s: None)
+
+
+def test_refresh_pack_retraction_in_additions_ends_up_retracted(tmp_path):
+    """The controller ruling: additions are added() first, retractions marked
+    second, so a PMID present in both additions and retractions still ends
+    up retracted -- the retraction write must not be undone by the add."""
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    fixture = medline.parse_articles((FIX / "corpus.xml").read_bytes())
+    corpus.build(conn, fixture[:1], slug="sleep", version="2026.09", license="L")
+
+    additions = (FIX / "efetch_batch.xml").read_bytes()      # 40000001, 40000002; no retraction markup
+    retracted_copy = fixture[0]
+    retracted_copy.retracted, retracted_copy.retraction_note = True, "Retraction in: J 2026"
+    retractions_xml = _medline_xml([retracted_copy])
+    get, seen = _fake_ncbi(additions, retractions_xml, add_count=2, ret_count=1)
+
+    refresh.refresh_pack(conn, pack_format.CATALOG["sleep"], today=date(2026, 10, 4),
+                         get=get, sleep=lambda s: None)
+
+    row = conn.execute("SELECT retracted FROM article WHERE pmid = ?",
+                       (fixture[0].pmid,)).fetchone()
+    assert row["retracted"] == 1

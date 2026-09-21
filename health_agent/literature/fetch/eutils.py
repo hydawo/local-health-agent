@@ -13,6 +13,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
+from datetime import date as _date
 
 from ..medline import MedlineParseError, ParsedArticle, parse_articles
 from . import client
@@ -77,7 +78,7 @@ def with_retry(call, *, sleep=time.sleep, retries: int = RETRIES):
 
 def search(term: str, *, sort: str | None = None,
            mindate: str | None = None, maxdate: str | None = None,
-           get=client.get, sleep=time.sleep) -> SearchHandle:
+           datetype: str = "pdat", get=client.get, sleep=time.sleep) -> SearchHandle:
     """Run the query on the history server and return the handle, not the
     IDs: `retmax=0` because the IDs are never needed client-side.
 
@@ -85,13 +86,18 @@ def search(term: str, *, sort: str | None = None,
     order esearch stored it, so a capped pack takes the first N of whatever
     order that was. PubMed's default is relevance for a term like ours;
     `pub_date` makes "the first 2,000" mean the most recent 2,000.
+
+    `datetype` picks which NCBI date the window is measured against:
+    `pdat` (publication date, the default, used for pack builds) or `edat`
+    (Entrez date, the day NCBI indexed the record, used by `refresh_pack`
+    so "new since my last refresh" means indexed since then).
     """
     params = _params(term=term, retmax=0, usehistory="y")
     if sort:
         params["sort"] = sort
     if mindate or maxdate:
-        # Both are required by esearch; publication date, as YYYY/MM/DD.
-        params.update(datetype="pdat", mindate=mindate, maxdate=maxdate)
+        # Both are required by esearch; formatted as YYYY/MM/DD.
+        params.update(datetype=datetype, mindate=mindate, maxdate=maxdate)
     url = client.query_url(BASE + "esearch.fcgi", params)
 
     def once() -> SearchHandle:
@@ -155,14 +161,36 @@ def fetch_all(handle: SearchHandle, *, max_articles: int | None,
     return out
 
 
-def _month_slices(year: int) -> list[tuple[str, str]]:
+def _month_slices(year: int) -> list[tuple[_date, _date]]:
     import calendar
-    return [(f"{year}/{m:02d}/01", f"{year}/{m:02d}/{calendar.monthrange(year, m)[1]:02d}")
+    return [(_date(year, m, 1), _date(year, m, calendar.monthrange(year, m)[1]))
             for m in range(1, 13)]
 
 
+def _fmt(d: _date) -> str:
+    return d.strftime("%Y/%m/%d")
+
+
+def _parse(s: str) -> _date:
+    return _date(*(int(p) for p in s.split("/")))
+
+
+def _clip(lo: _date, hi: _date, window_from: _date | None,
+          window_to: _date | None) -> tuple[_date, _date] | None:
+    """`(lo, hi)` narrowed to the window, or None if it falls wholly outside."""
+    if window_from and hi < window_from:
+        return None
+    if window_to and lo > window_to:
+        return None
+    clipped_lo = max(lo, window_from) if window_from else lo
+    clipped_hi = min(hi, window_to) if window_to else hi
+    return clipped_lo, clipped_hi
+
+
 def search_slices(term: str, *, first_year: int, last_year: int,
-                  get=client.get, sleep=time.sleep) -> list[SearchHandle]:
+                  get=client.get, sleep=time.sleep, mindate: str | None = None,
+                  maxdate: str | None = None,
+                  datetype: str = "pdat") -> list[SearchHandle]:
     """Handles whose counts each fit under `PAGE_LIMIT`.
 
     One handle when the whole result does. Otherwise one per publication
@@ -170,28 +198,44 @@ def search_slices(term: str, *, first_year: int, last_year: int,
     the cap is split into months. A month over 10,000 matching abstracts
     on one body system would be a different problem; it raises rather
     than silently truncating.
+
+    `mindate`/`maxdate` (with `datetype`) narrow the whole search and every
+    slice to a window: a year wholly outside it is skipped, and a year or
+    month partly inside it is clipped to the window's edges.
     """
-    whole = search(term, get=get, sleep=sleep)
+    window_from = _parse(mindate) if mindate else None
+    window_to = _parse(maxdate) if maxdate else None
+    whole = search(term, mindate=mindate, maxdate=maxdate, datetype=datetype,
+                   get=get, sleep=sleep)
     if whole.count <= PAGE_LIMIT:
         return [whole]
     handles: list[SearchHandle] = []
     for year in range(first_year, last_year + 1):
+        clipped = _clip(_date(year, 1, 1), _date(year, 12, 31), window_from, window_to)
+        if clipped is None:
+            continue
+        year_lo, year_hi = clipped
         sleep(POLITE_DELAY_SECONDS)
-        by_year = search(term, mindate=f"{year}/01/01", maxdate=f"{year}/12/31",
-                         get=get, sleep=sleep)
+        by_year = search(term, mindate=_fmt(year_lo), maxdate=_fmt(year_hi),
+                         datetype=datetype, get=get, sleep=sleep)
         if by_year.count == 0:
             continue
         if by_year.count <= PAGE_LIMIT:
             handles.append(by_year)
             continue
         for lo, hi in _month_slices(year):
+            month_clipped = _clip(lo, hi, window_from, window_to)
+            if month_clipped is None:
+                continue
+            month_lo, month_hi = month_clipped
             sleep(POLITE_DELAY_SECONDS)
-            by_month = search(term, mindate=lo, maxdate=hi, get=get, sleep=sleep)
+            by_month = search(term, mindate=_fmt(month_lo), maxdate=_fmt(month_hi),
+                              datetype=datetype, get=get, sleep=sleep)
             if by_month.count > PAGE_LIMIT:
                 raise client.FetchError(
                     "eutils.ncbi.nlm.nih.gov", None,
-                    f"{by_month.count} matches in {lo}..{hi} exceed NCBI's "
-                    f"{PAGE_LIMIT}-record page limit")
+                    f"{by_month.count} matches in {_fmt(month_lo)}..{_fmt(month_hi)} "
+                    f"exceed NCBI's {PAGE_LIMIT}-record page limit")
             if by_month.count:
                 handles.append(by_month)
     return handles
@@ -199,18 +243,33 @@ def search_slices(term: str, *, first_year: int, last_year: int,
 
 def fetch_term(term: str, *, sort: str | None, max_articles: int | None,
                first_year: int | None, get=client.get, sleep=time.sleep,
-               progress=None) -> tuple[int, list[ParsedArticle]]:
+               progress=None, mindate: str | None = None,
+               maxdate: str | None = None,
+               datetype: str = "pdat") -> tuple[int, list[ParsedArticle]]:
     """(matching count, articles) for a pack's term, paging within NCBI's
     limit. A capped pack (`max_articles` under the limit) keeps its sort
-    and takes one handle, so "the first N" means what the catalog says."""
+    and takes one handle, so "the first N" means what the catalog says.
+
+    `mindate`/`maxdate`/`datetype` narrow the search to a window (see
+    `search` and `search_slices`). When a window is given and `first_year`
+    is not, the slicing range is derived from the window instead of
+    defaulting to "everything".
+    """
     if max_articles is not None and max_articles <= PAGE_LIMIT:
-        handle = search(term, sort=sort, get=get, sleep=sleep)
+        handle = search(term, sort=sort, mindate=mindate, maxdate=maxdate,
+                        datetype=datetype, get=get, sleep=sleep)
         return handle.count, fetch_all(handle, max_articles=max_articles,
                                        get=get, sleep=sleep, progress=progress)
     import datetime
+    today_year = datetime.date.today().year + 1
+    if first_year is None and (mindate or maxdate):
+        first_year = _parse(mindate).year if mindate else 1900
+        last_year = _parse(maxdate).year if maxdate else today_year
+    else:
+        last_year = today_year
     handles = search_slices(term, first_year=first_year or 1900,
-                            last_year=datetime.date.today().year + 1,
-                            get=get, sleep=sleep)
+                            last_year=last_year, get=get, sleep=sleep,
+                            mindate=mindate, maxdate=maxdate, datetype=datetype)
     total = sum(h.count for h in handles)
     if max_articles is not None:
         total = min(total, max_articles)
