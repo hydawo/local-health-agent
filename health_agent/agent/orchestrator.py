@@ -140,7 +140,7 @@ class Answer:
     hit_step_limit: bool = False
     refused: bool = False
     guardrail: guardrail_module.GuardrailResult | None = None
-    literature_context: list = field(default_factory=list)
+    literature_context: list[context_module.AnalyteContext] = field(default_factory=list)
     literature_context_text: str = ""
 
     @property
@@ -278,11 +278,20 @@ class Orchestrator:
         answer.text, answer.guardrail = self._guard(answer, system, transcript)
 
         if self.literature_context and not answer.refused:
-            answer.literature_context = context_module.lab_context(
-                answer.steps, self.ctx.literature_conn,
-                vector_path=self.ctx.literature_vector_path,
-                embedder_factory=self.ctx.embedder_factory)
-            answer.literature_context_text = context_module.render(answer.literature_context)
+            try:
+                answer.literature_context = context_module.lab_context(
+                    answer.steps, self.ctx.literature_conn,
+                    vector_path=self.ctx.literature_vector_path,
+                    embedder_factory=self.ctx.embedder_factory)
+                answer.literature_context_text = context_module.render(answer.literature_context)
+            except Exception as exc:
+                # Category only, never the exception text: it can carry a
+                # fragment of corpus content, and this log is not the guarded
+                # surface. The answer still comes back with its own text; the
+                # literature block is just empty, same as no corpus installed.
+                log.warning("literature context skipped (%s)", type(exc).__name__)
+                answer.literature_context = []
+                answer.literature_context_text = ""
 
         answer.elapsed_sec = time.monotonic() - started
         return answer

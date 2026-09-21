@@ -420,7 +420,7 @@ def render(sheet: Sheet) -> str:
             if s.literature:
                 lit = s.literature
                 year = f"{lit['year']}, " if lit.get("year") else ""
-                lines.append(f"   Evidence you could bring up: *{lit['title']}* "
+                lines.append(f"   Evidence you could bring up: *{store.clean_title(lit['title'])}* "
                              f"({year}{_tier_label(lit['tier'])}, PMID {lit['pmid']}).")
         lines.append("")
     else:
@@ -463,10 +463,10 @@ def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
         found = store.hits(literature_conn, signal.label, limit=_LITERATURE_HITS,
                            vector_path=vector_path,
                            embedder_factory=once.factory)
-        citable = [f for f in found if _citable(f)]
-        if not citable:
+        usable = [f for f in found if _citable(f)]
+        if not usable:
             continue
-        best = min(citable, key=lambda f: (f.evidence_rank is None,
-                                           f.evidence_rank or 0))
+        best = min(usable, key=lambda f: (f.evidence_rank is None,
+                                          f.evidence_rank or 0))
         signal.literature = {"title": best.title, "year": best.year,
                              "tier": best.evidence_tier, "pmid": best.pmid}

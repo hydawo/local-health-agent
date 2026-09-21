@@ -475,7 +475,7 @@ def test_ask_prints_and_serializes_the_literature_block(cli_records, tmp_path, m
     code, out = cli_records("ask", "What is my LDL?")
     assert code == 0
     assert "Your LDL was 112 mg/dL" in out
-    assert "Published research on your out-of-range results" in out
+    assert "Published research on the analytes flagged out of range" in out
     assert out.rstrip().endswith(").") or "no citable finding" in out
 
     monkeypatch.setattr(ollama_client, "chat", _fake_chat(script))

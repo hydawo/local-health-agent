@@ -232,6 +232,14 @@ def tier_label(tier: str) -> str:
     return TIER_LABELS.get(tier, tier.replace("_", " "))
 
 
+def clean_title(title: str) -> str:
+    """A finding's title, trimmed of trailing whitespace and a trailing
+    period, so `*A trial.*` does not render with the sentence punctuation
+    caught inside the italics. Shared so context.render and visit_prep's
+    literature line strip the same way instead of drifting apart."""
+    return title.rstrip().rstrip(".")
+
+
 def format_number(v) -> str:
     """`v` as people write it: no exponent, no trailing `.0`. `:g` switches
     to exponent notation above six significant figures, which turns a

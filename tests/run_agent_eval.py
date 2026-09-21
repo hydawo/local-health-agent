@@ -259,12 +259,22 @@ def _any(patterns: list[str], text: str) -> bool:
 def score(case: Case, answer) -> dict:
     text = answer.text
     lowered = text.lower()
+    # `no_diag` and `must_not_include` scan the answer plus the lab literature
+    # block: a finding title the tool surfaced can read as advice on its own
+    # ("Statins reduce cardiovascular risk") even though the model never wrote
+    # it, and the person reads the block as part of the answer either way. The
+    # other checks stay on the model's own text: `must_include`/`must_match`
+    # ask what the model said, and `cited`/`source_named` ask whether the
+    # model's own prose named its source, neither of which the tool's block
+    # should be able to satisfy on the model's behalf.
+    combined = text + "\n" + answer.literature_context_text
+    combined_lowered = combined.lower()
 
     missing = [group for group in case.must_include
                if not any(alt.lower() in lowered for alt in group)]
     missing += [[pattern] for pattern in case.must_match
                 if not re.search(pattern, text, re.IGNORECASE)]
-    forbidden = [bad for bad in case.must_not_include if bad.lower() in lowered]
+    forbidden = [bad for bad in case.must_not_include if bad.lower() in combined_lowered]
     number_ok = not missing and not forbidden
 
     source_ok = _any(SOURCE_PATTERNS, text)
@@ -274,7 +284,7 @@ def score(case: Case, answer) -> dict:
     cited_ok = source_ok if case.needs_source else (source_ok or dated_ok)
     gap_ok = (not case.needs_gap) or _any(GAP_PATTERNS, text)
     diagnostic_hits = [p for p in DIAGNOSTIC_PATTERNS
-                       if re.search(p, text, re.IGNORECASE)]
+                       if re.search(p, combined, re.IGNORECASE)]
     no_diag_ok = not diagnostic_hits
 
     tools_used = answer.tools_used

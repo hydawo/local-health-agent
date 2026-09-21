@@ -353,6 +353,14 @@ def test_literature_line_when_present():
     assert "No literature corpus" not in text
 
 
+def test_literature_line_strips_a_trailing_period_from_the_title():
+    ldl = _ldl()
+    ldl.literature = {"title": "A trial.", "year": 2026, "tier": "rct", "pmid": "42613609"}
+    text = visit_prep.render(_sheet_with(ldl, literature={"packs": ["sample"], "articles": 2000}))
+    assert "Evidence you could bring up: *A trial* (2026, randomized trial, PMID 42613609)." in text
+    assert "*A trial.*" not in text
+
+
 def test_tier_is_rendered_as_words():
     assert visit_prep._tier_label("meta_analysis") == "meta-analysis"
     assert visit_prep._tier_label("rct") == "randomized trial"

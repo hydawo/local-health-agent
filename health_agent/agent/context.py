@@ -24,8 +24,9 @@ HITS = 5
 
 HEADER = (
     "---\n"
-    "Published research on your out-of-range results. These are findings about\n"
-    "populations, found by the tool for the analyte's name, not chosen by the\n"
+    "Published research on the analytes flagged out of range on your latest\n"
+    "reports. These are findings about populations, found by the tool for\n"
+    "the analyte's name, not chosen by the\n"
     "model and not about your result.\n"
 )
 NONE_FOUND = "no citable finding in the installed packs."
@@ -120,7 +121,7 @@ def _num(v) -> str:
 
 def _finding_text(f: dict) -> str:
     year = f"{f['year']}, " if f.get("year") else ""
-    return f"*{f['title']}* ({year}{store.tier_label(f['tier'])}, PMID {f['pmid']})"
+    return f"*{store.clean_title(f['title'])}* ({year}{store.tier_label(f['tier'])}, PMID {f['pmid']})"
 
 
 def pmids(contexts: list[AnalyteContext]) -> frozenset[str]:

@@ -33,7 +33,8 @@ After the guardrail has run, the orchestrator scans the turn's tool steps:
 
 - Every `get_lab_trend` result whose latest point is outside the printed
   range: the batch form's `out_of_range_on_latest_report` list, or the
-  single-analyte form's last point with `out_of_range` true or a lab flag.
+  single-analyte form's last point with `out_of_range` true (a printed flag
+  with no parsed range does not trigger, matching the batch form).
 - Up to three analytes, in the order the tool returned them.
 - **Not when the model already searched the literature this turn.** If
   any `search_medical_literature` step ran, the model chose to surface
@@ -54,8 +55,9 @@ Title, year, tier label, PMID. Nothing from the abstract.
 
 ```
 ---
-Published research on your out-of-range results. These are findings about
-populations, found by the tool for the analyte's name, not chosen by the
+Published research on the analytes flagged out of range on your latest
+reports. These are findings about populations, found by the tool for
+the analyte's name, not chosen by the
 model and not about your result.
 
 - **LDL cholesterol**, 112 mg/dL on 2026-03-10, flagged H:

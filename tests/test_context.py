@@ -153,7 +153,7 @@ def test_render_matches_the_block_shape():
                                unit="ng/mL", date="2026-03-10", flag="L",
                                citation="labs_2026-03-10.pdf, p.1, 2026-03-10", findings=[]),
     ])
-    assert text.startswith("---\nPublished research on your out-of-range results.")
+    assert text.startswith("---\nPublished research on the analytes flagged out of range")
     assert "not chosen by the\nmodel and not about your result." in text
     assert ("- **LDL cholesterol**, 112 mg/dL on 2026-03-10, flagged H:\n"
             "  *Title one* (2026, meta-analysis, PMID 42613609);\n"
@@ -169,6 +169,14 @@ def test_render_matches_the_block_shape_for_one_finding():
     ])
     assert ("- **LDL cholesterol**, 112 mg/dL on 2026-03-10, flagged H:\n"
             "  *Title one* (2026, meta-analysis, PMID 42613609).") in text
+
+
+def test_render_strips_a_trailing_period_from_the_title():
+    text = context.render([
+        _ctx([{"title": "A trial.", "year": 2026, "tier": "rct", "pmid": "42613609"}]),
+    ])
+    assert "*A trial* (2026, randomized trial, PMID 42613609)" in text
+    assert "*A trial.*" not in text
 
 
 def test_render_of_nothing_is_empty():

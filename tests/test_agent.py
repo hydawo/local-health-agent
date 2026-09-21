@@ -598,6 +598,26 @@ def test_no_block_without_a_corpus_or_when_disabled(ctx, tmp_path, literature_fi
     assert orch.ask("LDL?").literature_context == []
 
 
+def test_literature_context_failure_does_not_break_the_answer(ctx, tmp_path,
+                                                              literature_fixture, monkeypatch):
+    """A broken corpus (a stale index, a locked file, anything else `lab_context`
+    or `render` can raise on) must not take the whole answer down with it. The
+    answer text and tool steps the model already produced are worth more than
+    a block the person never asked for."""
+    orch, fake = make(_lit_ctx(ctx, tmp_path, literature_fixture),
+                      [_LDL_CALL, {"content": "Your LDL was 112 mg/dL, flagged H."}])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("corpus index is corrupt")
+
+    monkeypatch.setattr(orchestrator.context_module, "lab_context", _raise)
+    answer = orch.ask("What is my LDL?")
+    assert answer.text.startswith("Your LDL was 112 mg/dL")
+    assert answer.literature_context == []
+    assert answer.literature_context_text == ""
+
+
 def test_system_prompt_tells_the_model_the_tool_appends_findings(ctx):
     text = orchestrator.Orchestrator(ctx).system_prompt()
     assert "the tool itself appends published findings" in text
