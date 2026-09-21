@@ -84,3 +84,31 @@ def test_sha256_file_matches_hashlib(tmp_path):
     p = tmp_path / "f"
     p.write_bytes(b"abc")
     assert packs.sha256_file(p) == hashlib.sha256(b"abc").hexdigest()
+
+
+def test_an_abstract_with_a_unicode_line_separator_round_trips(tmp_path):
+    """The sleep pack's first install died here: `str.splitlines` breaks on
+    U+2028 and U+0085 too, and the writer does not escape them."""
+    articles = _articles()
+    articles[0].abstract = "Alpha\u2028text with a line separator\u0085and NEL."
+    path = tmp_path / "x.jsonl.gz"
+    packs.write_pack(path, packs.CATALOG["sleep"], "1", articles, license="L")
+    manifest, back = packs.read_pack(path)
+    assert manifest.article_count == 2
+    assert back[0].abstract == articles[0].abstract
+
+
+def test_a_malformed_article_line_is_a_pack_error_not_a_traceback(tmp_path):
+    path = tmp_path / "x.jsonl.gz"
+    packs.write_pack(path, packs.CATALOG["sleep"], "1", _articles(), license="L")
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        first = fh.readline()
+        body = fh.read()
+    body = body.replace('"pmid": "1"', '"pmid": "1')  # break one line's JSON
+    manifest = json.loads(first)
+    manifest["sha256_of_articles"] = packs.sha256_text(body)
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        fh.write(json.dumps(manifest, sort_keys=True) + "\n" + body)
+    with pytest.raises(packs.PackError) as excinfo:
+        packs.read_pack(path)
+    assert "not valid" in str(excinfo.value)

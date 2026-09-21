@@ -211,7 +211,15 @@ def read_pack(path: Path) -> tuple[Manifest, list[ParsedArticle]]:
     manifest = Manifest(**raw)
     if sha256_text(body) != manifest.sha256_of_articles:
         raise PackError(f"{path.name}: article digest does not match the manifest")
-    articles = [_article_from_raw(json.loads(line)) for line in body.splitlines() if line]
+    # Split on "\n" only. `str.splitlines` also breaks on U+2028, U+0085 and
+    # friends, and an abstract can contain them (the sleep pack's first
+    # install died on one): the writer escapes nothing, so one JSON line
+    # became two half-lines and a JSONDecodeError traceback.
+    try:
+        articles = [_article_from_raw(json.loads(line))
+                    for line in body.split("\n") if line]
+    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+        raise PackError(f"{path.name}: an article line is not valid: {exc}") from exc
     if len(articles) != manifest.article_count:
         raise PackError(f"{path.name}: manifest says {manifest.article_count} "
                         f"articles, file holds {len(articles)}")
