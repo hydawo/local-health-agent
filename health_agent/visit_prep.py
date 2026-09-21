@@ -25,7 +25,7 @@ from datetime import date, timedelta
 
 from . import metrics
 from .agent.guardrail import DISCLAIMER
-from .literature import tiers
+from .literature.store import citable, once_embedder, tier_label, TIER_LABELS
 from .store import queries
 from .store.queries import LabPoint, LabTrend
 
@@ -305,23 +305,10 @@ INTRO = ("Prepared {date} from your own files. Nothing here is a conclusion; "
 NOTHING = ("Nothing stood out in what was looked at. That describes this "
            "tool's cutoffs; it says nothing about your health.")
 
-# Evidence tier key -> how the sheet says it. A key outside the map is
-# printed with its underscores replaced by spaces.
-TIER_LABELS = {
-    "meta_analysis": "meta-analysis",
-    "systematic_review": "systematic review",
-    "rct": "randomized trial",
-    "clinical_trial": "clinical trial",
-    "guideline": "guideline",
-    "narrative_review": "review",
-    "scoping_review": "scoping review",
-    "observational": "observational study",
-    "case_report": "case report",
-}
-
-
-def _tier_label(tier: str) -> str:
-    return TIER_LABELS.get(tier, tier.replace("_", " "))
+# `TIER_LABELS` and `_tier_label` now live in `literature/store.py`, shared
+# with `agent/context.py`; these names stay bound here as aliases so
+# existing call sites and tests keep working unchanged.
+_tier_label = tier_label
 
 
 def _num(v: float) -> str:
@@ -453,55 +440,13 @@ def render(sheet: Sheet) -> str:
     return "\n".join(lines) + "\n"
 
 
-# Tiers that never make it onto the sheet. A protocol is a plan, an
-# `unknown` is an article PubMed recorded no design for; neither is a
-# finding a person should carry into a visit as evidence.
-_UNCITABLE_TIERS = frozenset({tiers.PROTOCOL, tiers.UNKNOWN})
-# `hits` is asked for this many so the filter above has something left to
+# `_citable` and `_OnceEmbedder` now live in `literature/store.py` as
+# `citable` and `once_embedder`; `_citable` stays bound here as an alias.
+# `_UNCITABLE_TIERS` moved to `store.UNCITABLE_TIERS`.
+_citable = citable
+# `hits` is asked for this many so the citable filter has something left to
 # choose from; the best-tiered of what survives is the one printed.
 _LITERATURE_HITS = 5
-
-
-def _citable(finding) -> bool:
-    return not finding.retracted and finding.evidence_tier not in _UNCITABLE_TIERS
-
-
-class _OnceEmbedder:
-    """`hits` decides semantic-versus-keyword on every call, so a corpus
-    whose embedder is down would log the same warning once per question.
-    This proxy sits between `hits` and the real embedder: the first failed
-    `embed` trips a flag, and `factory` then hands `hits` nothing at all,
-    so the rest of the sheet goes straight to keyword search. When the
-    embedder works, `hits` sees exactly what it would have seen."""
-
-    def __init__(self, embedder_factory) -> None:
-        self._make = embedder_factory
-        self._embedder = None
-        self.failed = False
-
-    @property
-    def factory(self):
-        return None if self.failed or self._make is None else self
-
-    def __call__(self):
-        if self._embedder is None:
-            try:
-                self._embedder = self._make()
-            except Exception:
-                self.failed = True
-                raise
-        return self
-
-    @property
-    def name(self) -> str:
-        return self._embedder.name
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        try:
-            return self._embedder.embed(texts)
-        except Exception:
-            self.failed = True
-            raise
 
 
 def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
@@ -517,7 +462,7 @@ def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
     report = lit_corpus.coverage(literature_conn)
     sheet.literature = {"packs": [p.split("@")[0] for p in report["packs"]],
                         "articles": report["article_count"]}
-    once = _OnceEmbedder(embedder_factory)
+    once = once_embedder(embedder_factory)
     for signal in sheet.signals:
         if not signal.kind.startswith("lab_"):
             continue

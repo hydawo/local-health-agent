@@ -381,6 +381,12 @@ def test_visit_prep_imports_no_fetcher_and_no_model():
         assert forbidden not in text, f"visit_prep.py mentions {forbidden!r}"
 
 
+def test_context_module_imports_no_fetcher_and_no_model():
+    text = (Path(offline_check.__file__).parent / "agent" / "context.py").read_text()
+    for forbidden in ("fetch", "backends", "orchestrator", "import urllib", "import http"):
+        assert forbidden not in text, f"agent/context.py mentions {forbidden!r}"
+
+
 def test_cli_imports_fetch_only_inside_function_bodies():
     """`cli.py` is imported by every command, including ones that never touch
     the network (stats, ask, notes). A module-level `from .literature.fetch
