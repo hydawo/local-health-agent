@@ -863,7 +863,9 @@ def test_check_reports_installed_packs(tmp_path, capsys, monkeypatch):
     assert main(["--index", str(index), "literature", "install", "sleep",
                  "--from", str(pack_path), "--yes", "--no-embed"]) == 0
     capsys.readouterr()
-    assert "literature packs: 1 installed (sleep@1)" in _check_out(main, index, capsys)
+    out = _check_out(main, index, capsys)
+    assert "literature packs: 1 installed (sleep@1" in out
+    assert "never refreshed" in out
 
 
 def _check_out(main, index, capsys) -> str:
@@ -916,6 +918,108 @@ def _write_sleep_pack(tmp_path, version="1"):
     packs.write_pack(pack_path, packs.CATALOG["sleep"], version, articles,
                      license=packs.PACK_LICENSE)
     return pack_path
+
+
+def _refresh_stub(monkeypatch, *, added=3, retracted=1):
+    """refresh_pack stand-in that writes a real refresh_log row through
+    corpus.add so status and check have something to read."""
+    from health_agent.literature import corpus, medline
+    from health_agent.literature.fetch import refresh
+
+    calls = []
+
+    def fake(conn, spec, *, since=None, today=None, get=None, sleep=None, progress=None):
+        calls.append((spec.slug, since))
+        arts = [medline.ParsedArticle(pmid=f"9{i}", title=f"New {i}", abstract="Text.",
+                                      publication_types=["Journal Article"])
+                for i in range(added)]
+        stats = corpus.add(conn, arts, slug=spec.slug, license="L",
+                           window_from=since or "2026/09/19", window_to="2026/10/04",
+                           matched=added, retracted=retracted)
+        return refresh.RefreshStats("2026/09/19", "2026/10/04", added, stats.added,
+                                    retracted, stats.chunks)
+    monkeypatch.setattr(refresh, "refresh_pack", fake)
+    return calls
+
+
+def _install_sleep(main, tmp_path, index):
+    pack_path = _write_sleep_pack(tmp_path)
+    assert main(["--index", str(index), "literature", "install", "sleep",
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
+
+
+def test_literature_refresh_refreshes_installed_packs_and_reports(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+
+    code = main(["--index", str(index), "literature", "refresh", "--yes", "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert calls == [("sleep", None)]
+    assert "sleep" in out and "2026/09/19" in out and "3 added" in out and "1 retracted" in out
+
+    code = main(["--index", str(index), "literature", "status"])
+    out = capsys.readouterr().out
+    assert "sleep@1" in out and "refreshed" in out and "+3" in out
+
+    code = main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert "sleep@1" in out and "refreshed" in out
+
+
+def test_literature_refresh_sample_is_a_snapshot(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+    code = main(["--index", str(index), "literature", "refresh", "sample", "--yes"])
+    assert code == 0
+    assert "fixed snapshot" in capsys.readouterr().out
+    assert calls == []
+
+
+def test_literature_refresh_uninstalled_slug_exits_before_any_request(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+    code = main(["--index", str(index), "literature", "refresh", "exercise", "--yes"])
+    assert code == 2
+    assert "not installed" in capsys.readouterr().err
+    assert calls == []
+
+
+def test_literature_refresh_since_is_passed_through(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+    assert main(["--index", str(index), "literature", "refresh", "sleep",
+                 "--since", "2026-01-01", "--yes", "--no-embed"]) == 0
+    assert calls == [("sleep", "2026-01-01")]
+
+
+def test_literature_refresh_asks_again_after_the_notice_changed(tmp_path, capsys, monkeypatch):
+    """Consent recorded under notice version 1 does not cover refresh."""
+    from health_agent import consent
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    _refresh_stub(monkeypatch)
+    record_path = consent.consent_path(tmp_path / ".index", consent.LITERATURE)
+    data = json.loads(record_path.read_text())
+    data["notice_version"] = 1
+    record_path.write_text(json.dumps(data))
+    assert consent.needs_prompt(tmp_path / ".index", notice=consent.LITERATURE)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "no")
+    capsys.readouterr()
+    assert main(["--index", str(index), "literature", "refresh", "--no-embed"]) == 1
 
 
 def test_literature_install_refuses_a_file_that_names_a_different_pack(tmp_path, capsys):

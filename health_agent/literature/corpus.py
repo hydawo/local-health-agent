@@ -275,8 +275,15 @@ def coverage(conn: sqlite3.Connection, *, max_topics: int = 20) -> dict:
     packs = [f"{r['slug']}@{r['version']}" for r in conn.execute(
         "SELECT slug, version FROM pack ORDER BY slug")]
     pack_rows = [dict(r) for r in conn.execute(
-        "SELECT slug, version, built_at, refreshed_at, article_count FROM pack "
+        "SELECT id, slug, version, built_at, refreshed_at, article_count FROM pack "
         "ORDER BY slug")]
+    for row in pack_rows:
+        last = conn.execute(
+            "SELECT added, retracted, ran_at FROM refresh_log "
+            "WHERE pack_id = ? ORDER BY ran_at DESC, id DESC LIMIT 1",
+            (row["id"],)).fetchone()
+        row["last_refresh"] = dict(last) if last else None
+        del row["id"]
     total = conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"]
     if not total:
         return {"packs": packs, "pack_rows": pack_rows, "article_count": 0,

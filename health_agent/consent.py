@@ -102,7 +102,7 @@ CLOUD = Notice(
 
 LITERATURE = Notice(
     name="literature",
-    version=1,
+    version=2,
     filename="literature_consent.json",
     text="""\
 ────────────────────────────────────────────────────────────────────────
@@ -110,7 +110,7 @@ LITERATURE = Notice(
 ────────────────────────────────────────────────────────────────────────
 
 Asking questions never touches the network, and `offline-check` proves
-it. Two literature commands do, and only when you run them:
+it. Three literature commands do, and only when you run them:
 
   health-agent literature install <pack>
     Downloads one pack file from github.com (the project's releases),
@@ -120,18 +120,29 @@ it. Two literature commands do, and only when you run them:
     your questions. Packs are deliberately broad (cardiovascular, sleep)
     so that the choice says as little about you as possible.
 
+  health-agent literature refresh [pack ...]
+    Sends each installed pack's search terms (the same fixed list as
+    build-pack) plus a date range to eutils.ncbi.nlm.nih.gov, with your
+    IP address and the tool's version, and NCBI_API_KEY if it is set.
+    Because you only refresh packs you have installed, NCBI can tell
+    which broad areas you chose. That is the same kind of fact GitHub
+    sees at install, from a second party, and it repeats on every
+    refresh. Nothing from your data folder. Nothing about your
+    questions.
+
   health-agent literature build-pack <pack>
     A maintainer command. Sends the pack's search terms (a fixed list of
     medical subject headings, the same for everyone) to
     eutils.ncbi.nlm.nih.gov, with your IP address and the tool's version.
     If NCBI_API_KEY is set in your environment, it is sent too.
 
-Neither command runs on its own, checks for updates, or reports usage.
+None of them runs on its own, checks for updates, or reports usage.
 Never during ask, ingest, or search.
 
 Revoke with `health-agent literature-consent --revoke`.
 ────────────────────────────────────────────────────────────────────────""",
     summary=("Literature install downloads one named pack file from github.com; "
+             "refresh sends the same terms with a date range to NCBI, on demand; "
              "build-pack sends the catalog's fixed search terms to "
              "eutils.ncbi.nlm.nih.gov. Each reveals the choice, an IP address, "
              "and the tool's version; nothing from the data folder."),
