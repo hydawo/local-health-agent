@@ -373,8 +373,11 @@ disorders. `exercise` covers physical activity, fitness, training, and
 recovery. The four topical packs hold meta-analyses, systematic reviews,
 guidelines, and randomized controlled trials from 2015 on. Each installs on
 its own, with no dependency on another, and an article in two packs is stored
-once. Pack sizes, as a download and as an article count, are listed in each
-release's notes.
+once. The 2026.09 build: `cardiovascular` 79,280 articles (62 MB),
+`exercise` 40,057 (30 MB), `metabolic` 37,854 (29 MB), `sleep` 10,671
+(8 MB), `sample` 2,000 (1.6 MB). Each release's notes carry the current
+figures. Installing embeds every abstract with the local model, a long job
+for the largest pack; `--no-embed` gives keyword search at once.
 
 The first `install` prints a notice and asks before it connects. What the
 download reveals is which pack you chose, your IP address, and the tool's
