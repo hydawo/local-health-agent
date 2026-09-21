@@ -868,6 +868,24 @@ def test_check_reports_installed_packs(tmp_path, capsys, monkeypatch):
     assert "never refreshed" in out
 
 
+def test_check_joins_multiple_packs_with_semicolons(tmp_path, capsys, monkeypatch):
+    """Each pack's own refresh note already starts with ', '; joining packs
+    with ', ' too would read as one run-on list rather than two packs."""
+    from health_agent import embeddings
+    from health_agent.cli import main
+
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / ".index" / "health.db"
+    _install_pack(main, tmp_path, index, "sleep")
+    _install_pack(main, tmp_path, index, "cardiovascular")
+    capsys.readouterr()
+    out = _check_out(main, index, capsys)
+    assert "literature packs: 2 installed (" in out
+    assert "sleep@1, never refreshed; cardiovascular@1, never refreshed" in out \
+        or "cardiovascular@1, never refreshed; sleep@1, never refreshed" in out
+
+
 def _check_out(main, index, capsys) -> str:
     main(["--index", str(index), "check"])
     return capsys.readouterr().out
@@ -911,13 +929,23 @@ def test_check_checks_the_chat_model_separately(tmp_path, capsys, monkeypatch):
 
 
 def _write_sleep_pack(tmp_path, version="1"):
+    return _write_pack(tmp_path, "sleep", version=version)
+
+
+def _write_pack(tmp_path, slug, version="1"):
     from health_agent.literature import medline, packs
     articles = medline.parse_articles(
         (Path(__file__).parent / "fixtures" / "literature" / "corpus.xml").read_bytes())
-    pack_path = tmp_path / f"sleep-{version}.jsonl.gz"
-    packs.write_pack(pack_path, packs.CATALOG["sleep"], version, articles,
+    pack_path = tmp_path / f"{slug}-{version}.jsonl.gz"
+    packs.write_pack(pack_path, packs.CATALOG[slug], version, articles,
                      license=packs.PACK_LICENSE)
     return pack_path
+
+
+def _install_pack(main, tmp_path, index, slug, version="1"):
+    pack_path = _write_pack(tmp_path, slug, version=version)
+    assert main(["--index", str(index), "literature", "install", slug,
+                 "--from", str(pack_path), "--yes", "--no-embed"]) == 0
 
 
 def _refresh_stub(monkeypatch, *, added=3, retracted=1):
@@ -971,15 +999,76 @@ def test_literature_refresh_refreshes_installed_packs_and_reports(tmp_path, caps
 
 
 def test_literature_refresh_sample_is_a_snapshot(tmp_path, capsys, monkeypatch):
+    """Every named slug is a fixed snapshot: nothing to connect for, so the
+    network notice is never shown and no consent record is written."""
+    from health_agent import consent
     from health_agent.cli import main
     index = tmp_path / ".index" / "health.db"
     _install_sleep(main, tmp_path, index)
     calls = _refresh_stub(monkeypatch)
     capsys.readouterr()
+    record_path = consent.consent_path(tmp_path / ".index", consent.LITERATURE)
+    record_path.unlink(missing_ok=True)
     code = main(["--index", str(index), "literature", "refresh", "sample", "--yes"])
     assert code == 0
     assert "fixed snapshot" in capsys.readouterr().out
     assert calls == []
+    assert not record_path.exists()
+
+
+def test_literature_refresh_only_sample_installed_is_a_no_op(tmp_path, capsys, monkeypatch):
+    """No topical pack installed at all: the default slug resolution is
+    empty, so the command says so and exits 0 before any consent prompt."""
+    from health_agent import consent
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_pack(main, tmp_path, index, "sample")
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+    record_path = consent.consent_path(tmp_path / ".index", consent.LITERATURE)
+    record_path.unlink(missing_ok=True)
+    code = main(["--index", str(index), "literature", "refresh", "--yes"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "No topical packs installed" in out
+    assert calls == []
+    assert not record_path.exists()
+
+
+def test_literature_refresh_bad_since_exits_before_consent(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    calls = _refresh_stub(monkeypatch)
+    capsys.readouterr()
+    code = main(["--index", str(index), "literature", "refresh", "--since", "not-a-date"])
+    assert code == 2
+    assert "--since must be YYYY-MM-DD" in capsys.readouterr().err
+    assert calls == []
+
+
+def test_literature_refresh_one_pack_failing_does_not_stop_the_others(tmp_path, capsys, monkeypatch):
+    from health_agent.cli import main
+    from health_agent.literature.fetch import refresh
+    index = tmp_path / ".index" / "health.db"
+    _install_sleep(main, tmp_path, index)
+    _install_pack(main, tmp_path, index, "cardiovascular")
+    calls = _refresh_stub(monkeypatch)
+    real_fake = refresh.refresh_pack
+
+    def flaky(conn, spec, **kwargs):
+        if spec.slug == "cardiovascular":
+            raise RuntimeError("NCBI timed out")
+        return real_fake(conn, spec, **kwargs)
+    monkeypatch.setattr(refresh, "refresh_pack", flaky)
+    capsys.readouterr()
+
+    code = main(["--index", str(index), "literature", "refresh", "--yes", "--no-embed"])
+    out, err = capsys.readouterr()
+    assert code == 2
+    assert "cardiovascular" in err and "refresh failed" in err
+    assert "sleep" in out and "3 added" in out
+    assert calls == [("sleep", None)]  # cardiovascular raised before it could be recorded
 
 
 def test_literature_refresh_uninstalled_slug_exits_before_any_request(tmp_path, capsys, monkeypatch):

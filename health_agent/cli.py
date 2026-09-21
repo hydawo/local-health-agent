@@ -846,7 +846,7 @@ def _confirm_cloud(cfg: config.Config, model: str, *, assume_yes: bool) -> bool:
 
 
 def _confirm_literature(cfg: config.Config, *, assume_yes: bool) -> bool:
-    """One-time consent for the two literature commands that use the network.
+    """One-time consent for the three literature commands that use the network.
 
     Same shape as the cloud tier's: shown in full once, recorded per data
     folder, re-shown when the notice's substance changes. Kept as a separate
@@ -1403,8 +1403,9 @@ def cmd_literature_build(args: argparse.Namespace, cfg: config.Config) -> int:
 
 
 def _refresh_note(slug: str, refreshed_at: str | None) -> str:
-    """', refreshed N days ago' or ', never refreshed' for a topical pack;
-    empty for a fixed snapshot like `sample`, which is never refreshed."""
+    """', refreshed N days ago' (or 'today') or ', never refreshed' for a
+    topical pack; empty for a fixed snapshot like `sample`, which is never
+    refreshed."""
     from .literature import packs
 
     spec = packs.CATALOG.get(slug)
@@ -1413,6 +1414,8 @@ def _refresh_note(slug: str, refreshed_at: str | None) -> str:
     if not refreshed_at:
         return ", never refreshed"
     days = (datetime.now().astimezone() - datetime.fromisoformat(refreshed_at)).days
+    if days <= 0:
+        return ", refreshed today"
     return f", refreshed {days} day{'s' if days != 1 else ''} ago"
 
 
@@ -1607,7 +1610,6 @@ def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
     committed as it completes; a failure on one leaves the earlier ones
     refreshed and that one untouched.
     """
-    from .literature import corpus as lit_corpus
     from .literature import embed as lit_embed
     from .literature import packs, schema as lit_schema
 
@@ -1630,6 +1632,16 @@ def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
 
     slugs = args.slugs or [s for s in installed if s in packs.CATALOG
                            and packs.CATALOG[s].max_articles is None]
+    if not slugs:
+        # The default resolution above only ever picks topical packs, so an
+        # empty result here means the installed set is nothing but fixed
+        # snapshots (e.g. only `sample`). Reported and exited before any
+        # consent prompt: there is nothing this run could connect for.
+        sample_count = packs.CATALOG["sample"].max_articles
+        print(f"No topical packs installed; `sample` is a fixed snapshot of "
+              f"{sample_count:,} articles. Install a topical pack to have "
+              f"something to refresh.")
+        return 0
     for slug in slugs:
         if slug not in packs.CATALOG:
             print(f"{slug!r} is not a known pack.", file=sys.stderr)
@@ -1640,6 +1652,17 @@ def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
         if packs.CATALOG[slug].max_articles is None and slug not in installed:
             print(f"{slug} is not installed; nothing to refresh.", file=sys.stderr)
             return 2
+
+    if all(packs.CATALOG[slug].max_articles is not None for slug in slugs):
+        # Every named slug is a fixed snapshot: nothing here will ever
+        # connect, so the network notice never has to be shown, let alone
+        # consented to, for this run.
+        for slug in slugs:
+            spec = packs.CATALOG[slug]
+            print(f"{slug} is a fixed snapshot of {spec.max_articles} articles; "
+                  f"install a topical pack to have something to refresh.")
+        return 0
+
     if not _confirm_literature(cfg, assume_yes=args.yes):
         return 1
 
@@ -1974,7 +1997,7 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
         ok = False
     else:
         if installed:
-            listed = ", ".join(
+            listed = "; ".join(
                 f"{slug}@{ver}{_refresh_note(slug, refreshed_at)}"
                 for slug, (ver, _, refreshed_at) in installed.items())
             print(f"literature packs: {len(installed)} installed ({listed})")
@@ -2338,7 +2361,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_lit_consent.add_argument("--revoke", action="store_true",
                                help="withdraw consent; the notice is shown again "
-                                    "before the next install or build-pack")
+                                    "before the next install, refresh, or "
+                                    "build-pack")
     p_lit_consent.add_argument("--show-notice", action="store_true",
                                help="print the full disclosure and exit")
     p_lit_consent.set_defaults(func=cmd_literature_consent)
