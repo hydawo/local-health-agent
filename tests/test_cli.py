@@ -458,6 +458,37 @@ def test_ask_reports_an_unreachable_model(cli_records, monkeypatch):
     assert code == 2
 
 
+def test_ask_prints_and_serializes_the_literature_block(cli_records, tmp_path, monkeypatch):
+    from health_agent import ollama_client
+
+    pack_path = _write_pack(tmp_path, "cardiovascular")
+    code, _ = cli_records("literature", "install", "cardiovascular",
+                          "--from", str(pack_path), "--yes", "--no-embed")
+    assert code == 0
+
+    script = [
+        {"content": "", "tool_calls": [{"function": {
+            "name": "get_lab_trend", "arguments": {"analyte": "ldl"}}}]},
+        {"content": "Your LDL was 112 mg/dL, flagged H."},
+    ]
+    monkeypatch.setattr(ollama_client, "chat", _fake_chat(script))
+    code, out = cli_records("ask", "What is my LDL?")
+    assert code == 0
+    assert "Your LDL was 112 mg/dL" in out
+    assert "Published research on your out-of-range results" in out
+    assert out.rstrip().endswith(").") or "no citable finding" in out
+
+    monkeypatch.setattr(ollama_client, "chat", _fake_chat(script))
+    code, out = cli_records("ask", "--json", "What is my LDL?")
+    data = json.loads(out)
+    assert data["literature_context"][0]["analyte"] == "ldl"
+    assert data["literature_context_text"].startswith("---")
+
+    monkeypatch.setattr(ollama_client, "chat", _fake_chat(script))
+    code, out = cli_records("ask", "--no-literature-context", "What is my LDL?")
+    assert "Published research" not in out
+
+
 def test_search_json_carries_kind_and_section(cli_records):
     code, out = cli_records("search", "coffee", "--kind", "note", "--json")
     payload = json.loads(out)

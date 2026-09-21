@@ -34,6 +34,7 @@ from typing import Any
 
 from ..logging_setup import get_logger
 from . import backends
+from . import context as context_module
 from . import guardrail as guardrail_module
 from . import tools as tools_module
 
@@ -59,6 +60,10 @@ which you must cite with their year and evidence tier. If a question turns on a 
 threshold you were not given, search the literature for it; if that returns \
 nothing without filters, say the reports do not state it and their clinician \
 can.
+
+1c. When a lab result is outside its printed range, the tool itself appends \
+published findings on that analyte beneath your answer; you do not need to \
+search the literature for them unless the person asks what the research says.
 
 1a. Do not do arithmetic. If a tool result has an `overall` field, that is the \
 figure for the whole range — quote it as given. Never average, total, or \
@@ -135,6 +140,8 @@ class Answer:
     hit_step_limit: bool = False
     refused: bool = False
     guardrail: guardrail_module.GuardrailResult | None = None
+    literature_context: list = field(default_factory=list)
+    literature_context_text: str = ""
 
     @property
     def tools_used(self) -> list[str]:
@@ -176,9 +183,11 @@ class Orchestrator:
                  max_steps: int = DEFAULT_MAX_STEPS,
                  on_event: Callable[[str, dict], None] | None = None,
                  skip_guardrail: bool = False,
+                 literature_context: bool = True,
                  backend: "backends.Backend | None" = None) -> None:
         self.ctx = ctx
         self.skip_guardrail = skip_guardrail
+        self.literature_context = literature_context
         # Default to the local tier. The cloud backend is only ever passed in
         # explicitly, by a CLI path that has already taken consent.
         self.backend = backend or backends.LocalBackend(model=model, host=host)
@@ -267,6 +276,14 @@ class Orchestrator:
                            "`health-agent metric` to read the data directly.")
 
         answer.text, answer.guardrail = self._guard(answer, system, transcript)
+
+        if self.literature_context and not answer.refused:
+            answer.literature_context = context_module.lab_context(
+                answer.steps, self.ctx.literature_conn,
+                vector_path=self.ctx.literature_vector_path,
+                embedder_factory=self.ctx.embedder_factory)
+            answer.literature_context_text = context_module.render(answer.literature_context)
+
         answer.elapsed_sec = time.monotonic() - started
         return answer
 
