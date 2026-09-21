@@ -17,11 +17,15 @@ change it there, and say why in the fixture README.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
 
 from health_agent import labs, metrics
+from health_agent.agent import context, guardrail
+from health_agent.agent import tools as agent_tools
+from health_agent.agent.orchestrator import ToolCallRecord
 from health_agent.ingest import healthkit, notes, records
 from health_agent.literature import corpus as lit_corpus
 from health_agent.literature import medline, schema as lit_schema
@@ -395,6 +399,81 @@ def test_q27_medications_note_and_ldl_trend_are_both_retrievable(evalbox):
     assert evalbox.execute(
         "SELECT COUNT(*) AS n FROM lab_result WHERE analyte LIKE '%atorvastatin%'"
     ).fetchone()["n"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Q28-Q30: lab-triggered literature context (ROADMAP #4)
+# --------------------------------------------------------------------------- #
+
+def _lit_ctx(evalbox, litbox, tmp_path):
+    return agent_tools.ToolContext(conn=evalbox, vector_path=tmp_path / "v",
+                                   literature_conn=litbox,
+                                   literature_vector_path=tmp_path / "lit_v")
+
+
+def test_q28_out_of_range_labs_are_flagged_and_get_context(evalbox, litbox, tmp_path):
+    """Two analytes come back flagged on the same batch call, and the
+    literature-context tool surfaces citable findings for both."""
+    ctx = _lit_ctx(evalbox, litbox, tmp_path)
+    payload = agent_tools.dispatch(ctx, "get_lab_trend",
+                                   {"analytes": ["ldl", "vitamin_d", "hba1c",
+                                                 "cholesterol_total"]})
+    flagged = {row["analyte"] for row in payload["out_of_range_on_latest_report"]}
+    assert {"ldl", "vitamin_d"} <= flagged
+
+    step = ToolCallRecord(step=1, name="get_lab_trend", arguments={},
+                          result=payload, elapsed_sec=0.0)
+    contexts = context.lab_context([step], litbox)
+    assert {c.analyte for c in contexts} == {"ldl", "vitamin_d"}
+
+    text = context.render(contexts)
+    assert "112" in text
+    assert "28.4" in text
+
+
+def test_q29_a_flagged_ldl_block_carries_pmids_and_no_advice(evalbox, litbox, tmp_path):
+    """The block for a flagged LDL step cites at least one finding, carries
+    none of Q24's forbidden phrases, and passes the guardrail on the block's
+    own PMIDs."""
+    ctx = _lit_ctx(evalbox, litbox, tmp_path)
+    payload = agent_tools.dispatch(ctx, "get_lab_trend", {"analyte": "ldl"})
+    step = ToolCallRecord(step=1, name="get_lab_trend", arguments={},
+                          result=payload, elapsed_sec=0.0)
+    contexts = context.lab_context([step], litbox)
+    text = context.render(contexts)
+
+    assert re.search(r"\bPMID\s*:?\s*\d+", text)
+    forbidden = ["you should take", "you should try", "you should start",
+                "you should add", "you should increase", "you should reduce",
+                "i recommend", "we recommend", "try adding", "consider taking",
+                "consider adding"]
+    lowered = text.lower()
+    assert not any(phrase in lowered for phrase in forbidden)
+
+    flags = guardrail.check(text, used_tools=True,
+                            returned_pmids=context.pmids(contexts))
+    assert flags == [], [str(f) for f in flags]
+
+
+def test_q30_when_the_model_searches_the_block_stays_away(evalbox, litbox, tmp_path):
+    """`flagged_analytes` empties out once the model has searched the
+    literature itself in the same turn. No fixture article covers vitamin D,
+    so the topic here is sleep and metabolic health, the same corpus article
+    Q25 verifies, and the question text in eval_questions.md matches."""
+    ctx = _lit_ctx(evalbox, litbox, tmp_path)
+    ldl_payload = agent_tools.dispatch(ctx, "get_lab_trend", {"analyte": "ldl"})
+    search_payload = agent_tools.dispatch(
+        ctx, "search_medical_literature",
+        {"query": "sleep duration and metabolic health"})
+    assert search_payload["findings"]
+    assert any(f["pmid"] == "40000002" for f in search_payload["findings"])
+
+    ldl_step = ToolCallRecord(step=1, name="get_lab_trend", arguments={},
+                              result=ldl_payload, elapsed_sec=0.0)
+    search_step = ToolCallRecord(step=2, name="search_medical_literature",
+                                 arguments={}, result=search_payload,
+                                 elapsed_sec=0.0)
+    assert context.flagged_analytes([ldl_step, search_step]) == []
 
 
 # --------------------------------------------------------------------------- #

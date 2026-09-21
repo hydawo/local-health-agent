@@ -20,6 +20,7 @@ import os
 import shutil
 import sqlite3
 import sys
+from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
 
@@ -943,6 +944,7 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
         orchestrator = agent.Orchestrator(
             ctx, model=args.model, think=args.think,
             max_steps=args.max_steps, on_event=on_event, backend=backend,
+            literature_context=not args.no_literature_context,
         )
 
         if show_progress:
@@ -974,6 +976,8 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
                 "hit_step_limit": answer.hit_step_limit,
                 "tools_used": answer.tools_used,
                 "citations_available": answer.citations,
+                "literature_context": [asdict(c) for c in answer.literature_context],
+                "literature_context_text": answer.literature_context_text,
                 "guardrail": {
                     "flags": [str(f) for f in answer.guardrail.flags],
                     "fired": [str(f) for f in answer.guardrail.fired],
@@ -992,6 +996,10 @@ def cmd_ask(args: argparse.Namespace, cfg: config.Config) -> int:
 
         print()
         print(answer.text)
+
+        if answer.literature_context_text:
+            print()
+            print(answer.literature_context_text, end="")
 
         if args.show_tools and answer.steps:
             print("\n--- tool calls ---")
@@ -2260,6 +2268,9 @@ def build_parser() -> argparse.ArgumentParser:
                        choices=("ollama", "hashing"))
     p_ask.add_argument("--quiet", action="store_true",
                        help="suppress progress output")
+    p_ask.add_argument("--no-literature-context", action="store_true",
+                       help="do not append published findings under an answer "
+                            "that involves an out-of-range lab result")
     p_ask.add_argument("--json", action="store_true")
     p_ask.set_defaults(func=cmd_ask)
 

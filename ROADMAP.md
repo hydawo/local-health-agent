@@ -270,12 +270,29 @@ feature would make it substantially more likely. Before building it:
   year, retraction status as separate fields) rather than free prose, for
   exactly this reason.
 
-**What's left for #4 itself** is the feature slice 1 didn't build: automatically
-*surfacing* literature context when a lab value is trending toward or outside
-its reference range, rather than only responding when asked. Slice 1's
-`search_medical_literature` is reachable by the model on any question; #4 is
-about triggering it proactively from an out-of-range flag, plus the
-lab-triggered eval re-run noted above.
+**Shipped.** The lab-triggered piece above is built. `agent/context.py` reads
+the flags the lab tool already returned, after the model's answer is final.
+The model never sees the findings it looks up. There is nothing for it to
+synthesize into a recommendation. The trigger is a fixed rule, not a
+judgment call. It fires on up to three out-of-range analytes per answer.
+Each gets two findings at most, best evidence tier first. One exception
+applies. When the model already called `search_medical_literature` itself in
+the same turn, the block is left out. That block would just repeat what the
+model already said. `ask --no-literature-context` turns the feature off. The
+lab-triggered eval re-run this item asked for is in place. Q28 to Q30 in
+`tests/eval_questions.md` add a lab result flagged automatically, an
+adversarial "what should I do" shape, and the already-searched exception.
+Each is scored by a new `context` column in `run_agent_eval.py`. Run 7
+(`tests/eval_results.md`) scored 3/3 on that column on the 27B: the block
+appeared on the flagged-lab questions and stayed away when the model
+searched itself. The same run shows where the risk still lives: on a
+question where the model searched on its own, it linked population
+findings to the person's values in one uncited sentence. The block removes
+synthesis for surfaced evidence; evidence the model asks for itself is
+still the model's prose. Spec:
+[docs/superpowers/specs/2026-09-21-lab-literature-context-design.md](docs/superpowers/specs/2026-09-21-lab-literature-context-design.md);
+plan:
+[docs/superpowers/plans/2026-09-21-lab-literature-context.md](docs/superpowers/plans/2026-09-21-lab-literature-context.md).
 
 ## 5. Answer provenance / reproducibility log
 

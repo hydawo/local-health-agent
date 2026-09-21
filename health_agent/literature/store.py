@@ -203,6 +203,99 @@ def _fts_query(query: str) -> str:
     return " OR ".join(f'"{t}"' for t in tokens if len(t) > 1)
 
 
+# Papers the tool must never present as evidence: a retraction, a trial
+# protocol (a plan, not a result), or a record whose design MEDLINE did not
+# state. Shared by visit prep and by the lab context block.
+UNCITABLE_TIERS = frozenset({tiers.PROTOCOL, tiers.UNKNOWN})
+
+
+def citable(finding: Finding) -> bool:
+    return not finding.retracted and finding.evidence_tier not in UNCITABLE_TIERS
+
+
+# Evidence tier key -> how a rendered page says it. A key outside the map is
+# printed with its underscores replaced by spaces.
+TIER_LABELS = {
+    "meta_analysis": "meta-analysis",
+    "systematic_review": "systematic review",
+    "rct": "randomized trial",
+    "clinical_trial": "clinical trial",
+    "guideline": "guideline",
+    "narrative_review": "review",
+    "scoping_review": "scoping review",
+    "observational": "observational study",
+    "case_report": "case report",
+}
+
+
+def tier_label(tier: str) -> str:
+    return TIER_LABELS.get(tier, tier.replace("_", " "))
+
+
+def clean_title(title: str) -> str:
+    """A finding's title, trimmed of trailing whitespace and a trailing
+    period, so `*A trial.*` does not render with the sentence punctuation
+    caught inside the italics. Shared so context.render and visit_prep's
+    literature line strip the same way instead of drifting apart."""
+    return title.rstrip().rstrip(".")
+
+
+def format_number(v) -> str:
+    """`v` as people write it: no exponent, no trailing `.0`. `:g` switches
+    to exponent notation above six significant figures, which turns a
+    platelet count into `1.25e+06`. A lab can also print no numeric value
+    at all (`>300`, `<0.1`, `see note`); `v` is then a string already, and
+    this must never raise trying to format it as one, so a non-numeric `v`
+    is returned as-is."""
+    if not isinstance(v, (int, float)):
+        return str(v)
+    text = f"{v:.10f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
+
+
+class _OnceEmbedder:
+    """`hits` decides semantic-versus-keyword on every call, so a corpus
+    whose embedder is down would log the same warning once per question.
+    This proxy sits between `hits` and the real embedder: the first failed
+    `embed` trips a flag, and `factory` then hands `hits` nothing at all,
+    so the rest of the run goes straight to keyword search. When the
+    embedder works, `hits` sees exactly what it would have seen."""
+
+    def __init__(self, embedder_factory) -> None:
+        self._make = embedder_factory
+        self._embedder = None
+        self.failed = False
+
+    @property
+    def factory(self):
+        return None if self.failed or self._make is None else self
+
+    def __call__(self):
+        if self._embedder is None:
+            try:
+                self._embedder = self._make()
+            except Exception:
+                self.failed = True
+                raise
+        return self
+
+    @property
+    def name(self) -> str:
+        return self._embedder.name
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        try:
+            return self._embedder.embed(texts)
+        except Exception:
+            self.failed = True
+            raise
+
+
+def once_embedder(embedder_factory):
+    """See `_OnceEmbedder`. Returns the proxy; read `.factory` on each call."""
+    return _OnceEmbedder(embedder_factory)
+
+
 def hits(conn: sqlite3.Connection, query: str, *, limit: int = 5,
          min_tier: str | None = None, since_year: int | None = None,
          vector_path=None, embedder_factory=None) -> list[Finding]:

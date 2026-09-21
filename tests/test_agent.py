@@ -538,3 +538,86 @@ def test_local_backend_honours_the_model_environment_variable(monkeypatch):
     assert backends.LocalBackend(model="qwen3.6:27b").model == "qwen3.6:27b"
     monkeypatch.delenv(ollama_client.ENV_CHAT_MODEL)
     assert backends.LocalBackend().model == ollama_client.DEFAULT_CHAT_MODEL
+
+
+# --------------------------------------------------------------------------- #
+# Literature context block (task 2)
+# --------------------------------------------------------------------------- #
+
+def _lit_ctx(ctx, tmp_path, literature_fixture):
+    from health_agent.literature import corpus, medline, schema
+    lit = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(lit)
+    corpus.build(lit, medline.parse_articles(literature_fixture.read_bytes()),
+                 slug="sample", version="1", license="L")
+    return tools.ToolContext(conn=ctx.conn, vector_path=ctx.vector_path,
+                             literature_conn=lit,
+                             literature_vector_path=tmp_path / "lv")
+
+
+_LDL_CALL = {"content": "", "tool_calls": [{"function": {
+    "name": "get_lab_trend", "arguments": {"analyte": "ldl"}}}]}
+
+
+def test_flagged_lab_answer_gets_a_literature_block_after_the_model(ctx, tmp_path,
+                                                                    literature_fixture, monkeypatch):
+    orch, fake = make(_lit_ctx(ctx, tmp_path, literature_fixture),
+                      [_LDL_CALL, {"content": "Your LDL was 112 mg/dL, flagged H."}])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+    answer = orch.ask("What is my LDL?")
+    assert [c.analyte for c in answer.literature_context] == ["ldl"]
+    assert answer.literature_context[0].findings
+    assert answer.literature_context_text.startswith("---\nPublished research")
+    assert "PMID" in answer.literature_context_text
+    # never in the transcript the model saw
+    assert not any("Published research" in str(m) for call in fake.calls for m in call)
+    # and not in the answer text the guard judged
+    assert "Published research" not in answer.text
+
+
+def test_no_block_when_the_model_searched_the_literature_itself(ctx, tmp_path,
+                                                               literature_fixture, monkeypatch):
+    orch, fake = make(_lit_ctx(ctx, tmp_path, literature_fixture), [
+        _LDL_CALL,
+        {"content": "", "tool_calls": [{"function": {
+            "name": "search_medical_literature", "arguments": {"query": "LDL cholesterol"}}}]},
+        {"content": "Your LDL was 112 mg/dL (PMID 40000001)."}])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+    answer = orch.ask("What does research say about my LDL?")
+    assert answer.literature_context == [] and answer.literature_context_text == ""
+
+
+def test_no_block_without_a_corpus_or_when_disabled(ctx, tmp_path, literature_fixture, monkeypatch):
+    orch, fake = make(ctx, [_LDL_CALL, {"content": "Your LDL was 112 mg/dL."}])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+    assert orch.ask("LDL?").literature_context == []
+    orch, fake = make(_lit_ctx(ctx, tmp_path, literature_fixture),
+                      [_LDL_CALL, {"content": "Your LDL was 112 mg/dL."}],
+                      literature_context=False)
+    monkeypatch.setattr(ollama_client, "chat", fake)
+    assert orch.ask("LDL?").literature_context == []
+
+
+def test_literature_context_failure_does_not_break_the_answer(ctx, tmp_path,
+                                                              literature_fixture, monkeypatch):
+    """A broken corpus (a stale index, a locked file, anything else `lab_context`
+    or `render` can raise on) must not take the whole answer down with it. The
+    answer text and tool steps the model already produced are worth more than
+    a block the person never asked for."""
+    orch, fake = make(_lit_ctx(ctx, tmp_path, literature_fixture),
+                      [_LDL_CALL, {"content": "Your LDL was 112 mg/dL, flagged H."}])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("corpus index is corrupt")
+
+    monkeypatch.setattr(orchestrator.context_module, "lab_context", _raise)
+    answer = orch.ask("What is my LDL?")
+    assert answer.text.startswith("Your LDL was 112 mg/dL")
+    assert answer.literature_context == []
+    assert answer.literature_context_text == ""
+
+
+def test_system_prompt_tells_the_model_the_tool_appends_findings(ctx):
+    text = orchestrator.Orchestrator(ctx).system_prompt()
+    assert "the tool itself appends published findings" in text

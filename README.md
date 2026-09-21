@@ -356,6 +356,10 @@ as ungrounded rather than presented as though it came from your data.
 about X" from a **local, curated corpus of MEDLINE citations**, dated,
 evidence-tiered, and cited by PMID, instead of the model's training data.
 
+An out-of-range lab result in an `ask` answer draws on this same corpus too,
+automatically. See [A known hole, and what closed part of
+it](#a-known-hole-and-what-closed-part-of-it) for how.
+
 The corpus arrives as packs. Each is one download of abstracts on one broad
 area, published on this project's GitHub releases:
 
@@ -637,7 +641,7 @@ lands at milestone 9.
 
 ## Accuracy
 
-`tests/eval_questions.md` holds 27 questions with hand-verified answers spanning
+`tests/eval_questions.md` holds 30 questions with hand-verified answers spanning
 all three sources. There are two ways to run them:
 
 ```bash
@@ -732,6 +736,17 @@ PMID is recalled knowledge and gets flagged the same way a diagnosis does:
 one rewrite pass that asks the model to attach the PMID or drop the claim,
 then a visible note if that fails. A PMID the tool did not return is flagged
 too, so a recalled claim cannot be dressed up with an invented citation.
+
+The same out-of-range flag now does one more thing on its own. When an `ask`
+answer includes a lab result outside its printed range, `agent/context.py`
+looks up citable findings for that analyte. It does this after the model's
+answer is already final. It appends a block of those findings below the
+answer, and the model never sees this block. There is nothing left for the
+model to synthesize into a recommendation. The rule caps this at three
+flagged analytes per answer, with two findings each. It skips the block
+entirely when the model already called `search_medical_literature` itself in
+the same turn. That block would just repeat what the model already said.
+Pass `--no-literature-context` to `ask` to turn it off.
 
 **What is still genuinely open:**
 
