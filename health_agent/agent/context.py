@@ -69,7 +69,11 @@ def flagged_analytes(steps) -> list[dict]:
             rows = [_from_batch_row(r) for r in result["out_of_range_on_latest_report"]]
         elif result.get("points"):
             last = result["points"][-1]
-            if last.get("out_of_range") or last.get("flag"):
+            # `out_of_range` only, matching the batch form (tools.py adds a
+            # row to `out_of_range_on_latest_report` only when the parsed
+            # range says so): a printed flag with no parsed range (a
+            # text-valued result like ">300") does not trigger the block.
+            if last.get("out_of_range"):
                 rows = [{"analyte": result.get("analyte"), "label": result.get("label"),
                          "value": last.get("value"), "unit": last.get("unit"),
                          "date": last.get("collected_date"), "flag": last.get("flag"),
@@ -111,10 +115,7 @@ def lab_context(steps, literature_conn, *, vector_path=None,
 
 
 def _num(v) -> str:
-    if v is None:
-        return "?"
-    text = f"{v:.10f}".rstrip("0").rstrip(".")
-    return text or "0"
+    return "?" if v is None else store.format_number(v)
 
 
 def _finding_text(f: dict) -> str:

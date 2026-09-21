@@ -83,6 +83,20 @@ def test_flagged_analytes_ignores_other_tools_and_errors():
     assert context.flagged_analytes(steps) == []
 
 
+def test_flagged_analytes_ignores_a_printed_flag_with_no_parsed_range():
+    """A text-valued lab result (`>300`) has no numeric range to parse, so
+    `out_of_range` is None even though the report printed a flag. The single
+    form's gate must match the batch form's (`tools.py` only appends to
+    `out_of_range_on_latest_report` when the range says so), or the block
+    would later try to format a non-numeric value and crash after the
+    answer is already final."""
+    steps = [Step("get_lab_trend", {"analyte": "ferritin", "label": "Ferritin", "points": [
+        {"collected_date": "2026-03-10", "value": ">300", "unit": "ng/mL",
+         "reference_range": None, "flag": "H", "out_of_range": None,
+         "citation": "labs_2026-03-10.pdf, p.1, 2026-03-10"}]})]
+    assert context.flagged_analytes(steps) == []
+
+
 @pytest.fixture
 def corpus_conn(tmp_path):
     conn = schema.connect(tmp_path / "literature.db", create=True)
@@ -159,6 +173,14 @@ def test_render_matches_the_block_shape_for_one_finding():
 
 def test_render_of_nothing_is_empty():
     assert context.render([]) == ""
+
+
+def test_render_does_not_raise_on_a_text_valued_result():
+    text = context.render([context.AnalyteContext(
+        analyte="ferritin", label="Ferritin", value=">300", unit="ng/mL",
+        date="2026-03-10", flag="H", citation="labs_2026-03-10.pdf, p.1, 2026-03-10",
+        findings=[])])
+    assert ">300 ng/mL" in text
 
 
 @pytest.mark.parametrize("with_findings", [False, True])

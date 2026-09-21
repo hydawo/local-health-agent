@@ -25,7 +25,8 @@ from datetime import date, timedelta
 
 from . import metrics
 from .agent.guardrail import DISCLAIMER
-from .literature.store import citable, once_embedder, tier_label, TIER_LABELS
+from .literature import store
+from .literature.store import citable, format_number, once_embedder, tier_label, TIER_LABELS
 from .store import queries
 from .store.queries import LabPoint, LabTrend
 
@@ -305,18 +306,12 @@ INTRO = ("Prepared {date} from your own files. Nothing here is a conclusion; "
 NOTHING = ("Nothing stood out in what was looked at. That describes this "
            "tool's cutoffs; it says nothing about your health.")
 
-# `TIER_LABELS` and `_tier_label` now live in `literature/store.py`, shared
-# with `agent/context.py`; these names stay bound here as aliases so
-# existing call sites and tests keep working unchanged.
+# `TIER_LABELS`, `_tier_label`, and `_num` now live in `literature/store.py`
+# (the last as `format_number`), shared with `agent/context.py`; these names
+# stay bound here as aliases so existing call sites and tests keep working
+# unchanged.
 _tier_label = tier_label
-
-
-def _num(v: float) -> str:
-    """`v` as people write it: no exponent, no trailing `.0`. `:g` switches
-    to exponent notation above six significant figures, which turns a
-    platelet count into `1.25e+06`."""
-    text = f"{v:.10f}".rstrip("0").rstrip(".")
-    return text if text not in ("", "-0") else "0"
+_num = format_number
 
 
 def _sentence_label(label: str) -> str:
@@ -457,7 +452,6 @@ def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
     signal is left bare. None for metric shifts: a paper about resting heart
     rate says nothing about this person's watch. In place."""
     from .literature import corpus as lit_corpus
-    from .literature import store as lit_store
 
     report = lit_corpus.coverage(literature_conn)
     sheet.literature = {"packs": [p.split("@")[0] for p in report["packs"]],
@@ -466,9 +460,9 @@ def attach_literature(sheet: Sheet, literature_conn, *, vector_path=None,
     for signal in sheet.signals:
         if not signal.kind.startswith("lab_"):
             continue
-        found = lit_store.hits(literature_conn, signal.label, limit=_LITERATURE_HITS,
-                               vector_path=vector_path,
-                               embedder_factory=once.factory)
+        found = store.hits(literature_conn, signal.label, limit=_LITERATURE_HITS,
+                           vector_path=vector_path,
+                           embedder_factory=once.factory)
         citable = [f for f in found if _citable(f)]
         if not citable:
             continue

@@ -232,6 +232,19 @@ def tier_label(tier: str) -> str:
     return TIER_LABELS.get(tier, tier.replace("_", " "))
 
 
+def format_number(v) -> str:
+    """`v` as people write it: no exponent, no trailing `.0`. `:g` switches
+    to exponent notation above six significant figures, which turns a
+    platelet count into `1.25e+06`. A lab can also print no numeric value
+    at all (`>300`, `<0.1`, `see note`); `v` is then a string already, and
+    this must never raise trying to format it as one, so a non-numeric `v`
+    is returned as-is."""
+    if not isinstance(v, (int, float)):
+        return str(v)
+    text = f"{v:.10f}".rstrip("0").rstrip(".")
+    return text if text not in ("", "-0") else "0"
+
+
 class _OnceEmbedder:
     """`hits` decides semantic-versus-keyword on every call, so a corpus
     whose embedder is down would log the same warning once per question.
