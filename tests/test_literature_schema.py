@@ -103,8 +103,60 @@ def test_connect_creates_a_fresh_corpus_without_a_version_check(tmp_path):
     conn.close()
 
 
-def test_schema_version_is_4():
-    assert schema.LITERATURE_SCHEMA_VERSION == 4
+def test_schema_version_is_5():
+    assert schema.LITERATURE_SCHEMA_VERSION == 5
+
+
+def _v4_corpus(path):
+    """A corpus file as v4 wrote it: current tables minus the v5 additions,
+    stamped 4, with one pack and one article."""
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    sql = schema.SCHEMA_SQL.replace("refreshed_at           TEXT,\n", "")
+    start = sql.index("CREATE TABLE IF NOT EXISTS refresh_log")
+    end = sql.index(");", start) + 2
+    sql = sql[:start] + sql[end:]
+    conn.executescript(sql)
+    conn.execute("INSERT INTO corpus_meta(key, value) VALUES('schema_version', '4')")
+    conn.execute("INSERT INTO pack(slug, title, version, built_at, article_count) "
+                 "VALUES('sleep', 'sleep', '2026.09', '2026-09-20T20:00:00-04:00', 1)")
+    conn.execute("INSERT INTO article(pmid, title, publication_types, evidence_tier, "
+                 "tier_source, license) VALUES('1', 'T', '[]', 'unknown', 'unmapped', 'L')")
+    conn.commit()
+    conn.close()
+
+
+def test_connect_migrates_a_v4_corpus_in_place(tmp_path):
+    """Refusing a v4 file was fine when a corpus was a 1.6 MB download; it
+    is not now that cardiovascular is 62 MB."""
+    path = tmp_path / "literature.db"
+    _v4_corpus(path)
+    conn = schema.connect(path)
+    assert schema.read_version(conn) == 5
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pack)")}
+    assert "refreshed_at" in cols
+    assert conn.execute("SELECT COUNT(*) FROM refresh_log").fetchone()[0] == 0
+    row = conn.execute("SELECT slug, version, article_count, refreshed_at FROM pack").fetchone()
+    assert (row["slug"], row["version"], row["article_count"], row["refreshed_at"]) == \
+        ("sleep", "2026.09", 1, None)
+    conn.close()
+    # and it stays migrated
+    conn = schema.connect(path)
+    assert schema.read_version(conn) == 5
+    conn.close()
+
+
+def test_connect_still_refuses_a_corpus_below_v4(tmp_path):
+    path = tmp_path / "literature.db"
+    _v4_corpus(path)
+    import sqlite3
+    conn = sqlite3.connect(path)
+    conn.execute("UPDATE corpus_meta SET value = '3' WHERE key = 'schema_version'")
+    conn.commit()
+    conn.close()
+    with pytest.raises(schema.CorpusSchemaVersionMismatch):
+        schema.connect(path)
 
 
 def test_articles_are_unique_by_pmid_and_linked_to_packs(tmp_path):

@@ -1,6 +1,8 @@
 """Building a corpus from parsed articles."""
 from __future__ import annotations
 
+import pytest
+
 from health_agent.literature import corpus, medline, schema
 
 
@@ -227,3 +229,69 @@ def test_a_newer_pack_version_replaces_the_older_one(tmp_path):
     assert packs == [("sleep", "2026.10")]
     assert conn.execute("SELECT COUNT(*) AS n FROM article").fetchone()["n"] == 2
     conn.close()
+
+
+def _fresh(tmp_path):
+    conn = schema.connect(tmp_path / "literature.db", create=True)
+    schema.initialize(conn)
+    return conn
+
+
+def _art(pmid, title="T", abstract="Some abstract text.", **kw):
+    return medline.ParsedArticle(pmid=pmid, title=title, abstract=abstract,
+                                 publication_types=["Journal Article"], **kw)
+
+
+def test_add_links_new_and_existing_articles_and_unlinks_nothing(tmp_path):
+    conn = _fresh(tmp_path)
+    corpus.build(conn, [_art("1"), _art("2")], slug="sleep", version="2026.09",
+                 license="L")
+    before = conn.execute("SELECT version, built_at FROM pack").fetchone()
+
+    stats = corpus.add(conn, [_art("2", title="T2 revised"), _art("3")],
+                       slug="sleep", license="L", window_from="2026-09-19",
+                       window_to="2026-10-04", matched=2)
+
+    assert (stats.articles, stats.added) == (2, 1)
+    linked = {r["pmid"] for r in conn.execute(
+        "SELECT a.pmid FROM article a JOIN article_pack ap ON ap.article_id = a.id")}
+    assert linked == {"1", "2", "3"}          # 1 stayed linked
+    assert conn.execute("SELECT title FROM article WHERE pmid = '2'").fetchone()[0] == "T2 revised"
+    pack = conn.execute("SELECT version, built_at, refreshed_at, article_count FROM pack").fetchone()
+    assert (pack["version"], pack["built_at"]) == (before["version"], before["built_at"])
+    assert pack["refreshed_at"] is not None
+    assert pack["article_count"] == 3
+    log = conn.execute("SELECT * FROM refresh_log").fetchone()
+    assert (log["window_from"], log["window_to"], log["matched"], log["added"], log["retracted"]) == \
+        ("2026-09-19", "2026-10-04", 2, 1, 0)
+
+
+def test_add_requires_an_installed_pack(tmp_path):
+    conn = _fresh(tmp_path)
+    with pytest.raises(corpus.PackNotInstalled):
+        corpus.add(conn, [_art("1")], slug="sleep", license="L",
+                   window_from="a", window_to="b", matched=1)
+
+
+def test_mark_retracted_flips_only_rows_that_exist(tmp_path):
+    conn = _fresh(tmp_path)
+    corpus.build(conn, [_art("1"), _art("2")], slug="sleep", version="1", license="L")
+    n = corpus.mark_retracted(conn, {"2": "Retraction in: J 2026", "9": None})
+    assert n == 1
+    rows = {r["pmid"]: (r["retracted"], r["retraction_note"]) for r in
+            conn.execute("SELECT pmid, retracted, retraction_note FROM article")}
+    assert rows["2"] == (1, "Retraction in: J 2026")
+    assert rows["1"] == (0, None)
+    # idempotent: already-retracted rows are not counted again
+    assert corpus.mark_retracted(conn, {"2": "Retraction in: J 2026"}) == 0
+
+
+def test_coverage_reports_refresh_per_pack(tmp_path):
+    conn = _fresh(tmp_path)
+    corpus.build(conn, [_art("1")], slug="sleep", version="1", license="L")
+    report = corpus.coverage(conn)
+    (row,) = report["pack_rows"]
+    assert row["slug"] == "sleep" and row["refreshed_at"] is None
+    corpus.add(conn, [_art("2")], slug="sleep", license="L",
+               window_from="a", window_to="b", matched=1)
+    assert corpus.coverage(conn)["pack_rows"][0]["refreshed_at"] is not None
