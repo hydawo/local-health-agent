@@ -453,3 +453,44 @@ def test_fetch_term_keeps_a_capped_pack_on_one_sorted_handle():
     assert total == 50_000
     assert sum("esearch" in u for u in urls) == 1
     assert "sort=pub_date" in urls[0] and "mindate" not in urls[0]
+
+
+# --------------------------------------------------------------------------- #
+# Transient NCBI failures
+# --------------------------------------------------------------------------- #
+
+def test_esearch_retries_a_transient_backend_failure():
+    """The metabolic pack died on one 'Request to GWSearch failed' answer."""
+    answers = [b"<eSearchResult><ERROR>Search Backend failed: GWSearch response "
+               b"processing error: Request to GWSearch failed.</ERROR></eSearchResult>",
+               (FIX / "esearch.xml").read_bytes()]
+    slept = []
+    handle = eutils.search("x", get=lambda url, **kw: answers.pop(0), sleep=slept.append)
+    assert handle.count == 3
+    assert slept == [eutils.RETRY_PAUSE_SECONDS]
+
+
+def test_efetch_retries_a_5xx_and_gives_up_after_the_budget():
+    calls = []
+
+    def flaky(url, **kw):
+        calls.append(url)
+        raise client.FetchError("eutils.ncbi.nlm.nih.gov", 502, "Bad Gateway")
+
+    handle = eutils.SearchHandle(count=10, webenv="W", query_key="1")
+    with pytest.raises(client.FetchError) as excinfo:
+        eutils.fetch_all(handle, max_articles=10, get=flaky, sleep=lambda s: None)
+    assert excinfo.value.status == 502
+    assert len(calls) == eutils.RETRIES + 1
+
+
+def test_a_refused_host_or_a_4xx_is_not_retried():
+    calls = []
+
+    def refused(url, **kw):
+        calls.append(url)
+        raise client.FetchError("eutils.ncbi.nlm.nih.gov", 400, "Bad Request")
+
+    with pytest.raises(client.FetchError):
+        eutils.search("x", get=refused, sleep=lambda s: None)
+    assert len(calls) == 1
