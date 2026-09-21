@@ -1687,10 +1687,11 @@ def cmd_literature_refresh(args: argparse.Namespace, cfg: config.Config) -> int:
                 stats = lit_refresh.refresh_pack(
                     conn, spec, since=args.since, progress=report_progress)
             except Exception as exc:  # noqa: BLE001 - reported, never a traceback
-                # `refresh_pack` writes (upserts, the `pack` row, the
-                # `refresh_log` insert) before its own commit; a failure
-                # partway through leaves those uncommitted, and the next
-                # pack's `conn.commit()` would otherwise carry them along.
+                # `refresh_pack` commits in stages (add, mark, correct);
+                # a failure between them leaves the current stage's writes
+                # uncommitted, and the next pack's `conn.commit()` would
+                # otherwise carry them along. Stages already committed are
+                # consistent on their own.
                 conn.rollback()
                 print(f"{slug}: refresh failed: {exc}", file=sys.stderr)
                 failed = True

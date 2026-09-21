@@ -1107,14 +1107,19 @@ def test_literature_refresh_rolls_back_a_failed_packs_partial_writes(
         tmp_path, capsys, monkeypatch):
     """`refresh_pack` writes the `pack` row, upserts, and a `refresh_log`
     row before its own commit. If it raises partway through, those writes
-    must not survive to be swept up by the next pack's commit."""
+    must not survive to be swept up by the next pack's commit.
+
+    cardiovascular is installed first so it is refreshed first and fails
+    first; sleep's commit then follows. With the failing pack last, the
+    pending writes would be discarded by conn.close() and the rollback
+    would be untested."""
     from health_agent.cli import main
     from health_agent import config as config_mod
     from health_agent.literature import schema as lit_schema
     from health_agent.literature.fetch import refresh
     index = tmp_path / ".index" / "health.db"
-    _install_sleep(main, tmp_path, index)
     _install_pack(main, tmp_path, index, "cardiovascular")
+    _install_sleep(main, tmp_path, index)
     from health_agent.literature import corpus, medline
 
     def flaky(conn, spec, *, since=None, today=None, get=None, sleep=None, progress=None):
