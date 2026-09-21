@@ -528,6 +528,45 @@ def _medline_xml(articles) -> bytes:
     return "".join(parts).encode()
 
 
+def test_search_slices_clips_years_and_months_to_the_window():
+    """A window spanning a year boundary: only the years it touches are
+    queried, each clipped to the window's edges, and a year that is still
+    over the page limit after clipping is split into months, clipped the
+    same way."""
+    from urllib.parse import parse_qs, urlparse
+    responses = iter([
+        eutils.PAGE_LIMIT + 100,   # the whole-window query
+        eutils.PAGE_LIMIT + 50,    # year 2025, clipped, still over the limit
+        5,                         # December 2025, the only month the window touches
+        5,                         # year 2026, clipped, under the limit
+    ])
+    calls = []
+
+    def get(url, **kw):
+        q = {k: v[0] for k, v in parse_qs(urlparse(url).query).items()}
+        calls.append(q)
+        count = next(responses)
+        return (f"<eSearchResult><Count>{count}</Count><WebEnv>W</WebEnv>"
+                f"<QueryKey>1</QueryKey></eSearchResult>").encode()
+
+    handles = eutils.search_slices(
+        "x", first_year=2015, last_year=2027, get=get, sleep=lambda s: None,
+        mindate="2025/12/20", maxdate="2026/01/10", datetype="edat")
+
+    pairs = [(c["mindate"], c["maxdate"]) for c in calls]
+    assert pairs == [
+        ("2025/12/20", "2026/01/10"),
+        ("2025/12/20", "2025/12/31"),
+        ("2025/12/20", "2025/12/31"),
+        ("2026/01/01", "2026/01/10"),
+    ]
+    assert all(c["datetype"] == "edat" for c in calls)
+    # Exactly these four calls: no query for any of the 2015-2024 or
+    # 2026-2027 years the window doesn't touch.
+    assert len(calls) == 4
+    assert len(handles) == 2
+
+
 def test_esearch_sends_the_window_with_the_named_datetype():
     urls = []
     eutils.search("x", mindate="2026/09/19", maxdate="2026/10/04", datetype="edat",
