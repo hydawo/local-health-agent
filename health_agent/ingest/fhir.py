@@ -118,9 +118,19 @@ def _text(node, *keys) -> str | None:
     return node if isinstance(node, str) else None
 
 
+def _concept(node) -> dict:
+    """A CodeableConcept, or an empty one when the field is absent or is not
+    an object. Malformed shapes degrade to 'no name, no codings' rather than
+    raising anything but FhirParseError out of the parser."""
+    return node if isinstance(node, dict) else {}
+
+
 def _codings(code: dict) -> tuple[tuple[str, str], ...]:
     out = []
-    for entry in (code.get("coding") or []):
+    entries = code.get("coding")
+    for entry in (entries if isinstance(entries, list) else []):
+        if not isinstance(entry, dict):
+            continue
         system, value = entry.get("system"), entry.get("code")
         if isinstance(system, str) and isinstance(value, str):
             out.append((system, value))
@@ -134,7 +144,7 @@ def _first_category(obj: dict) -> str | None:
             if isinstance(text, str):
                 return text
             for coding in (entry.get("coding") or []):
-                if isinstance(coding.get("code"), str):
+                if isinstance(coding, dict) and isinstance(coding.get("code"), str):
                     return coding["code"]
         elif isinstance(entry, str):
             return entry
@@ -187,14 +197,14 @@ def _medication_name(obj: dict) -> str | None:
 def _medication_codings(obj: dict) -> tuple[tuple[str, str], ...]:
     for contained in (obj.get("contained") or []):
         if isinstance(contained, dict) and contained.get("resourceType") == "Medication":
-            codings = _codings(contained.get("code") or {})
+            codings = _codings(_concept(contained.get("code")))
             if codings:
                 return codings
-    return _codings(obj.get("medicationCodeableConcept") or {})
+    return _codings(_concept(obj.get("medicationCodeableConcept")))
 
 
 def _observation(obj: dict, member: str, rid: str):
-    code = obj.get("code") or {}
+    code = _concept(obj.get("code"))
     name = _text(code, "text") or ""
     category = _first_category(obj)
     value_num, unit, value_text = _quantity(obj)
@@ -222,7 +232,7 @@ def _coded_status(obj: dict) -> str | None:
     clinical = obj.get("clinicalStatus")
     if isinstance(clinical, dict):
         for coding in (clinical.get("coding") or []):
-            if isinstance(coding.get("code"), str):
+            if isinstance(coding, dict) and isinstance(coding.get("code"), str):
                 return coding["code"]
         text = clinical.get("text")
         if isinstance(text, str):
@@ -239,7 +249,7 @@ def _fact(obj: dict, member: str, rid: str, resource_type: str, kind: str):
         onset = _date_part(_text(obj, "authoredOn"))
         status = _text(obj, "status")
     else:
-        code = obj.get("code") or obj.get("vaccineCode") or {}
+        code = _concept(obj.get("code")) or _concept(obj.get("vaccineCode"))
         name = _text(code, "text") or ""
         codings = _codings(code)
         detail = None

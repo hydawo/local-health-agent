@@ -150,15 +150,39 @@ def test_no_dataclass_can_hold_identity():
 
 
 def test_identity_strings_never_survive_parsing():
-    for name in ("Observation-lab-chol.json", "Observation-vital-pulse.json",
-                 "Condition-knee.json", "MedicationRequest-ibuprofen.json",
-                 "DocumentReference-progress.json"):
+    planted = [p.name for p in sorted(FIX.glob("*.json"))
+               if b"SHOULD-NOT-BE" in p.read_bytes()
+               and not p.name.startswith("Patient-")]
+    assert len(planted) >= 10, planted
+    assert "Immunization-flu.json" in planted
+    assert "AllergyIntolerance-pollen.json" in planted
+    for name in planted:
         blob = repr(parse(name))
         assert "SHOULD-NOT-BE-STORED" not in blob
         assert "SHOULD-NOT-BE-FETCHED" not in blob
 
 
 def test_kinds_list_is_the_single_source_of_truth():
+    derived = set(fhir._FACT_TYPES.values()) | {"labs", "vitals", "notes"}
+    assert derived == set(fhir.CLINICAL_KINDS)
+    assert len(set(fhir.CLINICAL_KINDS)) == len(fhir.CLINICAL_KINDS)
     assert fhir.CLINICAL_KINDS == ("labs", "vitals", "conditions", "medications",
                                    "allergies", "immunizations", "procedures",
                                    "notes")
+
+
+@pytest.mark.parametrize("resource", [
+    {"resourceType": "Observation", "id": "a", "code": "oops"},
+    {"resourceType": "Observation", "id": "a", "code": {"coding": ["oops"]}},
+    {"resourceType": "Condition", "id": "a", "code": "oops"},
+    {"resourceType": "Condition", "id": "a", "code": {"coding": ["oops", 3]}},
+    {"resourceType": "Immunization", "id": "a", "vaccineCode": "oops"},
+    {"resourceType": "MedicationRequest", "id": "a",
+     "medicationCodeableConcept": {"coding": ["oops"]},
+     "contained": [{"resourceType": "Medication", "code": "oops"}]},
+])
+def test_a_structurally_wrong_code_degrades_instead_of_raising(resource):
+    parsed = fhir.parse_resource(resource, "m")
+    assert parsed.name == ""
+    assert not getattr(parsed, "codings", ())
+    assert getattr(parsed, "code", None) is None

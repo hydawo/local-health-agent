@@ -15,7 +15,7 @@
  "category": [
   "environment"
  ],
- "subject": {
+ "patient": {
   "reference": "Patient/SHOULD-NOT-BE-STORED"
  }
 }
