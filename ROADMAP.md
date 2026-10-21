@@ -408,8 +408,9 @@ Measured on one real export, 3,568 clinical files in 236 MB spanning 2018 to
 | `AllergyIntolerance` | 1 | allergies |
 | `Patient` | 1 | never ingested |
 
-The two collapses are real duplicates: identical name, code, date, dosage
-text and status under two resource ids.
+The three collapses, two medications and one immunization, are real
+duplicates: identical name, code, date, dosage text and status under two
+resource ids.
 
 Fetching the attachments that note references point to is not built. Neither
 is FHIR from sources other than an Apple Health export, and nothing here

@@ -262,7 +262,7 @@ transport. The second is Claim 3's test.
 An Apple Health export can include a `clinical-records/` folder of FHIR files.
 Ingesting it means the index can now hold diagnoses, prescriptions, allergies
 and procedures. That is more sensitive than anything this project stored
-before, and it is exactly what `ask --cloud` would send if you opted into it,
+before, and it is among what `ask --cloud` would send if you opted into it,
 as the bullet on the cloud tier below says. Four things limit the exposure.
 
 - **They come from a file you already had.** The tool reads the folder inside
@@ -280,13 +280,15 @@ as the bullet on the cloud tier below says. Four things limit the exposure.
   discarded by the parser, so none of it can be stored by mistake later.
   `test_no_identity_string_reaches_the_database` plants identity markers in the
   fixtures and then scans the whole database for them.
-- **Nothing is written outside the index.** Your export is never modified.
+- **Your export is never modified.** Ingest opens the folder read-only and
+  writes only to the index.
 
 **The cloud exception.** With `ask --cloud`, every tool result the model
 requests is sent to Anthropic, and that includes clinical records. So does the
-index inventory, which for this data holds only counts per kind, a date range
-and the names of the vitals a clinician measured, never a diagnosis or a
-medication. The cloud section below describes that boundary in full.
+index inventory, which the orchestrator builds with `data_inventory()` in
+`health_agent/agent/tools.py` and places in the system prompt: for this data it
+holds only counts per kind, a date range and the names of the vitals a
+clinician measured, never a diagnosis or a medication. The cloud section below describes that boundary in full.
 
 **Retention.** `health-agent reset` deletes the records with the rest of the
 index.
