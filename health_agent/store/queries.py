@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from ..metrics import Kind, Metric
@@ -61,6 +61,9 @@ class SeriesResult:
     total_records: int = 0
     available_from: str | None = None
     available_to: str | None = None
+    # Dates where two sources reported different values: {"collected_date",
+    # "values", "sources"}. Reported, never resolved.
+    disagreements: tuple[dict, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -431,6 +434,8 @@ class LabPoint:
     page_no: int
     raw_line: str | None
     via_ocr: bool = False
+    source: str = "pdf"            # 'pdf' | 'fhir'; OCR stays in via_ocr
+    also_from: tuple[str, ...] = ()  # other sources that reported this same value
 
     @property
     def citation(self) -> str:
@@ -463,6 +468,9 @@ class LabTrend:
     total_results: int = 0
     available_from: str | None = None
     available_to: str | None = None
+    # Dates where two sources reported different values: {"collected_date",
+    # "values", "sources"}. Reported, never resolved.
+    disagreements: tuple[dict, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -578,6 +586,56 @@ def lab_coverage(conn: sqlite3.Connection, key: str) -> tuple[int, str | None, s
     return int(row["n"]), row["first"], row["last"]
 
 
+def _collapse(points: list[LabPoint]) -> tuple[list[LabPoint], tuple[dict, ...]]:
+    """One measurement reported by two sources becomes one point; two different
+    measurements on a date stay two points and are reported.
+
+    The same draw can arrive from a scanned report and from the health
+    system's own FHIR record. `lab_result.dedup_key` includes the document,
+    so it makes re-ingesting one file idempotent and does nothing across
+    files: without this, a trend would plot the same value twice.
+
+    Only a cross-source repeat collapses. Rows from a single source are never
+    merged (two identical results from one report are two results), so a
+    single-source trend comes back exactly as it went in. Where both sources
+    report the same value some number of times, the larger per-source count
+    is kept, so a genuine same-day repeat in one source survives.
+    """
+    order = {id(p): i for i, p in enumerate(points)}
+    by_date: dict[str | None, list[LabPoint]] = {}
+    for point in points:
+        by_date.setdefault(point.collected_date, []).append(point)
+
+    kept: list[tuple[int, LabPoint]] = []
+    clashes: list[dict] = []
+    for date, group in by_date.items():
+        by_value: dict[tuple, list[LabPoint]] = {}
+        for point in group:
+            by_value.setdefault((point.value_num, point.value_text, point.unit),
+                                []).append(point)
+        for same in by_value.values():
+            sources = {p.source for p in same}
+            if len(sources) == 1:
+                kept.extend((order[id(p)], p) for p in same)
+                continue
+            per_source = max(sum(1 for p in same if p.source == s)
+                             for s in sources)
+            ranked = sorted(same, key=lambda p: (p.ref_text is None, p.via_ocr,
+                                                 p.source != "pdf", order[id(p)]))
+            for winner in ranked[:per_source]:
+                others = tuple(sorted(sources - {winner.source}))
+                kept.append((order[id(winner)], replace(winner, also_from=others)))
+        if len(by_value) > 1 and len({p.source for p in group}) > 1:
+            clashes.append({
+                "collected_date": date,
+                "values": [v[0].value_num if v[0].value_num is not None
+                           else v[0].value_text for v in by_value.values()],
+                "sources": sorted({p.source for p in group}),
+            })
+    kept.sort(key=lambda t: t[0])
+    return [p for _, p in kept], tuple(clashes)
+
+
 def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
               end: str | None = None) -> LabTrend:
     """Time series for one analyte, with a citation on every point.
@@ -592,7 +650,7 @@ def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
     sql = (
         "SELECT l.collected_date, l.value_num, l.value_text, l.unit, l.ref_low, "
         "l.ref_high, l.ref_text, l.flag, l.analyte, l.page_no, l.raw_line, "
-        "l.via_ocr, d.path "
+        "l.via_ocr, l.extracted_by, d.path "
         "FROM lab_result l JOIN document d ON d.id = l.document_id "
         "WHERE l.analyte_key = ? "
     )
@@ -613,9 +671,11 @@ def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
             ref_high=r["ref_high"], ref_text=r["ref_text"], flag=r["flag"],
             analyte=r["analyte"], path=r["path"], page_no=r["page_no"],
             raw_line=r["raw_line"], via_ocr=bool(r["via_ocr"]),
+            source="fhir" if r["extracted_by"] == "fhir" else "pdf",
         )
         for r in rows
     ]
+    points, disagreements = _collapse(points)
     from .. import labs as _labs
     return LabTrend(
         key=key,
@@ -625,7 +685,80 @@ def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
         total_results=total,
         available_from=available_from,
         available_to=available_to,
+        disagreements=disagreements,
     )
+
+
+def clinical_facts(conn: sqlite3.Connection, *, kind: str | None = None,
+                   since: str | None = None, limit: int | None = None) -> list[dict]:
+    """Conditions, medications, allergies, immunizations and procedures that
+    a health system sent back, newest first."""
+    sql = ("SELECT f.kind, f.name, f.code, f.code_system, f.status, "
+           "f.onset_date, f.detail_text, f.category, d.path "
+           "FROM clinical_fact f JOIN document d ON d.id = f.document_id ")
+    where, params = [], []
+    if kind:
+        where.append("f.kind = ?")
+        params.append(kind)
+    if since:
+        where.append("(f.onset_date IS NULL OR f.onset_date >= ?)")
+        params.append(since)
+    if where:
+        sql += "WHERE " + " AND ".join(where) + " "
+    sql += "ORDER BY COALESCE(f.onset_date, '0000') DESC, f.name"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    out = []
+    for row in conn.execute(sql, params):
+        item = dict(row)
+        item["citation"] = item.pop("path")
+        out.append(item)
+    return out
+
+
+def clinical_fact_coverage(conn: sqlite3.Connection) -> dict:
+    rows = conn.execute(
+        "SELECT kind, COUNT(*) AS n, MIN(onset_date) AS first, "
+        "MAX(onset_date) AS last FROM clinical_fact GROUP BY kind").fetchall()
+    return {r["kind"]: {"count": r["n"], "first": r["first"], "last": r["last"]}
+            for r in rows}
+
+
+def clinical_vitals(conn: sqlite3.Connection, *, metric: str | None = None,
+                    start: str | None = None, end: str | None = None,
+                    limit: int = 200) -> list[dict]:
+    sql = ("SELECT v.metric, v.metric_key, v.value_num, v.value_text, v.unit, "
+           "v.measured_at, v.local_date, v.category, d.path "
+           "FROM clinical_vital v JOIN document d ON d.id = v.document_id ")
+    where, params = [], []
+    if metric:
+        where.append("v.metric_key = ?")
+        params.append(metric.strip().lower().replace(" ", "_"))
+    if start:
+        where.append("v.local_date >= ?")
+        params.append(start)
+    if end:
+        where.append("v.local_date <= ?")
+        params.append(end)
+    if where:
+        sql += "WHERE " + " AND ".join(where) + " "
+    sql += "ORDER BY COALESCE(v.measured_at, '') DESC LIMIT ?"
+    params.append(limit)
+    out = []
+    for row in conn.execute(sql, params):
+        item = dict(row)
+        item["citation"] = item.pop("path")
+        out.append(item)
+    return out
+
+
+def clinical_vital_metrics(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT metric_key, MAX(metric) AS metric, MAX(unit) AS unit, "
+        "COUNT(*) AS n, MIN(local_date) AS first, MAX(local_date) AS last "
+        "FROM clinical_vital GROUP BY metric_key ORDER BY n DESC").fetchall()
+    return [dict(r) for r in rows]
 
 
 def document_summary(conn: sqlite3.Connection) -> dict:
