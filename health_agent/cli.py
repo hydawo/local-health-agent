@@ -29,7 +29,7 @@ from . import (__version__, agent, config, consent, embeddings, labs, metrics,
                ollama_client)
 from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
-from .agent.tools import _FACT_KIND_ARG
+from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
 from .literature import store as literature_store
 from .store import queries, sqlite_schema, vector_store
 
@@ -1189,6 +1189,41 @@ def cmd_notes(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+# Column caps for `clinical`: kind (<=12) + name + status + date (10) + detail
+# plus four 2-character separators come to 118 characters, inside a 120 column
+# terminal. Longer text is cut with a trailing "..." so the cut is visible.
+_CLINICAL_NAME_W = 38
+_CLINICAL_STATUS_W = 12
+_CLINICAL_DETAIL_W = 38
+
+
+def _clip(text: str | None, width: int) -> str:
+    """One line, cut at `width`, so long dosage text cannot widen the table."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= width else flat[:width - 3] + "..."
+
+
+def _join(parts: list[str]) -> str:
+    return parts[0] if len(parts) == 1 else (
+        ", ".join(parts[:-1]) + " and " + parts[-1])
+
+
+def _clinical_holdings(conn: sqlite3.Connection, *, leave_out: set[str]) -> str:
+    """What the index holds, as a sentence fragment, for an absence message.
+
+    `leave_out` names the clinical labels the caller just reported as missing.
+    When no clinical figure is left, falls back to the HealthKit record and
+    report counts so the reader still learns what is there."""
+    held = [f"{n:,} {label}" for label, n, _ in _clinical_counts(conn)
+            if label not in leave_out]
+    if held:
+        return _join(held)
+    summary = queries.index_summary(conn)
+    docs = queries.document_summary(conn)
+    return (f"{summary['records']:,} HealthKit records and "
+            f"{docs['documents']:,} report PDF(s)")
+
+
 def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
     """Diagnoses, prescriptions and the rest, as the health system sent them."""
     kind = None
@@ -1202,10 +1237,17 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
     try:
         coverage = queries.clinical_fact_coverage(conn)
         if not coverage:
-            print("No clinical records in the index. They come from the "
-                  "clinical-records folder of an Apple Health export; "
-                  "`health-agent ingest` reads them unless --no-clinical or "
-                  "--skip-clinical left them out.")
+            held = _clinical_holdings(conn, leave_out=set(_FACT_KIND_ARG))
+            where = ("They come from the clinical-records folder of an Apple "
+                     "Health export; `health-agent ingest` reads them unless "
+                     "--no-clinical or --skip-clinical left them out.")
+            if _clinical_counts(conn):
+                print("No clinical facts (conditions, medications, allergies, "
+                      f"immunizations or procedures) in the index. It holds "
+                      f"{held}. {where}")
+            else:
+                print(f"No clinical records in the index. It holds {held}. "
+                      f"{where}")
             return 0
         rows = queries.clinical_facts(conn, kind=kind)
         if not rows:
@@ -1228,20 +1270,6 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
-# Column caps for `clinical`: kind (<=12) + name + status + date (10) + detail
-# plus four 2-character separators come to 118 characters, inside a 120 column
-# terminal. Longer text is cut with a trailing "..." so the cut is visible.
-_CLINICAL_NAME_W = 38
-_CLINICAL_STATUS_W = 12
-_CLINICAL_DETAIL_W = 38
-
-
-def _clip(text: str | None, width: int) -> str:
-    """One line, cut at `width`, so long dosage text cannot widen the table."""
-    flat = " ".join((text or "").split())
-    return flat if len(flat) <= width else flat[:width - 3] + "..."
-
-
 def _vital_value(row: dict) -> str:
     if row["value_num"] is not None:
         return literature_store.format_number(row["value_num"])
@@ -1254,10 +1282,11 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
     try:
         metrics_ = queries.clinical_vital_metrics(conn)
         if not metrics_:
-            print("No clinician-measured vitals in the index. They come from "
-                  "the clinical-records folder of an Apple Health export; "
-                  "`health-agent ingest` reads them unless --no-clinical or "
-                  "--skip-clinical left them out.")
+            held = _clinical_holdings(conn, leave_out={"clinician vitals"})
+            print(f"No clinician-measured vitals in the index. It holds "
+                  f"{held}. Vitals come from the clinical-records folder of "
+                  f"an Apple Health export; `health-agent ingest` reads them "
+                  f"unless --no-clinical or --skip-clinical left them out.")
             return 0
         if not args.metric:
             print(_table(["metric", "unit", "readings", "first", "last"],
@@ -1272,8 +1301,9 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
                                        limit=args.limit)
         if not rows:
             held = ", ".join(m["metric_key"] for m in metrics_[:12])
-            print(f"No clinician-measured readings of '{args.metric}' in "
-                  f"that range. The index holds: {held}.")
+            ranged = " in that date range" if (args.start or args.end) else ""
+            print(f"No clinician-measured readings of '{args.metric}'"
+                  f"{ranged}. The index holds: {held}.")
             return 0
         print(_table(["measured", "metric", "value", "unit", "source file"],
                      [[r["measured_at"] or r["local_date"] or "", r["metric"],
@@ -1282,6 +1312,9 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
                       for r in rows]))
         print(f"\n{len(rows):,} reading(s), newest first, taken by a clinician "
               f"and sent with your health-system records.")
+        if len(rows) == args.limit:
+            print(f"Stopped at --limit {args.limit}; there may be more. "
+                  f"Raise --limit or narrow with --start and --end.")
         return 0
     finally:
         conn.close()

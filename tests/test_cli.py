@@ -202,6 +202,62 @@ def cli_no_clinical(tmp_path, capsys):
     return run
 
 
+def _partial(tmp_path, capsys, *skip):
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", ",".join(skip)])
+    capsys.readouterr()
+
+    def run(*args):
+        code = main(["--index", str(index), *args])
+        return code, capsys.readouterr().out
+    return run
+
+
+_FACTS = ("conditions", "medications", "allergies", "immunizations",
+          "procedures")
+
+
+def test_clinical_with_vitals_but_no_facts_names_what_is_held(tmp_path, capsys):
+    run = _partial(tmp_path, capsys, *_FACTS)
+    code, out = run("clinical")
+    assert code == 0
+    assert "No clinical facts" in out
+    assert "3 clinician vitals" in out and "2 note references" in out
+    assert "No clinical records in the index" not in out
+
+
+def test_vitals_with_facts_but_no_vitals_names_what_is_held(tmp_path, capsys):
+    run = _partial(tmp_path, capsys, "vitals")
+    code, out = run("vitals")
+    assert code == 0
+    assert "No clinician-measured vitals" in out
+    assert "1 medications" in out and "1 conditions" in out
+    assert "3 lab values" in out
+
+
+def test_empty_messages_state_what_the_index_holds(cli_no_clinical):
+    for cmd in ("clinical", "vitals"):
+        code, out = cli_no_clinical(cmd)
+        assert code == 0
+        assert "HealthKit records" in out
+        assert "clinical-records" in out
+
+
+def test_vitals_miss_words_the_range_only_when_one_was_given(cli_records):
+    _, out = cli_records("vitals", "--metric", "nonesuch")
+    assert "date range" not in out and "The index holds" in out
+    _, out = cli_records("vitals", "--metric", "pulse", "--start", "2030-01-01")
+    assert "date range" in out
+
+
+def test_vitals_says_when_limit_cut_the_result(cli_records):
+    _, out = cli_records("vitals", "--metric", "pulse", "--limit", "1")
+    assert "Stopped at --limit 1" in out
+    _, out = cli_records("vitals", "--metric", "pulse", "--limit", "5")
+    assert "Stopped at --limit" not in out
+
+
 def test_clinical_lists_facts_as_a_table(cli_records):
     code, out = cli_records("clinical")
     assert code == 0
@@ -254,8 +310,13 @@ def test_stats_counts_clinical_records(cli_records):
     code, out = cli_records("stats")
     assert code == 0
     assert "clinical records" in out.lower()
-    assert "conditions" in out and "medications" in out
-    assert "note references" in out
+    import re
+    for label, n in (("lab values", 3), ("clinician vitals", 3),
+                     ("conditions", 1), ("medications", 1), ("allergies", 1),
+                     ("immunizations", 1), ("procedures", 1),
+                     ("note references", 2)):
+        block = out.split("Clinical records (")[1]
+        assert re.search(rf"^\s+{label}\s+{n}\b", block, re.M), label
 
 
 def test_stats_clinical_block_gives_per_kind_counts_not_a_document_total(
@@ -279,8 +340,9 @@ def test_check_reports_clinical_records(cli_records, monkeypatch):
     monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
                         lambda self: "stubbed")
     code, out = cli_records("check")
-    assert "clinical records" in out.lower()
-    assert "note reference" in out
+    assert ("clinical records: 3 lab values, 3 clinician vitals, 1 conditions, "
+            "1 medications, 1 allergies, 1 immunizations, 1 procedures, "
+            "2 note references") in out
 
 
 def test_check_is_silent_and_unchanged_without_clinical(cli_no_clinical,
@@ -305,6 +367,9 @@ def test_clinical_table_stays_within_120_columns_for_long_rows(tmp_path,
     long_detail = "Take 1 tablet (10 mg total) by mouth 2 (two) times a day with food " * 2
     conn.execute("UPDATE clinical_fact SET name = ?, detail_text = ? "
                  "WHERE kind = 'medication'", (long_name, long_detail))
+    long_status = "entered-in-error-and-then-some"
+    conn.execute("UPDATE clinical_fact SET status = ? WHERE kind = 'condition'",
+                 (long_status,))
     conn.commit()
     conn.close()
     code = main(["--index", str(index), "clinical"])
@@ -315,14 +380,34 @@ def test_clinical_table_stays_within_120_columns_for_long_rows(tmp_path,
     row = next(line for line in table if line.startswith("medication"))
     assert "..." in row
     assert long_name not in row
+    cond = next(line for line in table if line.startswith("condition"))
+    assert long_status not in cond and "..." in cond
     assert _CLINICAL_NAME_W < len(long_name) and _CLINICAL_DETAIL_W < len(long_detail)
 
 
-def test_vitals_citation_is_the_basename(cli_records):
-    code, out = cli_records("vitals", "--metric", "pulse")
+@pytest.mark.parametrize("stored", [
+    "clinical-records/Observation-vital-pulse.json",
+    "apple_health_export/clinical-records/Observation-vital-pulse.json",
+    "clinical-records\\Observation-vital-pulse.json",
+    "Observation-vital-pulse.json",
+])
+def test_vitals_citation_is_the_basename(tmp_path, capsys, stored):
+    from health_agent.store import sqlite_schema as ss
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed"])
+    capsys.readouterr()
+    conn = ss.connect(index)
+    conn.execute("UPDATE document SET path = ? WHERE id IN "
+                 "(SELECT document_id FROM clinical_vital "
+                 "WHERE metric_key = 'pulse')", (stored,))
+    conn.commit()
+    conn.close()
+    code = main(["--index", str(index), "vitals", "--metric", "pulse"])
+    out = capsys.readouterr().out
     assert code == 0
     assert "Observation-vital-pulse.json" in out
-    assert "clinical-records/" not in out
+    assert "clinical-records" not in out and "apple_health_export" not in out
 
 
 def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):

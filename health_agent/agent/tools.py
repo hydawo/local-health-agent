@@ -738,6 +738,8 @@ _FACT_KIND_ARG = {
     "allergies": "allergy", "immunizations": "immunization",
     "procedures": "procedure",
 }
+# Public: the CLI takes the same plural vocabulary.
+FACT_KIND_ARG = _FACT_KIND_ARG
 _FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
 
 def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
