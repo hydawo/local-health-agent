@@ -6,6 +6,7 @@ encounter, a performer or a recorder.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -285,6 +286,27 @@ def test_storing_the_same_resource_twice_is_idempotent(index):
               for t in ("document", "lab_result", "clinical_vital", "clinical_fact")}
     assert counts == {"document": 3, "lab_result": 1,
                       "clinical_vital": 1, "clinical_fact": 1}
+    # The second pass wrote nothing, and its counters say so.
+    assert stats.counted() == {}
+    assert stats.documents == 0 and stats.notes == 0
+
+
+def test_resources_without_an_id_stay_separate(index):
+    stats = fhir.ClinicalStats()
+    for n in (1, 2):
+        obj = load("Condition-knee.json")
+        obj.pop("id", None)
+        parsed = fhir.parse_resource(obj, f"clinical-records/Condition-noid-{n}.json")
+        obj_name = f"Condition {n}"
+        parsed = dataclasses.replace(parsed, name=obj_name)
+        fhir.store_clinical(index, parsed, source_file_id=_source_id(index),
+                            stats=stats)
+    index.commit()
+    docs = index.execute("SELECT path FROM document ORDER BY path").fetchall()
+    assert [d["path"] for d in docs] == ["clinical-records/Condition-noid-1.json",
+                                         "clinical-records/Condition-noid-2.json"]
+    assert index.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] == 2
+    assert stats.conditions == 2 and stats.documents == 2
 
 
 def test_counted_reports_only_nonzero_kinds(index):

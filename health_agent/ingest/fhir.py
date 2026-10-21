@@ -352,8 +352,12 @@ def _now() -> str:
     return datetime.now().astimezone().isoformat(timespec="seconds")
 
 
-def _document_id(conn, parsed, *, source_file_id: int, stats: ClinicalStats) -> int:
-    """One document row per FHIR resource, created once and reused."""
+def _document_id(conn, parsed, *, source_file_id: int,
+                 stats: ClinicalStats) -> tuple[int, bool]:
+    """One document row per FHIR resource, created once and reused.
+
+    Returns (id, newly_inserted). A resource with no id is identified by its
+    member path, which is unique per file, so id-less siblings stay apart."""
     title = None
     doc_date = None
     if isinstance(parsed, ParsedClinicalDoc):
@@ -364,6 +368,7 @@ def _document_id(conn, parsed, *, source_file_id: int, stats: ClinicalStats) -> 
         title, doc_date = parsed.name, parsed.local_date
     elif isinstance(parsed, ParsedFact):
         title, doc_date = parsed.name, parsed.onset_date
+    fhir_id = parsed.resource_id or parsed.member
     before = conn.total_changes
     conn.execute(
         "INSERT INTO document(source_file_id, path, kind, title, doc_date, "
@@ -372,19 +377,21 @@ def _document_id(conn, parsed, *, source_file_id: int, stats: ClinicalStats) -> 
         "ON CONFLICT(fhir_resource_type, fhir_id) WHERE fhir_id IS NOT NULL "
         "DO NOTHING",
         (source_file_id, parsed.member, title, doc_date, _now(),
-         parsed.resource_type, parsed.resource_id))
-    if conn.total_changes > before:
+         parsed.resource_type, fhir_id))
+    inserted = conn.total_changes > before
+    if inserted:
         stats.documents += 1
-    return conn.execute(
+    row = conn.execute(
         "SELECT id FROM document WHERE fhir_resource_type = ? AND fhir_id = ?",
-        (parsed.resource_type, parsed.resource_id)).fetchone()["id"]
+        (parsed.resource_type, fhir_id)).fetchone()
+    return row["id"], inserted
 
 
 def store_clinical(conn, parsed, *, source_file_id: int,
                    stats: ClinicalStats) -> None:
     """Write one parsed record. Idempotent: the document is keyed by its
     resource id and every row carries a dedup key."""
-    document_id = _document_id(conn, parsed, source_file_id=source_file_id,
+    document_id, doc_new = _document_id(conn, parsed, source_file_id=source_file_id,
                                stats=stats)
 
     if isinstance(parsed, ParsedLab):
@@ -392,6 +399,7 @@ def store_clinical(conn, parsed, *, source_file_id: int,
         value = (f"{parsed.value_num:g}" if parsed.value_num is not None
                  else (parsed.value_text or ""))
         raw_line = f"{parsed.name}: {value} {parsed.unit or ''}".strip()
+        before = conn.total_changes
         conn.execute(
             "INSERT OR IGNORE INTO lab_result(document_id, page_no, analyte, "
             "analyte_key, panel, value_num, value_text, unit, ref_low, "
@@ -403,10 +411,11 @@ def store_clinical(conn, parsed, *, source_file_id: int,
              parsed.ref_text, parsed.flag, parsed.collected_date, raw_line,
              _dedup_key(document_id, 0, key, parsed.value_num,
                         parsed.value_text, parsed.unit)))
-        stats.labs += 1
+        stats.labs += conn.total_changes - before
         return
 
     if isinstance(parsed, ParsedVital):
+        before = conn.total_changes
         conn.execute(
             "INSERT OR IGNORE INTO clinical_vital(document_id, metric, "
             "metric_key, code, code_system, category, value_num, value_text, "
@@ -419,10 +428,11 @@ def store_clinical(conn, parsed, *, source_file_id: int,
              parsed.measured_at, parsed.local_date,
              _dedup_key(_slug(parsed.name), parsed.measured_at,
                         parsed.value_num, parsed.value_text, parsed.unit)))
-        stats.vitals += 1
+        stats.vitals += conn.total_changes - before
         return
 
     if isinstance(parsed, ParsedFact):
+        before = conn.total_changes
         conn.execute(
             "INSERT OR IGNORE INTO clinical_fact(document_id, kind, name, "
             "code, code_system, status, onset_date, detail_text, category, "
@@ -432,7 +442,8 @@ def store_clinical(conn, parsed, *, source_file_id: int,
              parsed.detail_text, parsed.category,
              _dedup_key(parsed.kind, parsed.name, parsed.code,
                         parsed.onset_date, parsed.detail_text)))
-        setattr(stats, parsed.kind, getattr(stats, parsed.kind) + 1)
+        setattr(stats, parsed.kind,
+                getattr(stats, parsed.kind) + conn.total_changes - before)
         return
 
-    stats.notes += 1
+    stats.notes += int(doc_new)
