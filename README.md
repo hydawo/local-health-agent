@@ -223,8 +223,9 @@ with `--data-dir`, `--index`, or `$HEALTH_AGENT_DATA_DIR`.
 
 ## Measured performance
 
-Numbers from an actual Apple Health export. Query latency for
-natural-language questions will be added once the model is in the loop.
+Numbers from an actual Apple Health export. Latency for
+natural-language questions, with the model in the loop, is under
+[How the agent works](#how-the-agent-works).
 
 | | |
 | --- | --- |
@@ -635,9 +636,9 @@ client, and its `anonymized_telemetry` setting defaults to on. LanceDB installs
 15, runs as a library against a local directory with no server, and has no
 telemetry on by default.
 
-The fuller, falsifiable version of all this (`THREAT_MODEL.md`, a sandboxed
-no-network test in CI, and a pre-commit hook keeping health data out of git)
-lands at milestone 9.
+The fuller, falsifiable version of all this is in `THREAT_MODEL.md`. A
+sandboxed no-network test runs in CI, and a pre-commit hook keeps health data
+out of git.
 
 ## Accuracy
 
@@ -669,7 +670,7 @@ can still follow, and it is left unfixed on purpose: prompting until this exact
 phrasing passes would be fitting the model to the scorer. Full history, and what
 each run caught, in [`tests/eval_results.md`](tests/eval_results.md).
 
-The unit suite (325 tests, `pytest`) and the eval set measure different things,
+The unit suite (more than 750 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
 two defects that the 239 unit tests passing at the time had missed. Both were
 failures of the *tool contract* rather than of any function in it. Five of the
