@@ -774,11 +774,29 @@ def clinical_vitals(conn: sqlite3.Connection, *, metric: str | None = None,
 
 
 def clinical_vital_metrics(conn: sqlite3.Connection) -> list[dict]:
+    """One row per vital a clinician measured, with its reading count and span.
+
+    `unit` is null when the same metric was recorded in more than one unit:
+    picking one of them arbitrarily would attach a wrong unit to half the
+    readings, and a null says "ask the readings" instead. `units` carries
+    every unit seen, so a caller that wants to show the conflict can.
+    """
     rows = conn.execute(
-        "SELECT metric_key, MAX(metric) AS metric, MAX(unit) AS unit, "
-        "COUNT(*) AS n, MIN(local_date) AS first, MAX(local_date) AS last "
+        "SELECT metric_key, MAX(metric) AS metric, "
+        "COUNT(*) AS n, COUNT(DISTINCT unit) AS n_units, "
+        "MIN(local_date) AS first, MAX(local_date) AS last "
         "FROM clinical_vital GROUP BY metric_key ORDER BY n DESC").fetchall()
-    return [dict(r) for r in rows]
+    out = []
+    for row in rows:
+        item = dict(row)
+        n_units = item.pop("n_units")
+        units = [r[0] for r in conn.execute(
+            "SELECT DISTINCT unit FROM clinical_vital WHERE metric_key = ? "
+            "AND unit IS NOT NULL ORDER BY unit", (item["metric_key"],))]
+        item["unit"] = units[0] if n_units <= 1 and units else None
+        item["units"] = units
+        out.append(item)
+    return out
 
 
 def clinical_content_counts(conn: sqlite3.Connection) -> dict:
@@ -789,14 +807,124 @@ def clinical_content_counts(conn: sqlite3.Connection) -> dict:
     Deliberately no count of clinical `document` rows: each dedupe collapse
     leaves one with no child, and note references are contentless, so that
     total would read as records it does not hold."""
-    labs_n = conn.execute(
-        "SELECT COUNT(*) FROM lab_result WHERE extracted_by = 'fhir'"
-    ).fetchone()[0]
-    notes_n = conn.execute(
-        "SELECT COUNT(*) FROM document WHERE kind = 'fhir' AND "
+    labs = conn.execute(
+        "SELECT COUNT(*) AS n, MIN(collected_date) AS first, "
+        "MAX(collected_date) AS last FROM lab_result "
+        "WHERE extracted_by = 'fhir'").fetchone()
+    notes = conn.execute(
+        "SELECT COUNT(*) AS n, MIN(doc_date) AS first, MAX(doc_date) AS last "
+        "FROM document WHERE kind = 'fhir' AND "
         "fhir_resource_type IN ('DocumentReference', 'DiagnosticReport')"
-    ).fetchone()[0]
-    return {"labs": labs_n, "note_references": notes_n}
+    ).fetchone()
+    return {"labs": labs["n"], "labs_first": labs["first"],
+            "labs_last": labs["last"], "note_references": notes["n"],
+            "note_references_first": notes["first"],
+            "note_references_last": notes["last"]}
+
+
+# The plural vocabulary the `kind` argument and every absence message use,
+# paired with the singular `clinical_fact.kind` the rows store.
+CLINICAL_FACT_PLURALS = (
+    ("conditions", "condition"), ("medications", "medication"),
+    ("allergies", "allergy"), ("immunizations", "immunization"),
+    ("procedures", "procedure"),
+)
+
+
+def _span(first: str | None, last: str | None) -> str:
+    if not first and not last:
+        return ""
+    if not first or not last or first == last:
+        return first or last or ""
+    return f"{first} to {last}"
+
+
+def clinical_holdings(conn: sqlite3.Connection) -> dict:
+    """Everything this index holds from an export's clinical-records folder.
+
+    The one answer to "what does this index hold clinically". Clinical content
+    lives in three tables — `clinical_fact`, `clinical_vital` and, for FHIR
+    labs and note references, `lab_result` and `document` — and a caller that
+    reads one of them and reports emptiness tells the person their own records
+    are absent. So no caller assembles that picture itself: the CLI, the two
+    clinical tools and `data_inventory` all read this.
+
+    `labels` is (label, count, date span) per kind that holds anything, in the
+    plural vocabulary the `kind` argument takes, so every surface names what is
+    held with the same words. `any` is the whole question C1 turned on: true
+    whenever a clinical row of any kind exists.
+    """
+    facts = clinical_fact_coverage(conn)
+    vital_metrics = clinical_vital_metrics(conn)
+    extra = clinical_content_counts(conn)
+
+    vitals_n = sum(m["n"] for m in vital_metrics)
+    vitals_first = min((m["first"] for m in vital_metrics if m["first"]),
+                       default=None)
+    vitals_last = max((m["last"] for m in vital_metrics if m["last"]),
+                      default=None)
+
+    labels: list[tuple[str, int, str]] = []
+    if extra["labs"]:
+        labels.append(("lab values", extra["labs"],
+                       _span(extra["labs_first"], extra["labs_last"])))
+    if vitals_n:
+        labels.append(("clinician vitals", vitals_n,
+                       _span(vitals_first, vitals_last)))
+    for plural, singular in CLINICAL_FACT_PLURALS:
+        info = facts.get(singular)
+        if info:
+            labels.append((plural, info["count"],
+                           _span(info["first"], info["last"])))
+    if extra["note_references"]:
+        labels.append(("note references", extra["note_references"],
+                       _span(extra["note_references_first"],
+                             extra["note_references_last"])))
+
+    firsts = [d for d in [extra["labs_first"], vitals_first,
+                          *(i["first"] for i in facts.values())] if d]
+    lasts = [d for d in [extra["labs_last"], vitals_last,
+                         *(i["last"] for i in facts.values())] if d]
+
+    return {
+        "facts": facts,
+        "fact_total": sum(i["count"] for i in facts.values()),
+        "labs": extra["labs"],
+        "labs_first": extra["labs_first"],
+        "labs_last": extra["labs_last"],
+        "note_references": extra["note_references"],
+        "vitals": vitals_n,
+        "vital_metrics": vital_metrics,
+        "vitals_first": vitals_first,
+        "vitals_last": vitals_last,
+        "first": min(firsts, default=None),
+        "last": max(lasts, default=None),
+        "labels": labels,
+        "any": bool(labels),
+    }
+
+
+def clinical_holdings_phrase(conn: sqlite3.Connection, *,
+                             leave_out: frozenset[str] | set[str] = frozenset(),
+                             holdings: dict | None = None) -> str:
+    """What the index holds, as a sentence fragment for an absence message.
+
+    Lives beside `clinical_holdings` rather than in a surface, because the CLI
+    and both clinical tools have to say the same thing: a count list, not
+    prose. `leave_out` names the labels the caller has just reported missing.
+    When no clinical figure is left, falls back to the HealthKit record and
+    report counts, so the reader still learns what is there.
+    """
+    held = clinical_holdings(conn) if holdings is None else holdings
+    parts = [f"{n:,} {label}" for label, n, _ in held["labels"]
+             if label not in leave_out]
+    if parts:
+        return (parts[0] if len(parts) == 1
+                else ", ".join(parts[:-1]) + " and " + parts[-1])
+    summary = index_summary(conn)
+    docs = document_summary(conn)
+    return (f"{summary['records']:,} HealthKit records and "
+            f"{docs['documents']:,} report PDF(s)")
 
 
 def document_summary(conn: sqlite3.Connection) -> dict:
@@ -816,7 +944,9 @@ def document_summary(conn: sqlite3.Connection) -> dict:
         "WHERE d.kind = 'pdf'"
     ).fetchone()
     labs_row = conn.execute(
-        "SELECT COUNT(*) AS n, COUNT(DISTINCT analyte_key) AS analytes FROM lab_result"
+        "SELECT COUNT(*) AS n, COUNT(DISTINCT analyte_key) AS analytes, "
+        "MIN(collected_date) AS first, MAX(collected_date) AS last "
+        "FROM lab_result"
     ).fetchone()
     chunks = conn.execute(
         "SELECT COUNT(*) AS n, "
@@ -831,6 +961,11 @@ def document_summary(conn: sqlite3.Connection) -> dict:
         "pages_ocr": pages["ocr"] or 0,
         "lab_results": labs_row["n"],
         "analytes": labs_row["analytes"],
+        # The span of the lab values themselves, over every source. `doc_first`
+        # and `doc_last` above are PDF document dates, which say nothing about
+        # a lab value that came from the clinical-records folder.
+        "lab_first": labs_row["first"],
+        "lab_last": labs_row["last"],
         "chunks": chunks["n"] or 0,
         "chunks_embedded": chunks["embedded"] or 0,
     }

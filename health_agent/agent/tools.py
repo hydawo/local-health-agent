@@ -747,7 +747,11 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
     row_kind = _FACT_KIND_ARG.get(kind)
     if kind and row_kind is None:
         return {"error": f"kind must be one of {sorted(_FACT_KIND_ARG)}"}
-    coverage = queries.clinical_fact_coverage(ctx.conn)
+    # One source for "what does this index hold clinically": facts are one of
+    # three tables, and deciding emptiness from `clinical_fact` alone told the
+    # person their own labs and note references did not exist.
+    holdings = queries.clinical_holdings(ctx.conn)
+    coverage = holdings["facts"]
     facts = queries.clinical_facts(ctx.conn, kind=row_kind,
                                    since=args.get("since"),
                                    limit=MAX_CLINICAL_FACTS)
@@ -756,13 +760,26 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
         "kinds_available": {_FACT_KIND_PLURAL.get(k, k): v["count"]
                             for k, v in coverage.items()},
     }
-    if not coverage:
+    if not holdings["any"]:
         payload["no_clinical_records"] = True
         payload["note"] = (
             "This index holds no clinical records. They come from the "
             "clinical-records folder of an Apple Health export, which this "
             "person has either not ingested or skipped. Say that rather than "
             "answering from anything else."
+        )
+        return payload
+    if not coverage:
+        payload["clinical_records_held"] = {
+            label: n for label, n, _ in holdings["labels"]}
+        payload["note"] = (
+            "No clinical facts (conditions, medications, allergies, "
+            "immunizations or procedures) in this index. It does hold "
+            + queries.clinical_holdings_phrase(
+                ctx.conn, leave_out=frozenset(_FACT_KIND_ARG),
+                holdings=holdings)
+            + ". Say what is absent and what is held, and do not say this "
+              "person has no clinical records."
         )
         return payload
     if not facts:
@@ -783,13 +800,23 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
 
 
 def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
-    metrics_available = queries.clinical_vital_metrics(ctx.conn)
+    holdings = queries.clinical_holdings(ctx.conn)
+    metrics_available = holdings["vital_metrics"]
     if not metrics_available:
-        if queries.clinical_fact_coverage(ctx.conn):
+        # "Nothing at all" is decided from every clinical table, not from
+        # facts alone: labs and note references are clinical records too.
+        if holdings["any"]:
             return {"measurements": [],
+                    "clinical_records_held": {
+                        label: n for label, n, _ in holdings["labels"]},
                     "note": ("This index holds clinical records but no "
-                             "clinician-measured vitals among them. Say so, "
-                             "and do not substitute watch data.")}
+                             "clinician-measured vitals among them. It does "
+                             "hold "
+                             + queries.clinical_holdings_phrase(
+                                 ctx.conn,
+                                 leave_out=frozenset({"clinician vitals"}),
+                                 holdings=holdings)
+                             + ". Say so, and do not substitute watch data.")}
         return {"measurements": [], "no_clinical_records": True,
                 "note": ("This index holds no clinical records at all. They "
                          "come from the clinical-records folder of an Apple "
@@ -800,10 +827,13 @@ def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
         limit = int(args.get("limit") or 100)
     except (TypeError, ValueError):
         limit = 100
+    # The flag has to be compared against the limit that actually ran. Held
+    # against MAX_CLINICAL_VITALS it was unreachable for every default call,
+    # so a 100-row slice of 2,984 readings looked like the whole set.
+    effective_limit = max(1, min(limit, MAX_CLINICAL_VITALS))
     rows = queries.clinical_vitals(
         ctx.conn, metric=metric, start=args.get("start_date"),
-        end=args.get("end_date"),
-        limit=max(1, min(limit, MAX_CLINICAL_VITALS)))
+        end=args.get("end_date"), limit=effective_limit)
     payload: dict = {
         "measurements": [
             {"metric": r["metric"],
@@ -817,8 +847,18 @@ def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
                  "query_healthkit and the two must not be mixed or compared "
                  "as if they were one series."),
     }
-    if len(rows) >= MAX_CLINICAL_VITALS:
+    if len(rows) >= effective_limit:
         payload["truncated"] = True
+        window = (f"{rows[-1]['local_date']} to {rows[0]['local_date']}"
+                  if rows[0]["local_date"] and rows[-1]["local_date"]
+                  else "the most recent readings")
+        held = sum(m["n"] for m in metrics_available
+                   if metric is None or m["metric_key"] == labs.slug(metric))
+        payload["truncation_note"] = (
+            f"Only the {len(rows)} most recent readings were read, covering "
+            f"{window}, out of {held} this index holds for that metric "
+            f"selection. Say which window you looked at rather than "
+            f"describing it as the whole record.")
     if not rows:
         first = min((m["first"] for m in metrics_available if m["first"]),
                     default=None)
@@ -1128,8 +1168,9 @@ def data_inventory(conn, *, max_metrics: int = 25,
     analytes = [a["analyte_key"] for a in
                 queries.list_analytes(conn, limit=max_analytes)]
     tags = [t["tag"] for t in queries.list_tags(conn, limit=25)]
-    clinical = queries.clinical_fact_coverage(conn)
-    vital_metrics = queries.clinical_vital_metrics(conn)
+    holdings = queries.clinical_holdings(conn)
+    clinical = holdings["facts"]
+    vital_metrics = holdings["vital_metrics"]
 
     return {
         "healthkit": {
@@ -1154,14 +1195,18 @@ def data_inventory(conn, *, max_metrics: int = 25,
         # Records a health system sent back through the export, as distinct
         # from anything this person typed and from anything their watch
         # recorded. Named here so the model does not guess whether they exist.
+        # Every clinical kind the index holds, not just the facts: the system
+        # prompt appends "Anything not listed above is not available", so a
+        # block that omitted the labs and note references would turn this into
+        # a false statement about the person's own records.
         "clinical": {
             # Plural, matching the `kind` argument get_clinical_history takes.
             **{_FACT_KIND_PLURAL.get(kind, kind): info["count"]
                for kind, info in clinical.items()},
-            "date_range": [min((i["first"] for i in clinical.values()
-                                if i["first"]), default=None),
-                           max((i["last"] for i in clinical.values()
-                                if i["last"]), default=None)],
+            "lab_values": holdings["labs"],
+            "clinician_vitals": holdings["vitals"],
+            "note_references": holdings["note_references"],
+            "date_range": [holdings["first"], holdings["last"]],
             "vital_metrics_available": [m["metric_key"] for m in vital_metrics[:25]],
         },
     }

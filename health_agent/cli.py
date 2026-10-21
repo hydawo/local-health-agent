@@ -523,31 +523,10 @@ def _clinical_counts(conn: sqlite3.Connection) -> list[tuple[str, int, str]]:
     """(label, count, date span) per clinical kind that holds anything.
 
     Per-kind counts only. A total of clinical `document` rows would overstate
-    content: dedupe collapses and note references leave childless rows."""
-    out: list[tuple[str, int, str]] = []
-    extra = queries.clinical_content_counts(conn)
-    if extra["labs"]:
-        out.append(("lab values", extra["labs"], ""))
-    metrics_ = queries.clinical_vital_metrics(conn)
-    vitals_n = sum(m["n"] for m in metrics_)
-    if vitals_n:
-        firsts = [m["first"] for m in metrics_ if m["first"]]
-        lasts = [m["last"] for m in metrics_ if m["last"]]
-        span = (f"{min(firsts)} to {max(lasts)}"
-                if firsts and lasts and min(firsts) != max(lasts)
-                else (min(firsts) if firsts else ""))
-        out.append(("clinician vitals", vitals_n, span))
-    coverage = queries.clinical_fact_coverage(conn)
-    for plural, singular in _FACT_KIND_ARG.items():
-        c = coverage.get(singular)
-        if c:
-            span = ("" if not c["first"] or not c["last"]
-                    else c["first"] if c["first"] == c["last"]
-                    else f"{c['first']} to {c['last']}")
-            out.append((plural, c["count"], span))
-    if extra["note_references"]:
-        out.append(("note references", extra["note_references"], ""))
-    return out
+    content: dedupe collapses and note references leave childless rows. The
+    figures come from `queries.clinical_holdings`, which is the only place in
+    this codebase that answers "what does the index hold clinically"."""
+    return queries.clinical_holdings(conn)["labels"]
 
 
 def _positive_int(text: str) -> int:
@@ -1203,25 +1182,15 @@ def _clip(text: str | None, width: int) -> str:
     return flat if len(flat) <= width else flat[:width - 3] + "..."
 
 
-def _join(parts: list[str]) -> str:
-    return parts[0] if len(parts) == 1 else (
-        ", ".join(parts[:-1]) + " and " + parts[-1])
-
-
-def _clinical_holdings(conn: sqlite3.Connection, *, leave_out: set[str]) -> str:
+def _clinical_holdings(conn: sqlite3.Connection, *, leave_out: set[str],
+                       holdings: dict | None = None) -> str:
     """What the index holds, as a sentence fragment, for an absence message.
 
     `leave_out` names the clinical labels the caller just reported as missing.
-    When no clinical figure is left, falls back to the HealthKit record and
-    report counts so the reader still learns what is there."""
-    held = [f"{n:,} {label}" for label, n, _ in _clinical_counts(conn)
-            if label not in leave_out]
-    if held:
-        return _join(held)
-    summary = queries.index_summary(conn)
-    docs = queries.document_summary(conn)
-    return (f"{summary['records']:,} HealthKit records and "
-            f"{docs['documents']:,} report PDF(s)")
+    Shared with the clinical tools through `queries`, so the CLI and the model
+    are told the same thing about the same index."""
+    return queries.clinical_holdings_phrase(conn, leave_out=frozenset(leave_out),
+                                            holdings=holdings)
 
 
 def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1235,13 +1204,15 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
             return 2
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
-        coverage = queries.clinical_fact_coverage(conn)
+        holdings = queries.clinical_holdings(conn)
+        coverage = holdings["facts"]
         if not coverage:
-            held = _clinical_holdings(conn, leave_out=set(_FACT_KIND_ARG))
+            held = _clinical_holdings(conn, leave_out=set(_FACT_KIND_ARG),
+                                      holdings=holdings)
             where = ("They come from the clinical-records folder of an Apple "
                      "Health export; `health-agent ingest` reads them unless "
                      "--no-clinical or --skip-clinical left them out.")
-            if _clinical_counts(conn):
+            if holdings["any"]:
                 print("No clinical facts (conditions, medications, allergies, "
                       f"immunizations or procedures) in the index. It holds "
                       f"{held}. {where}")
@@ -1290,7 +1261,10 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
             return 0
         if not args.metric:
             print(_table(["metric", "unit", "readings", "first", "last"],
-                         [[m["metric_key"], m["unit"] or "", f"{m['n']:,}",
+                         [[m["metric_key"],
+                           # Two units for one metric: show both rather than
+                           # attaching one of them to every reading.
+                           m["unit"] or "/".join(m["units"]), f"{m['n']:,}",
                            m["first"] or "", m["last"] or ""]
                           for m in metrics_]))
             print("\nPass --metric to list individual readings. Your watch "
@@ -1301,6 +1275,10 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
                                        limit=args.limit)
         if not rows:
             held = ", ".join(m["metric_key"] for m in metrics_[:12])
+            # A cut list with no count would under-report coverage, which is
+            # the one thing an absence message must not do.
+            if len(metrics_) > 12:
+                held += f" and {len(metrics_) - 12:,} more"
             ranged = " in that date range" if (args.start or args.end) else ""
             print(f"No clinician-measured readings of '{args.metric}'"
                   f"{ranged}. The index holds: {held}.")

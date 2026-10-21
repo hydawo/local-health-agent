@@ -357,6 +357,45 @@ def test_clinical_vitals_filter_by_metric_and_date(clinical_index):
     assert metrics["pulse"]["first"] == "2023-09-15"
 
 
+def test_clinical_holdings_answers_for_every_table_not_just_facts(clinical_index):
+    """One function answers "what does this index hold clinically". The two
+    tools reported emptiness from `clinical_fact` alone and told the person
+    their labs and note references did not exist."""
+    conn = clinical_index
+    held = queries.clinical_holdings(conn)
+    assert held["any"] is True
+    assert held["labs"] >= 1 and held["note_references"] >= 1
+    assert held["vitals"] >= 1 and held["fact_total"] >= 1
+    labels = {label: n for label, n, _ in held["labels"]}
+    assert labels["lab values"] == held["labs"]
+    assert labels["note references"] == held["note_references"]
+    assert held["first"] and held["last"] and held["first"] <= held["last"]
+
+    conn.execute("DELETE FROM clinical_fact")
+    conn.execute("DELETE FROM clinical_vital")
+    only_labs = queries.clinical_holdings(conn)
+    assert only_labs["facts"] == {} and only_labs["vital_metrics"] == []
+    assert only_labs["any"] is True
+    assert "lab values" in queries.clinical_holdings_phrase(conn)
+
+    conn.execute("DELETE FROM lab_result")
+    conn.execute("DELETE FROM document WHERE kind = 'fhir'")
+    assert queries.clinical_holdings(conn)["any"] is False
+
+
+def test_a_vital_recorded_in_two_units_reports_no_single_unit(clinical_index):
+    conn = clinical_index
+    conn.execute(
+        "INSERT INTO clinical_vital(document_id, metric, metric_key, "
+        "value_num, unit, measured_at, local_date, dedup_key) "
+        "SELECT document_id, metric, metric_key, value_num, 'per min', "
+        "'2024-01-02T09:00:00', '2024-01-02', X'0102' FROM clinical_vital "
+        "WHERE metric_key = 'pulse' LIMIT 1")
+    pulse = {m["metric_key"]: m for m in queries.clinical_vital_metrics(conn)}["pulse"]
+    assert pulse["unit"] is None
+    assert pulse["units"] == ["bpm", "per min"]
+
+
 def test_one_source_having_fewer_records_is_not_a_disagreement(two_docs):
     conn, pdf_doc, fhir_doc = two_docs
     _add_lab(conn, document_id=pdf_doc, value=112.0)

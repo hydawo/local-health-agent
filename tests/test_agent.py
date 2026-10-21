@@ -751,7 +751,6 @@ def test_a_draw_reported_by_both_sources_is_one_point_with_its_source(two_source
     (point,) = result["points"]
     assert point["source"] == "pdf"   # the row carrying the range wins; see also_from
     assert "source_disagreement" not in result
-    assert "source_disagreement" not in result
 
 
 def test_conflicting_sources_produce_a_note_naming_both_values(two_source_ctx):
@@ -781,6 +780,93 @@ def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):
     assert result["measurements"] == []
     assert "No clinician-measured vitals" in result["note"]
     assert "pulse" in result["note"]
+
+
+@pytest.fixture
+def labs_only_ctx(tmp_path):
+    """An index holding FHIR labs and note references and no facts or vitals.
+
+    The shape C1 was reproduced on: a health system that shared labs and
+    notes but no problem list. Nothing on this path is a switch the person
+    has to have set."""
+    from health_agent.ingest import fhir
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    import shutil
+    root = tmp_path / "apple_health_export"
+    shutil.copytree(FIXTURES / "clinical-records", root / "clinical-records")
+    marker = next((root / "clinical-records").glob("*.json"))
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    fhir.ingest_clinical(
+        conn, root, source_file_id=sid,
+        skip=frozenset({"vitals", "conditions", "medications", "allergies",
+                        "immunizations", "procedures"}))
+    conn.commit()
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+    conn.close()
+
+
+def test_clinical_history_with_labs_but_no_facts_does_not_claim_emptiness(
+        labs_only_ctx):
+    result = tools.dispatch(labs_only_ctx, "get_clinical_history", {})
+    assert result["facts"] == []
+    assert "no_clinical_records" not in result
+    assert result["clinical_records_held"]["lab values"] >= 1
+    assert "lab values" in result["note"]
+    assert "holds no clinical records" not in result["note"]
+
+
+def test_clinical_vitals_with_labs_but_no_vitals_does_not_claim_emptiness(
+        labs_only_ctx):
+    result = tools.dispatch(labs_only_ctx, "get_clinical_vitals", {})
+    assert result["measurements"] == []
+    assert "no_clinical_records" not in result
+    assert result["clinical_records_held"]["lab values"] >= 1
+    assert "lab values" in result["note"]
+
+
+def test_data_inventory_lists_labs_and_notes_when_no_facts_exist(labs_only_ctx):
+    clinical = tools.data_inventory(labs_only_ctx.conn)["clinical"]
+    assert clinical["lab_values"] >= 1
+    assert clinical["note_references"] >= 1
+    assert clinical["date_range"][0] and clinical["date_range"][1]
+
+
+def test_vitals_truncation_is_reported_at_the_limit_that_actually_ran(tmp_path):
+    """More readings than the default limit: the flag has to fire, or the
+    model describes a slice of the record as the record."""
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    doc = conn.execute(
+        "INSERT INTO document(source_file_id, path, kind, page_count, "
+        "extraction, ingested_at) VALUES(?,'clinical-records/v.json','fhir',"
+        "0,'none','2026-10-21')", (sid,)).lastrowid
+    for i in range(150):
+        day = f"2026-01-{i % 28 + 1:02d}"
+        conn.execute(
+            "INSERT INTO clinical_vital(document_id, metric, metric_key, "
+            "value_num, unit, measured_at, local_date, dedup_key) "
+            "VALUES(?,'Pulse','pulse',?,'bpm',?,?,?)",
+            (doc, 60 + i % 20, f"{day}T09:0{i % 10}:00", day, f"v{i}".encode()))
+    conn.commit()
+    ctx_ = tools.ToolContext(conn=conn, vector_path=tmp_path / "v")
+
+    result = tools.dispatch(ctx_, "get_clinical_vitals", {})
+    assert len(result["measurements"]) == 100
+    assert result["truncated"] is True
+    assert "150" in result["truncation_note"]
+
+    narrow = tools.dispatch(ctx_, "get_clinical_vitals", {"limit": 10})
+    assert narrow["truncated"] is True
+    whole = tools.dispatch(ctx_, "get_clinical_vitals", {"limit": 200})
+    assert len(whole["measurements"]) == 150
+    assert "truncated" not in whole
+    conn.close()
 
 
 def test_a_metric_miss_names_the_metric(clinical_ctx):
