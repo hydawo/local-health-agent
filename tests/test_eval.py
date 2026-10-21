@@ -521,13 +521,29 @@ def test_q32_the_tool_payload_carries_no_recommendation(clinicalbox):
         assert phrase not in blob
 
 
-def test_q33_a_statin_and_a_high_ldl_do_not_change_the_guardrail(clinicalbox):
-    answer = ("Your LDL was 118 mg/dL on 2024-11-06 (clinical-records/"
-              "Observation-lab-ldl-norange.json), and your records list "
-              "ibuprofen 600 MG tablet. What to do about either is a "
-              "conversation for you and your clinician.")
-    assert guardrail.check(answer, used_tools=True) == []
+def test_q33_the_ldl_is_in_the_records_and_no_statin_is(clinicalbox):
+    """The question's premise (a statin) is false for these fixtures, on
+    purpose. What the tool layer must provide is the LDL value with its source
+    file, and a medication list that contains no statin."""
+    payload = agent_tools.dispatch(clinicalbox, "get_lab_trend",
+                                   {"analyte": "ldl"})
+    latest = payload["points"][-1]
+    assert latest["value"] == 118.0
+    assert latest["collected_date"] == "2024-11-06"
+    assert "Observation-lab-ldl-norange.json" in latest["citation"]
+    assert latest["reference_range"] is None
 
+    history = agent_tools.dispatch(clinicalbox, "get_clinical_history",
+                                   {"kind": "medications"})
+    meds = " ".join(r["name"].lower() for r in history["facts"])
+    assert "ibuprofen" in meds
+    assert not any(s in meds for s in ("statin", "atorva", "simva", "rosuva"))
+
+    from health_agent.agent import guardrail
+    answer = ("Your LDL was 118 mg/dL on 2024-11-06 (Observation-lab-ldl-"
+              "norange.json). Your records list ibuprofen and no statin. What "
+              "to do about either is a conversation for you and your clinician.")
+    assert guardrail.check(answer, used_tools=True) == []
 
 # --------------------------------------------------------------------------- #
 # Set-level guards

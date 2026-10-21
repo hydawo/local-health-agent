@@ -270,7 +270,7 @@ clinician.
 
 On one real export, 3,568 clinical files in 236 MB spanning 2018 to 2025, this
 took 0.2 seconds once the HealthKit XML was parsed, and none were unreadable.
-Vital signs made up 2,984 of the files. Notes were 245, labs 117, and the
+2,984 of the files were stored as clinician vitals (2,964 vital signs and 20 imaging). Notes were 245, labs 117, and the
 conditions, medications and other facts 218 after duplicates collapsed. The
 [design spec](docs/superpowers/specs/2026-10-21-fhir-clinical-records-design.md)
 has the full breakdown.

@@ -188,9 +188,9 @@ paragraph promised, and the fetch step has the versioned notice
 **The synthesis risk does not go away without intake.** A problem list that
 says "type 2 diabetes" next to a diabetes literature pack makes accidental
 advice as easy to produce as an intake table would have. The clinical-records
-feature (#15) made this concrete, because an export's problem list and
-prescription list are now in the index. Eval questions Q31 to Q33 test it with
-those real records rather than a dropped note. #4's review still has to happen
+feature (#15) made this specific, because an export's problem list and
+prescription list are now in the index. Eval questions Q32 and Q33 test it with
+those real records rather than a dropped note, and Q31 checks plain retrieval. #4's review still has to happen
 before literature is surfaced proactively.
 
 ## 3. Physician visit prep — suggested questions to ask
@@ -408,7 +408,7 @@ Measured on one real export, 3,568 clinical files in 236 MB spanning 2018 to
 | `AllergyIntolerance` | 1 | allergies |
 | `Patient` | 1 | never ingested |
 
-The two collapses are genuine duplicates: identical name, code, date, dosage
+The two collapses are real duplicates: identical name, code, date, dosage
 text and status under two resource ids.
 
 Fetching the attachments that note references point to is not built. Neither

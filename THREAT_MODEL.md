@@ -257,28 +257,39 @@ transport. The second is Claim 3's test.
 
 ---
 
-## Claim 7: clinical records stay local, and identity is dropped at parse time
+## Claim 7: clinical records stay local through ingest and storage, and identity is dropped at parse time
 
 An Apple Health export can include a `clinical-records/` folder of FHIR files.
 Ingesting it means the index can now hold diagnoses, prescriptions, allergies
-and procedures. That is more sensitive than anything it held before. Four
-things limit the exposure.
+and procedures. That is more sensitive than anything this project stored
+before, and it is exactly what `ask --cloud` would send if you opted into it,
+as the bullet on the cloud tier below says. Four things limit the exposure.
 
 - **They come from a file you already had.** The tool reads the folder inside
   the export you point it at. It does not ask a health system for anything, and
   it never fetches the attachment URLs that note references carry.
-- **They are never sent anywhere.** `offline-check` covers this path, and
-  `health_agent/ingest/fhir.py` falls under Claim 3's scan, which fails if any
-  module outside the three named above imports a network transport. The
-  clinical tools are read-only queries over the local index, like the rest.
+- **Ingest and the local tools never send them anywhere.** `ask --cloud` is the
+  one exception, described in the next paragraph and in the cloud section.
+  `offline-check` covers the ingest path, and `health_agent/ingest/fhir.py`
+  falls under Claim 3's scan, which fails if any module outside the three named
+  above imports a network transport. A dedicated test,
+  `test_fhir_parser_imports_no_transport_and_fetches_nothing`, checks the
+  parser on its own.
 - **Identity is dropped at parse time.** The `Patient` resource is never read
   into the index, and every subject, encounter and performer reference is
   discarded by the parser, so none of it can be stored by mistake later.
   `test_no_identity_string_reaches_the_database` plants identity markers in the
   fixtures and then scans the whole database for them.
-- **`reset` deletes all of it.** The records live in the index, so
-  `health-agent reset` removes them with everything else. Your export is never
-  modified.
+- **Nothing is written outside the index.** Your export is never modified.
+
+**The cloud exception.** With `ask --cloud`, every tool result the model
+requests is sent to Anthropic, and that includes clinical records. So does the
+index inventory, which for this data holds only counts per kind, a date range
+and the names of the vitals a clinician measured, never a diagnosis or a
+medication. The cloud section below describes that boundary in full.
+
+**Retention.** `health-agent reset` deletes the records with the rest of the
+index.
 
 **Verify:**
 
@@ -288,10 +299,8 @@ pytest tests/test_ingest_clinical.py::test_no_identity_string_reaches_the_databa
 grep -n "import urllib\|import socket\|import requests\|import httpx" health_agent/ingest/fhir.py
 ```
 
-The grep finds nothing. The claim stops at the cloud tier. With `ask --cloud`,
-every tool result the model requests is sent, and that includes clinical
-records. The cloud section below describes that boundary, and it applies to
-this data like any other.
+The grep finds nothing. That shows the parser cannot send anything. It says
+nothing about the cloud tier, which sends from a different module.
 
 ---
 
@@ -304,10 +313,13 @@ anything else.
 
 - your question, verbatim
 - an inventory of your index: which metrics you track, which lab analytes appear
-  in your reports, the tags on your notes, and the date ranges covered
+  in your reports, the tags on your notes, the date ranges covered, and, for
+  clinical records, counts per kind and the names of measured vitals
 - the result of every tool call the model makes — HealthKit values, lab results
-  with reference ranges, and **verbatim excerpts from your medical records and
-  personal notes**
+  with reference ranges, clinical records (diagnoses, prescriptions, allergies,
+  procedures and clinician-measured vitals, if you ingested an export's
+  `clinical-records/` folder), and **verbatim excerpts from your medical
+  records and personal notes**
 
 That last item is the one people underestimate. A question about a single lab
 value can pull note text into the request, and you will not see what was sent
