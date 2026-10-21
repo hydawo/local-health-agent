@@ -621,3 +621,145 @@ def test_literature_context_failure_does_not_break_the_answer(ctx, tmp_path,
 def test_system_prompt_tells_the_model_the_tool_appends_findings(ctx):
     text = orchestrator.Orchestrator(ctx).system_prompt()
     assert "the tool itself appends published findings" in text
+
+
+# --------------------------------------------------------------------------- #
+# Clinical records (FHIR)
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def clinical_ctx(tmp_path):
+    """A fresh index holding the committed clinical fixtures.
+
+    Separate from the module `ctx`, which must stay free of clinical records so
+    the absence tests mean something."""
+    from health_agent.ingest import fhir
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    import shutil
+    root = tmp_path / "apple_health_export"
+    shutil.copytree(FIXTURES / "clinical-records", root / "clinical-records")
+    marker = next((root / "clinical-records").glob("*.json"))
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    fhir.ingest_clinical(conn, root, source_file_id=sid)
+    conn.commit()
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+    conn.close()
+
+
+def test_clinical_history_returns_facts_with_citations(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"kind": "medications"})
+    assert result["kinds_available"]
+    (row,) = [r for r in result["facts"] if r["name"].startswith("ibuprofen")]
+    assert row["detail_text"].startswith("Take 1 tablet")
+    assert row["citation"].startswith("clinical-records/")
+    assert "not medical advice" not in str(result)   # tools return data, not prose
+
+
+def test_clinical_history_without_a_kind_returns_everything(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history", {})
+    assert {r["kind"] for r in result["facts"]} >= {"condition", "medication"}
+
+
+def test_clinical_history_rejects_an_unknown_kind(clinical_ctx):
+    assert "error" in tools.dispatch(clinical_ctx, "get_clinical_history",
+                                     {"kind": "moods"})
+
+
+def test_clinical_history_reports_absence_as_coverage(ctx):
+    """`ctx` has no clinical records at all."""
+    result = tools.dispatch(ctx, "get_clinical_history", {"kind": "conditions"})
+    assert result["facts"] == []
+    assert result["no_clinical_records"] is True
+    assert "clinical-records" in result["note"]
+
+
+def test_clinical_vitals_are_separate_from_healthkit(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"metric": "pulse"})
+    assert result["measurements"][0]["value"] == 72
+    assert result["measurements"][0]["unit"] == "bpm"
+    assert result["measurements"][0]["citation"].startswith("clinical-records/")
+    assert "query_healthkit" in result["note"]      # names the other tool
+
+
+def test_clinical_vitals_without_a_metric_lists_what_exists(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals", {})
+    assert {m["metric_key"] for m in result["metrics_available"]} >= {"pulse", "spo2"}
+
+
+def test_clinical_vitals_report_absence_as_coverage(ctx):
+    result = tools.dispatch(ctx, "get_clinical_vitals", {})
+    assert result["measurements"] == [] and result["no_clinical_records"] is True
+
+
+def test_both_tools_are_registered_and_schemas_are_well_formed():
+    assert "get_clinical_history" in tools.BY_NAME
+    assert "get_clinical_vitals" in tools.BY_NAME
+    assert len(tools.TOOLS) == 7
+    for schema in tools.schemas():
+        assert schema["function"]["description"]
+        assert schema["function"]["parameters"]["type"] == "object"
+
+
+def test_data_inventory_names_the_clinical_surface(clinical_ctx):
+    inventory = tools.data_inventory(clinical_ctx.conn)
+    assert inventory["clinical"]["conditions"] == 1
+    assert inventory["clinical"]["medications"] == 1
+    assert "pulse" in inventory["clinical"]["vital_metrics_available"]
+
+
+def test_the_prompt_separates_clinic_measurements_from_wearable_data(ctx):
+    text = orchestrator.Orchestrator(ctx).system_prompt()
+    assert "clinician-measured" in text.lower()
+    assert "get_clinical_vitals" in text
+
+
+@pytest.fixture
+def two_source_ctx(tmp_path):
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    ids = []
+    for kind, path in (("pdf", "labs.pdf"), ("fhir", "clinical-records/a.json")):
+        ids.append(conn.execute(
+            "INSERT INTO document(source_file_id, path, kind, page_count, "
+            "extraction, ingested_at) VALUES(?,?,?,1,'text','2026-10-21')",
+            (sid, path, kind)).lastrowid)
+
+    def add(doc, value, unit="mg/dL", extracted_by="line"):
+        conn.execute(
+            "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+            "value_num, unit, collected_date, raw_line, extracted_by, via_ocr, "
+            "dedup_key) VALUES(?,1,'LDL','ldl',?,?,'2026-03-10','x',?,0,?)",
+            (doc, value, unit, extracted_by, f"{doc}{value}{unit}".encode()))
+
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "v"), ids, add
+    conn.close()
+
+
+def test_a_draw_reported_by_both_sources_is_one_point_with_its_source(two_source_ctx):
+    ctx_, (pdf_doc, fhir_doc), add = two_source_ctx
+    add(pdf_doc, 112.0)
+    add(fhir_doc, 112.0, extracted_by="fhir")
+    result = tools.dispatch(ctx_, "get_lab_trend", {"analyte": "ldl"})
+    (point,) = result["points"]
+    assert point["source"] in ("pdf", "fhir")
+    assert "source_disagreement" not in result
+
+
+def test_conflicting_sources_produce_a_note_naming_both_values(two_source_ctx):
+    ctx_, (pdf_doc, fhir_doc), add = two_source_ctx
+    add(pdf_doc, 112.0)
+    add(fhir_doc, 5.4, unit="mmol/L", extracted_by="fhir")
+    result = tools.dispatch(ctx_, "get_lab_trend", {"analyte": "ldl"})
+    assert {p["source"] for p in result["points"]} == {"pdf", "fhir"}
+    note = result["source_disagreement"]
+    assert "2026-03-10" in note
+    assert "112" in note and "mg/dL" in note and "pdf" in note
+    assert "5.4" in note and "mmol/L" in note and "fhir" in note

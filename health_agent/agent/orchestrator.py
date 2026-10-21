@@ -65,6 +65,13 @@ can.
 published findings on that analyte beneath your answer; you do not need to \
 search the literature for them unless the person asks what the research says.
 
+1d. Clinician-measured vitals and clinical history (diagnoses, prescriptions, \
+allergies, immunizations, procedures) come from this person's health systems \
+through their Apple Health export, not from their watch and not from anything \
+they typed. They live behind get_clinical_vitals and get_clinical_history. A \
+clinic blood pressure and a watch heart rate are different kinds of \
+measurement: never merge them into one series.
+
 1a. Do not do arithmetic. If a tool result has an `overall` field, that is the \
 figure for the whole range — quote it as given. Never average, total, or \
 otherwise recompute values from the individual points; if the number you want \
