@@ -20,9 +20,18 @@ def test_an_unmapped_coded_analyte_falls_back_to_a_slug():
 
 
 def test_every_loinc_entry_points_at_a_registered_analyte():
+    registered = {a.key for a in labs.REGISTRY}
     for code, key in labs.LOINC_TO_KEY.items():
-        assert labs.label_for(key) != key.replace("_", " "), (
-            f"{code} maps to {key!r}, which the registry does not know")
+        assert key in registered, (
+            f"{code} maps to {key!r}, which the registry does not define")
+
+
+def test_standard_and_high_sensitivity_crp_stay_distinct():
+    loinc = "http://loinc.org"
+    assert labs.resolve_coded([(loinc, "1988-5")], "C-reactive protein") == (
+        "crp", "inflammation")
+    assert labs.resolve_coded([(loinc, "30522-7")], "C-reactive protein") == (
+        "hs_crp", "inflammation")
 
 
 def test_loinc_codes_are_well_formed():
