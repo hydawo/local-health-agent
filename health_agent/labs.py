@@ -23,6 +23,15 @@ import re
 from dataclasses import dataclass, field
 
 
+_SLUG = re.compile(r"[^a-z0-9]+")
+
+
+def slug(text: str | None) -> str:
+    """The one key form for a free-text name, used when a record is stored and
+    when it is looked up, so the two cannot drift apart."""
+    return _SLUG.sub("_", (text or "").strip().lower()).strip("_") or "unknown"
+
+
 @dataclass(frozen=True)
 class Analyte:
     key: str

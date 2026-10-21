@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
+import pytest
+
 from health_agent import metrics
-from health_agent.store import queries
+from health_agent.ingest import fhir, healthkit
+from health_agent.store import queries, sqlite_schema
 
 
 def series(conn, name, **kwargs):
@@ -208,11 +212,6 @@ def test_workout_summary(ingested):
 # Clinical records (FHIR): one draw reported twice is one point
 # --------------------------------------------------------------------------- #
 
-import pytest  # noqa: E402
-
-from health_agent.ingest import fhir, healthkit  # noqa: E402
-from health_agent.store import sqlite_schema  # noqa: E402
-
 CLINICAL_FIX = Path(__file__).parent / "fixtures" / "clinical-records"
 
 
@@ -303,8 +302,9 @@ def test_different_values_on_one_date_are_kept_and_reported(two_docs):
     assert sorted(p.value_num for p in trend.points) == [112.0, 118.0]
     (clash,) = trend.disagreements
     assert clash["collected_date"] == "2026-03-10"
-    assert sorted(clash["values"]) == [112.0, 118.0]
-    assert sorted(clash["sources"]) == ["fhir", "pdf"]
+    assert sorted((r["value"], tuple(r["sources"]))
+                  for r in clash["reported"]) == [(112.0, ("pdf",)),
+                                                  (118.0, ("fhir",))]
 
 
 def test_a_different_unit_is_not_the_same_measurement(two_docs):
@@ -312,7 +312,12 @@ def test_a_different_unit_is_not_the_same_measurement(two_docs):
     _add_lab(conn, document_id=pdf_doc, value=5.4, unit="%")
     _add_lab(conn, document_id=fhir_doc, value=5.4, unit="mmol/mol",
              extracted_by="fhir")
-    assert len(queries.lab_trend(conn, "ldl").points) == 2
+    trend = queries.lab_trend(conn, "ldl")
+    assert len(trend.points) == 2
+    (clash,) = trend.disagreements
+    assert sorted((r["unit"], tuple(r["sources"])) for r in clash["reported"]) == [
+        ("%", ("pdf",)), ("mmol/mol", ("fhir",))]
+    assert all(r["value"] == 5.4 for r in clash["reported"])
 
 
 def test_two_identical_rows_from_one_source_are_not_collapsed(two_docs):
@@ -350,3 +355,58 @@ def test_clinical_vitals_filter_by_metric_and_date(clinical_index):
     metrics = {m["metric_key"]: m for m in queries.clinical_vital_metrics(conn)}
     assert metrics["pulse"]["n"] == 1
     assert metrics["pulse"]["first"] == "2023-09-15"
+
+
+def test_one_source_having_fewer_records_is_not_a_disagreement(two_docs):
+    conn, pdf_doc, fhir_doc = two_docs
+    _add_lab(conn, document_id=pdf_doc, value=112.0)
+    _add_lab(conn, document_id=pdf_doc, value=118.0)
+    _add_lab(conn, document_id=fhir_doc, value=112.0, extracted_by="fhir")
+    trend = queries.lab_trend(conn, "ldl")
+    assert trend.disagreements == ()
+    by_value = {p.value_num: p for p in trend.points}
+    assert by_value[112.0].also_from == ("fhir",)
+    assert by_value[118.0].also_from == ()
+
+
+def test_also_from_is_claimed_only_where_the_other_source_has_a_row(two_docs):
+    """pdf x2 + fhir x1 of one value: two points survive, and only one of them
+    may say FHIR corroborated it."""
+    conn, pdf_doc, fhir_doc = two_docs
+    _add_lab(conn, document_id=pdf_doc, value=112.0)
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, unit, collected_date, raw_line, extracted_by, via_ocr, "
+        "dedup_key) VALUES(?,2,'LDL','ldl',112.0,'mg/dL','2026-03-10','x',"
+        "'line',0,?)", (pdf_doc, b"second"))
+    _add_lab(conn, document_id=fhir_doc, value=112.0, extracted_by="fhir")
+    trend = queries.lab_trend(conn, "ldl")
+    assert len(trend.points) == 2
+    assert sorted(p.also_from for p in trend.points) == [(), ("fhir",)]
+    assert trend.disagreements == ()
+
+
+@pytest.mark.parametrize("name,key", [
+    ("HR (EKG)", "hr_ekg"),
+    ("Resp Rate (CO2)", "resp_rate_co2"),
+    ("MAP (mmHg)", "map_mmhg"),
+    ("Pulse from pulse-ox", "pulse_from_pulse_ox"),
+])
+def test_a_vital_stored_under_a_real_name_is_found_by_that_name(tmp_path, name, key):
+    conn = _new_index(tmp_path)
+    root = tmp_path / "apple_health_export"
+    (root / "clinical-records").mkdir(parents=True)
+    record = json.loads((CLINICAL_FIX / "Observation-vital-pulse.json").read_text())
+    record["code"]["text"] = name
+    target = root / "clinical-records" / "Observation-x.json"
+    target.write_text(json.dumps(record))
+    sid, _ = healthkit.register_source_file(conn, target, "healthkit",
+                                            healthkit.sha256_file(target))
+    fhir.ingest_clinical(conn, root, source_file_id=sid)
+    conn.commit()
+    assert queries.clinical_vitals(conn, metric=name)
+    assert queries.clinical_vitals(conn, metric=key)
+
+
+def test_clinical_facts_limit_zero_means_zero(clinical_index):
+    assert queries.clinical_facts(clinical_index, limit=0) == []

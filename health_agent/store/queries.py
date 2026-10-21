@@ -24,6 +24,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
+from ..labs import slug as _labs_slug
 from ..metrics import Kind, Metric
 
 PERIODS = ("day", "week", "month")
@@ -61,9 +62,6 @@ class SeriesResult:
     total_records: int = 0
     available_from: str | None = None
     available_to: str | None = None
-    # Dates where two sources reported different values: {"collected_date",
-    # "values", "sources"}. Reported, never resolved.
-    disagreements: tuple[dict, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -468,8 +466,9 @@ class LabTrend:
     total_results: int = 0
     available_from: str | None = None
     available_to: str | None = None
-    # Dates where two sources reported different values: {"collected_date",
-    # "values", "sources"}. Reported, never resolved.
+    # One entry per date where two sources each reported something the other
+    # did not: {"collected_date", "reported": [{"value", "unit", "sources"}]}.
+    # Reported, never resolved.
     disagreements: tuple[dict, ...] = ()
 
     @property
@@ -618,19 +617,40 @@ def _collapse(points: list[LabPoint]) -> tuple[list[LabPoint], tuple[dict, ...]]
             if len(sources) == 1:
                 kept.extend((order[id(p)], p) for p in same)
                 continue
-            per_source = max(sum(1 for p in same if p.source == s)
-                             for s in sources)
+            counts = {s: sum(1 for p in same if p.source == s) for s in sources}
+            # Survivor preference: a row carrying a range, then a non-OCR
+            # row, then the pdf row. The last is deliberate: a person can open
+            # a PDF page and read the number, whereas a clinical-records
+            # Observation-<id>.json path means nothing to them, so the more
+            # checkable citation wins when nothing else separates the rows.
             ranked = sorted(same, key=lambda p: (p.ref_text is None, p.via_ocr,
                                                  p.source != "pdf", order[id(p)]))
-            for winner in ranked[:per_source]:
-                others = tuple(sorted(sources - {winner.source}))
-                kept.append((order[id(winner)], replace(winner, also_from=others)))
-        if len(by_value) > 1 and len({p.source for p in group}) > 1:
+            survivors = ranked[:max(counts.values())]
+            # also_from only where the other source really holds a matching
+            # row: pair survivors off against each other source's own count.
+            claims: dict[int, list[str]] = {id(p): [] for p in survivors}
+            for src, n in counts.items():
+                for p in [p for p in survivors if p.source != src][:n]:
+                    claims[id(p)].append(src)
+            for p in survivors:
+                others = tuple(sorted(claims[id(p)]))
+                kept.append((order[id(p)],
+                             replace(p, also_from=others) if others else p))
+        # Report a conflict only when one measurement is held by exactly one
+        # source and a different measurement by a different single source.
+        # One source simply having fewer records is not a conflict.
+        singles = {next(iter(srcs)) for srcs in
+                   ({p.source for p in v} for v in by_value.values())
+                   if len(srcs) == 1}
+        if len(singles) > 1:
             clashes.append({
                 "collected_date": date,
-                "values": [v[0].value_num if v[0].value_num is not None
-                           else v[0].value_text for v in by_value.values()],
-                "sources": sorted({p.source for p in group}),
+                "reported": [
+                    {"value": v[0].value_num if v[0].value_num is not None
+                     else v[0].value_text,
+                     "unit": v[0].unit,
+                     "sources": sorted({p.source for p in v})}
+                    for v in by_value.values()],
             })
     kept.sort(key=lambda t: t[0])
     return [p for _, p in kept], tuple(clashes)
@@ -661,7 +681,7 @@ def lab_trend(conn: sqlite3.Connection, key: str, *, start: str | None = None,
     if end:
         sql += "AND l.collected_date <= ? "
         params.append(end)
-    sql += "ORDER BY COALESCE(l.collected_date, '9999'), l.page_no"
+    sql += "ORDER BY COALESCE(l.collected_date, '9999'), l.page_no, l.id"
 
     rows = conn.execute(sql, params).fetchall()
     points = [
@@ -706,7 +726,7 @@ def clinical_facts(conn: sqlite3.Connection, *, kind: str | None = None,
     if where:
         sql += "WHERE " + " AND ".join(where) + " "
     sql += "ORDER BY COALESCE(f.onset_date, '0000') DESC, f.name"
-    if limit:
+    if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
     out = []
@@ -734,7 +754,7 @@ def clinical_vitals(conn: sqlite3.Connection, *, metric: str | None = None,
     where, params = [], []
     if metric:
         where.append("v.metric_key = ?")
-        params.append(metric.strip().lower().replace(" ", "_"))
+        params.append(_labs_slug(metric))
     if start:
         where.append("v.local_date >= ?")
         params.append(start)

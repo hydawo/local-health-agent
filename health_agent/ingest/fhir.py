@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import zipfile
 from collections.abc import Iterator
 from dataclasses import dataclass, fields
@@ -317,7 +316,6 @@ def parse_bytes(blob: bytes, member: str):
     return parse_resource(obj, member)
 
 
-_SLUG = re.compile(r"[^a-z0-9]+")
 # kind -> the singular `clinical_fact.kind` value stored in the row.
 _FACT_ROW_KIND = {"conditions": "condition", "medications": "medication",
                   "allergies": "allergy", "immunizations": "immunization",
@@ -351,7 +349,7 @@ def _dedup_key(*parts) -> bytes:
 
 
 def _slug(text: str) -> str:
-    return _SLUG.sub("_", (text or "").strip().lower()).strip("_") or "unknown"
+    return labs_module.slug(text)
 
 
 def _now() -> str:
