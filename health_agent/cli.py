@@ -270,7 +270,10 @@ def _ingest_clinical(conn: sqlite3.Connection, target: Path,
             print(f"                      {clinical.unreadable:,} unreadable")
     elif clinical.skipped:
         print(f"  clinical records    all {clinical.skipped:,} skipped")
-    if counted or clinical.skipped:
+    elif clinical.unreadable:
+        print(f"  clinical records    none readable "
+              f"({clinical.unreadable:,} unreadable)")
+    if counted or clinical.skipped or clinical.unreadable:
         print()
 
 

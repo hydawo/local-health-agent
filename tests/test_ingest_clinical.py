@@ -1,7 +1,6 @@
 """Reading clinical-records out of an export, from a zip or a folder."""
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import zipfile
@@ -78,14 +77,13 @@ def test_reingest_adds_nothing(conn, tmp_path):
                      "clinical_vital": 3, "clinical_fact": 5}[table], table
 
 
-@pytest.mark.parametrize("kind,table,column,expected_zero", [
-    ("labs", "lab_result", None, True),
-    ("vitals", "clinical_vital", None, True),
-    ("conditions", "clinical_fact", "condition", True),
-    ("medications", "clinical_fact", "medication", True),
+@pytest.mark.parametrize("kind,table,column", [
+    ("labs", "lab_result", None),
+    ("vitals", "clinical_vital", None),
+    ("conditions", "clinical_fact", "condition"),
+    ("medications", "clinical_fact", "medication"),
 ])
-def test_each_switch_skips_exactly_its_kind(conn, tmp_path, kind, table, column,
-                                            expected_zero):
+def test_each_switch_skips_exactly_its_kind(conn, tmp_path, kind, table, column):
     path = _zip_with_clinical(tmp_path)
     sid = _source(conn, path)
     stats = fhir.ingest_clinical(conn, path, source_file_id=sid,
@@ -180,3 +178,61 @@ def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
     logged = caplog.text
     assert "MedicationRequest-ibuprofen.json" in logged and "KeyError" in logged
     assert "SECRET-HEALTH-DETAIL" not in logged
+
+
+def test_a_failure_while_storing_one_file_does_not_stop_the_run(conn, tmp_path,
+                                                                monkeypatch):
+    path = _zip_with_clinical(tmp_path)
+    sid = _source(conn, path)
+    real = fhir.store_clinical
+    calls = {"n": 0}
+
+    def flaky(c, parsed, *, source_file_id, stats):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise RuntimeError("SECRET-HEALTH-DETAIL")
+        return real(c, parsed, source_file_id=source_file_id, stats=stats)
+
+    monkeypatch.setattr(fhir, "store_clinical", flaky)
+    stats = fhir.ingest_clinical(conn, path, source_file_id=sid)
+    conn.commit()
+    assert stats.unreadable == 2            # malformed.json plus the failed store
+    assert calls["n"] > 3                   # the run went on past the failure
+
+
+def test_the_nested_export_folder_layout_is_read(conn, tmp_path):
+    root = tmp_path / "outer"
+    nested = root / "apple_health_export" / "clinical-records"
+    nested.mkdir(parents=True)
+    for member in FIX.glob("*.json"):
+        shutil.copy(member, nested / member.name)
+    members = [name for name, _ in fhir.iter_members(root)]
+    assert members and all(n.startswith("clinical-records/") for n in members)
+
+
+def test_a_clinical_folder_outside_the_given_path_is_never_read(tmp_path):
+    """A sibling clinical-records/ next to the export's folder is not ours."""
+    outer = tmp_path / "outer"
+    (outer / "clinical-records").mkdir(parents=True)
+    for member in FIX.glob("*.json"):
+        shutil.copy(member, outer / "clinical-records" / member.name)
+    inner = outer / "export"
+    inner.mkdir()
+    (inner / "export.xml").write_text("<HealthData/>")
+    assert list(fhir.iter_members(inner)) == []
+    assert list(fhir.iter_members(inner / "export.xml")) == []
+
+
+def test_all_unreadable_still_prints_a_clinical_line(tmp_path, capsys):
+    import zipfile
+    from health_agent.cli import main
+    target = tmp_path / "export.zip"
+    with zipfile.ZipFile(target, "w") as archive:
+        archive.writestr("apple_health_export/export.xml",
+                         '<?xml version="1.0"?><HealthData locale="en_US"/>')
+        archive.writestr("apple_health_export/clinical-records/bad.json", "{")
+    code = main(["--index", str(tmp_path / "h.db"), "ingest", str(target),
+                 "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "clinical records    none readable (1 unreadable)" in out
