@@ -27,7 +27,7 @@ Nothing leaves the folder you choose.
 | Thing | Location | Notes |
 | --- | --- | --- |
 | Your source files | wherever you put them (default `~/HealthData/`) | Never modified, never copied, never uploaded |
-| SQLite index | `<data>/.index/health.db` | Record values, lab results, note text, chunk text |
+| SQLite index | `<data>/.index/health.db` | Record values, lab results, note text, chunk text, and clinical records (diagnoses, prescriptions, allergies, procedures, vitals) from an export's `clinical-records/` folder |
 | Vector index | `<data>/.index/vectors/` | Embeddings plus a copy of each chunk's text |
 | Cloud consent record | `<data>/.index/cloud_consent.json` | Timestamp, model, notice version. No health data |
 | Literature consent record | `<data>/.index/literature_consent.json` | Timestamp and notice version. No health data |
@@ -254,6 +254,44 @@ The first imports the whole ask path in a fresh interpreter and asserts that
 no `literature.fetch` module was loaded, then scans every file under
 `literature/` and fails if any file other than `fetch/client.py` imports a
 transport. The second is Claim 3's test.
+
+---
+
+## Claim 7: clinical records stay local, and identity is dropped at parse time
+
+An Apple Health export can include a `clinical-records/` folder of FHIR files.
+Ingesting it means the index can now hold diagnoses, prescriptions, allergies
+and procedures. That is more sensitive than anything it held before. Four
+things limit the exposure.
+
+- **They come from a file you already had.** The tool reads the folder inside
+  the export you point it at. It does not ask a health system for anything, and
+  it never fetches the attachment URLs that note references carry.
+- **They are never sent anywhere.** `offline-check` covers this path, and
+  `health_agent/ingest/fhir.py` falls under Claim 3's scan, which fails if any
+  module outside the three named above imports a network transport. The
+  clinical tools are read-only queries over the local index, like the rest.
+- **Identity is dropped at parse time.** The `Patient` resource is never read
+  into the index, and every subject, encounter and performer reference is
+  discarded by the parser, so none of it can be stored by mistake later.
+  `test_no_identity_string_reaches_the_database` plants identity markers in the
+  fixtures and then scans the whole database for them.
+- **`reset` deletes all of it.** The records live in the index, so
+  `health-agent reset` removes them with everything else. Your export is never
+  modified.
+
+**Verify:**
+
+```bash
+pytest tests/test_ingest_clinical.py::test_no_identity_string_reaches_the_database \
+       tests/test_ingest_clinical.py::test_the_patient_resource_contributes_nothing
+grep -n "import urllib\|import socket\|import requests\|import httpx" health_agent/ingest/fhir.py
+```
+
+The grep finds nothing. The claim stops at the cloud tier. With `ask --cloud`,
+every tool result the model requests is sent, and that includes clinical
+records. The cloud section below describes that boundary, and it applies to
+this data like any other.
 
 ---
 

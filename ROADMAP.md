@@ -185,10 +185,13 @@ proxy or Tor routing was added. `THREAT_MODEL.md` Claim 6 is the claim this
 paragraph promised, and the fetch step has the versioned notice
 (`health-agent literature-consent --show-notice`).
 
-**The synthesis risk does not go away without intake.** A dropped-in file that
+**The synthesis risk does not go away without intake.** A problem list that
 says "type 2 diabetes" next to a diabetes literature pack makes accidental
-advice as easy to produce as an intake table would have. #4's review still
-has to happen before literature is surfaced proactively.
+advice as easy to produce as an intake table would have. The clinical-records
+feature (#15) made this concrete, because an export's problem list and
+prescription list are now in the index. Eval questions Q31 to Q33 test it with
+those real records rather than a dropped note. #4's review still has to happen
+before literature is surfaced proactively.
 
 ## 3. Physician visit prep — suggested questions to ask
 
@@ -379,3 +382,35 @@ Blocked on Apple exposing only the ~3B on-device model to third-party
 developers, not the larger AFM tier (which is itself hardware-gated). Until that
 changes, a phone-native version would either reason poorly or call out to a Mac
 or cloud backend — which would undercut the entire local-only claim.
+
+## 15. Clinical records (FHIR)
+
+**Shipped.** An Apple Health export carries a second half beside
+`export.xml`: a `clinical-records/` folder of FHIR JSON files sent by
+connected health systems. `health-agent ingest` now reads it
+([design](docs/superpowers/specs/2026-10-21-fhir-clinical-records-design.md)).
+This fits #2's decision. The file is one the person already had, in the
+export they already made, and the tool still asks for nothing.
+
+Measured on one real export, 3,568 clinical files in 236 MB spanning 2018 to
+2025, ingested in 0.2 seconds once the XML was parsed, none unreadable:
+
+| Resource | Files | Stored as |
+| --- | --- | --- |
+| Observation, `Vital Signs` | 2,964 | clinician vitals |
+| Observation, `Imaging` | 20 | clinician vitals |
+| Observation, `Laboratory` | 117 | lab results (90 print a reference range, none carry an interpretation flag) |
+| `DocumentReference`, `DiagnosticReport` | 211 + 34 = 245 | note references |
+| `MedicationRequest` | 191 | 189 distinct medications |
+| `Immunization` | 16 | 15 distinct |
+| `Condition` | 11 | conditions |
+| `Procedure` | 2 | procedures |
+| `AllergyIntolerance` | 1 | allergies |
+| `Patient` | 1 | never ingested |
+
+The two collapses are genuine duplicates: identical name, code, date, dosage
+text and status under two resource ids.
+
+Fetching the attachments that note references point to is not built. Neither
+is FHIR from sources other than an Apple Health export, and nothing here
+writes back to a health system.

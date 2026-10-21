@@ -38,12 +38,17 @@ Three details that are easy to get wrong and are handled explicitly below:
    quantity types carry numbers, category types carry identifiers such as
    `HKCategoryValueSleepAnalysisAsleepREM`.
 
-Deliberately not ingested in milestone 1:
-  * `<InstantaneousBeatsPerMinute>` beat-by-beat lists inside HRV records —
+Deliberately not ingested here:
+  * `<InstantaneousBeatsPerMinute>` beat-by-beat lists inside HRV records:
     hundreds of thousands of rows supporting no query the agent will ask yet.
-  * `<WorkoutRoute>` / GPS (roadmap item 6) and `<ClinicalRecord>` FHIR JSON
-    (milestone 2 territory, and it lives in sibling files rather than the XML).
-  * `<Audiogram>` / `<VisionPrescription>` — rare and query-irrelevant for now.
+  * `<WorkoutRoute>` / GPS (roadmap item 6).
+  * `<Audiogram>` / `<VisionPrescription>`: rare and query-irrelevant for now.
+
+`<ClinicalRecord>` elements are only pointers. The FHIR JSON they name lives in
+sibling files under `clinical-records/`, beside this XML, and it IS ingested:
+`health_agent/ingest/fhir.py` reads that folder (labs, clinician vitals,
+conditions, medications, allergies, immunizations, procedures, and note
+references). This module never opens those files.
 """
 
 from __future__ import annotations
