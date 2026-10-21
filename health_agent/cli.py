@@ -29,6 +29,8 @@ from . import (__version__, agent, config, consent, embeddings, labs, metrics,
                ollama_client)
 from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
+from .agent.tools import _FACT_KIND_ARG
+from .literature import store as literature_store
 from .store import queries, sqlite_schema, vector_store
 
 log = get_logger("cli")
@@ -497,6 +499,13 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"  text chunks        {docs['chunks']:,}   "
                   f"({docs['chunks_embedded']:,} embedded)")
 
+        clinical = _clinical_counts(conn)
+        if clinical:
+            print("\nClinical records (from the export's clinical-records "
+                  "folder):")
+            for label, n, span in clinical:
+                print(f"  {label:<18} {n:,}" + (f"   {span}" if span else ""))
+
         top = queries.list_types(conn, limit=12)
         print("\nMost common types:")
         rows = [[t["type"].replace("HKQuantityTypeIdentifier", "")
@@ -508,6 +517,37 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _clinical_counts(conn: sqlite3.Connection) -> list[tuple[str, int, str]]:
+    """(label, count, date span) per clinical kind that holds anything.
+
+    Per-kind counts only. A total of clinical `document` rows would overstate
+    content: dedupe collapses and note references leave childless rows."""
+    out: list[tuple[str, int, str]] = []
+    extra = queries.clinical_content_counts(conn)
+    if extra["labs"]:
+        out.append(("lab values", extra["labs"], ""))
+    metrics_ = queries.clinical_vital_metrics(conn)
+    vitals_n = sum(m["n"] for m in metrics_)
+    if vitals_n:
+        firsts = [m["first"] for m in metrics_ if m["first"]]
+        lasts = [m["last"] for m in metrics_ if m["last"]]
+        span = (f"{min(firsts)} to {max(lasts)}"
+                if firsts and lasts and min(firsts) != max(lasts)
+                else (min(firsts) if firsts else ""))
+        out.append(("clinician vitals", vitals_n, span))
+    coverage = queries.clinical_fact_coverage(conn)
+    for plural, singular in _FACT_KIND_ARG.items():
+        c = coverage.get(singular)
+        if c:
+            span = ("" if not c["first"] or not c["last"]
+                    else c["first"] if c["first"] == c["last"]
+                    else f"{c['first']} to {c['last']}")
+            out.append((plural, c["count"], span))
+    if extra["note_references"]:
+        out.append(("note references", extra["note_references"], ""))
+    return out
 
 
 def _positive_int(text: str) -> int:
@@ -1144,6 +1184,93 @@ def cmd_notes(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"\n{summary['undated']} note(s) have no date. Add a "
                   f"`date:` to the frontmatter or name the file "
                   f"`YYYY-MM-DD-something.md` to place them in time.")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Diagnoses, prescriptions and the rest, as the health system sent them."""
+    kind = None
+    if args.kind:
+        kind = _FACT_KIND_ARG.get(args.kind.strip().lower())
+        if kind is None:
+            print(f"error: --kind must be one of "
+                  f"{', '.join(sorted(_FACT_KIND_ARG))}", file=sys.stderr)
+            return 2
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    try:
+        coverage = queries.clinical_fact_coverage(conn)
+        if not coverage:
+            print("No clinical records in the index. They come from the "
+                  "clinical-records folder of an Apple Health export; "
+                  "`health-agent ingest` reads them unless --no-clinical or "
+                  "--skip-clinical left them out.")
+            return 0
+        rows = queries.clinical_facts(conn, kind=kind)
+        if not rows:
+            held = ", ".join(f"{n['count']:,} {p}" for p, s in
+                             _FACT_KIND_ARG.items()
+                             if (n := coverage.get(s)))
+            print(f"No {args.kind.strip().lower()} in the index. It holds "
+                  f"{held}.")
+            return 0
+        print(_table(["kind", "name", "status", "date", "detail"],
+                     [[r["kind"], r["name"], r["status"] or "",
+                       r["onset_date"] or "", _clip(r["detail_text"], 70)]
+                      for r in rows]))
+        print(f"\n{len(rows):,} record(s). Source: the clinical-records "
+              f"folder of your Apple Health export.")
+        return 0
+    finally:
+        conn.close()
+
+
+def _clip(text: str | None, width: int) -> str:
+    """One line, cut at `width`, so long dosage text cannot widen the table."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= width else flat[:width - 3] + "..."
+
+
+def _vital_value(row: dict) -> str:
+    if row["value_num"] is not None:
+        return literature_store.format_number(row["value_num"])
+    return row["value_text"] or "-"
+
+
+def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Clinician-measured vitals, which are not the watch's series."""
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    try:
+        metrics_ = queries.clinical_vital_metrics(conn)
+        if not metrics_:
+            print("No clinician-measured vitals in the index. They come from "
+                  "the clinical-records folder of an Apple Health export; "
+                  "`health-agent ingest` reads them unless --no-clinical or "
+                  "--skip-clinical left them out.")
+            return 0
+        if not args.metric:
+            print(_table(["metric", "unit", "readings", "first", "last"],
+                         [[m["metric_key"], m["unit"] or "", f"{m['n']:,}",
+                           m["first"] or "", m["last"] or ""]
+                          for m in metrics_]))
+            print("\nPass --metric to list individual readings. Your watch "
+                  "and phone data is `health-agent metric`.")
+            return 0
+        rows = queries.clinical_vitals(conn, metric=args.metric,
+                                       start=args.start, end=args.end,
+                                       limit=args.limit)
+        if not rows:
+            held = ", ".join(m["metric_key"] for m in metrics_[:12])
+            print(f"No clinician-measured readings of '{args.metric}' in "
+                  f"that range. The index holds: {held}.")
+            return 0
+        print(_table(["measured", "metric", "value", "unit", "source file"],
+                     [[r["measured_at"] or r["local_date"] or "", r["metric"],
+                       _vital_value(r), r["unit"] or "", r["citation"]]
+                      for r in rows]))
+        print(f"\n{len(rows):,} reading(s), newest first, taken by a clinician "
+              f"and sent with your health-system records.")
         return 0
     finally:
         conn.close()
@@ -2043,6 +2170,10 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
                   f"{docs['documents']} document(s), "
                   f"{docs['lab_results']} lab value(s), "
                   f"{docs['chunks_embedded']}/{docs['chunks']} chunks embedded")
+            clinical = _clinical_counts(conn)
+            if clinical:
+                print("               clinical records: "
+                      + ", ".join(f"{n:,} {label}" for label, n, _ in clinical))
             conn.close()
         except (sqlite_schema.SchemaVersionMismatch,
                 sqlite_schema.AggregatesMissing) as exc:
@@ -2287,6 +2418,26 @@ def build_parser() -> argparse.ArgumentParser:
     p_docs = sub.add_parser("documents", help="list ingested record documents")
     p_docs.add_argument("--json", action="store_true")
     p_docs.set_defaults(func=cmd_documents)
+
+    p_clinical = sub.add_parser(
+        "clinical", help="diagnoses, medications and other clinical records",
+        description="Conditions, medications, allergies, immunizations and "
+                    "procedures from the clinical-records folder of an Apple "
+                    "Health export, as the health system recorded them.")
+    p_clinical.add_argument("--kind", metavar="KIND",
+                            help="one of: " + ", ".join(sorted(_FACT_KIND_ARG)))
+    p_clinical.set_defaults(func=cmd_clinical)
+
+    p_vitals = sub.add_parser(
+        "vitals", help="clinician-measured vitals from your clinical records",
+        description="With no --metric, lists which vitals a clinician measured. "
+                    "With one, lists those readings, newest first. These are "
+                    "not your watch's series; see `metric` for those.")
+    p_vitals.add_argument("--metric", help="vital name or key (e.g. pulse, spo2)")
+    p_vitals.add_argument("--start", metavar="YYYY-MM-DD")
+    p_vitals.add_argument("--end", metavar="YYYY-MM-DD")
+    p_vitals.add_argument("--limit", type=_positive_int, default=100)
+    p_vitals.set_defaults(func=cmd_vitals)
 
     p_ask = sub.add_parser(
         "ask", help="ask a question about your data in plain language",

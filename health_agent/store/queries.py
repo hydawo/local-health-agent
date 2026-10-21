@@ -781,6 +781,24 @@ def clinical_vital_metrics(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def clinical_content_counts(conn: sqlite3.Connection) -> dict:
+    """The clinical figures that are not facts or vitals: lab values that came
+    from the export, and note references (a DocumentReference or
+    DiagnosticReport the export lists but whose text it does not carry).
+
+    Deliberately no count of clinical `document` rows: each dedupe collapse
+    leaves one with no child, and note references are contentless, so that
+    total would read as records it does not hold."""
+    labs_n = conn.execute(
+        "SELECT COUNT(*) FROM lab_result WHERE extracted_by = 'fhir'"
+    ).fetchone()[0]
+    notes_n = conn.execute(
+        "SELECT COUNT(*) FROM document WHERE kind = 'fhir' AND "
+        "fhir_resource_type IN ('DocumentReference', 'DiagnosticReport')"
+    ).fetchone()[0]
+    return {"labs": labs_n, "note_references": notes_n}
+
+
 def document_summary(conn: sqlite3.Connection) -> dict:
     """Counts for the records surface: PDFs and their pages only.
 

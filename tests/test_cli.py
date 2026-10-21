@@ -185,6 +185,113 @@ def cli_records(tmp_path, capsys):
     return run
 
 
+@pytest.fixture
+def cli_no_clinical(tmp_path, capsys):
+    """An index loaded with every fixture source except clinical records."""
+    index = tmp_path / "health.db"
+
+    def run(*args: str) -> tuple[int, str]:
+        code = main(["--index", str(index), *args])
+        captured = capsys.readouterr()
+        run.err = captured.err
+        return code, captured.out
+
+    run.err = ""
+    run("ingest", str(FIXTURES), "--no-ocr", "--no-embed", "--no-clinical")
+    capsys.readouterr()
+    return run
+
+
+def test_clinical_lists_facts_as_a_table(cli_records):
+    code, out = cli_records("clinical")
+    assert code == 0
+    assert "ibuprofen 600 MG tablet" in out
+    assert "Left anterior cruciate ligament tear" in out
+    assert "Take 1 tablet" in out
+
+
+def test_clinical_filters_by_kind(cli_records):
+    code, out = cli_records("clinical", "--kind", "conditions")
+    assert code == 0
+    assert "Left anterior cruciate ligament tear" in out
+    assert "ibuprofen" not in out
+
+
+def test_clinical_rejects_an_unknown_kind(cli_records):
+    code, out = cli_records("clinical", "--kind", "diagnoses")
+    assert code == 2
+    assert "conditions" in cli_records.err
+
+
+def test_clinical_says_so_when_there_are_none(cli_no_clinical):
+    code, out = cli_no_clinical("clinical")
+    assert code == 0
+    assert "no clinical records" in out.lower()
+    assert "clinical-records" in out
+
+
+def test_vitals_lists_clinician_measurements(cli_records):
+    code, out = cli_records("vitals", "--metric", "pulse")
+    assert code == 0
+    assert "72" in out and "bpm" in out
+    assert "2023-09-15" in out
+
+
+def test_vitals_without_a_metric_lists_what_exists(cli_records):
+    code, out = cli_records("vitals")
+    assert code == 0
+    assert "pulse" in out.lower() and "spo2" in out.lower()
+
+
+def test_vitals_says_so_when_there_are_none(cli_no_clinical):
+    code, out = cli_no_clinical("vitals")
+    assert code == 0
+    assert "no clinician-measured vitals" in out.lower()
+    assert "clinical-records" in out
+
+
+def test_stats_counts_clinical_records(cli_records):
+    code, out = cli_records("stats")
+    assert code == 0
+    assert "clinical records" in out.lower()
+    assert "conditions" in out and "medications" in out
+    assert "note references" in out
+
+
+def test_stats_clinical_block_gives_per_kind_counts_not_a_document_total(
+        cli_records):
+    """Childless document rows (dedupe collapses, note references) make a raw
+    clinical document total misleading; the block reports per-kind counts."""
+    code, out = cli_records("stats")
+    block = out.split("Clinical records (")[1].split("\n\n")[0]
+    assert "documents" not in block.lower()
+    assert "lab values" in block and "clinician vitals" in block
+
+
+def test_stats_omits_clinical_block_when_none(cli_no_clinical):
+    code, out = cli_no_clinical("stats")
+    assert code == 0
+    assert "clinical records" not in out.lower()
+
+
+def test_check_reports_clinical_records(cli_records, monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    code, out = cli_records("check")
+    assert "clinical records" in out.lower()
+    assert "note reference" in out
+
+
+def test_check_is_silent_and_unchanged_without_clinical(cli_no_clinical,
+                                                       monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    code, out = cli_no_clinical("check")
+    assert "clinical records" not in out.lower()
+
+
 def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):
     index = tmp_path / "health.db"
     code = main(["--index", str(index), "ingest", str(FIXTURES),
