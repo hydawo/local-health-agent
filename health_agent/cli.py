@@ -1216,14 +1216,24 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
                   f"{held}.")
             return 0
         print(_table(["kind", "name", "status", "date", "detail"],
-                     [[r["kind"], r["name"], r["status"] or "",
-                       r["onset_date"] or "", _clip(r["detail_text"], 70)]
+                     [[r["kind"], _clip(r["name"], _CLINICAL_NAME_W),
+                       _clip(r["status"], _CLINICAL_STATUS_W),
+                       r["onset_date"] or "",
+                       _clip(r["detail_text"], _CLINICAL_DETAIL_W)]
                       for r in rows]))
         print(f"\n{len(rows):,} record(s). Source: the clinical-records "
               f"folder of your Apple Health export.")
         return 0
     finally:
         conn.close()
+
+
+# Column caps for `clinical`: kind (<=12) + name + status + date (10) + detail
+# plus four 2-character separators come to 118 characters, inside a 120 column
+# terminal. Longer text is cut with a trailing "..." so the cut is visible.
+_CLINICAL_NAME_W = 38
+_CLINICAL_STATUS_W = 12
+_CLINICAL_DETAIL_W = 38
 
 
 def _clip(text: str | None, width: int) -> str:
@@ -1267,7 +1277,8 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
             return 0
         print(_table(["measured", "metric", "value", "unit", "source file"],
                      [[r["measured_at"] or r["local_date"] or "", r["metric"],
-                       _vital_value(r), r["unit"] or "", r["citation"]]
+                       _vital_value(r), r["unit"] or "",
+                       r["citation"].replace("\\", "/").rsplit("/", 1)[-1]]
                       for r in rows]))
         print(f"\n{len(rows):,} reading(s), newest first, taken by a clinician "
               f"and sent with your health-system records.")

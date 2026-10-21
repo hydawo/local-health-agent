@@ -292,6 +292,39 @@ def test_check_is_silent_and_unchanged_without_clinical(cli_no_clinical,
     assert "clinical records" not in out.lower()
 
 
+def test_clinical_table_stays_within_120_columns_for_long_rows(tmp_path,
+                                                               capsys):
+    from health_agent.cli import _CLINICAL_DETAIL_W, _CLINICAL_NAME_W
+    from health_agent.store import sqlite_schema as ss
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed"])
+    capsys.readouterr()
+    conn = ss.connect(index)
+    long_name = "Bucket-handle tear of lateral meniscus of left knee as currently documented"
+    long_detail = "Take 1 tablet (10 mg total) by mouth 2 (two) times a day with food " * 2
+    conn.execute("UPDATE clinical_fact SET name = ?, detail_text = ? "
+                 "WHERE kind = 'medication'", (long_name, long_detail))
+    conn.commit()
+    conn.close()
+    code = main(["--index", str(index), "clinical"])
+    out = capsys.readouterr().out
+    table = out.split("\n\n")[0].splitlines()
+    assert code == 0
+    assert max(len(line) for line in table) <= 120
+    row = next(line for line in table if line.startswith("medication"))
+    assert "..." in row
+    assert long_name not in row
+    assert _CLINICAL_NAME_W < len(long_name) and _CLINICAL_DETAIL_W < len(long_detail)
+
+
+def test_vitals_citation_is_the_basename(cli_records):
+    code, out = cli_records("vitals", "--metric", "pulse")
+    assert code == 0
+    assert "Observation-vital-pulse.json" in out
+    assert "clinical-records/" not in out
+
+
 def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):
     index = tmp_path / "health.db"
     code = main(["--index", str(index), "ingest", str(FIXTURES),
