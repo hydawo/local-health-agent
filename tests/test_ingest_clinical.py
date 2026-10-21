@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import zipfile
 from pathlib import Path
@@ -143,3 +144,39 @@ def test_the_patient_resource_contributes_nothing(conn, tmp_path):
     rows = conn.execute("SELECT COUNT(*) FROM document "
                         "WHERE fhir_resource_type = 'Patient'").fetchone()[0]
     assert rows == 0
+
+
+def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
+                                                             monkeypatch, caplog):
+    """One resource that raises something other than FhirParseError (a
+    KeyError from a malformed dosageInstruction, say) is counted unreadable
+    and every other member is still stored. The log names the member and the
+    exception type, never the exception's content."""
+    path = _zip_with_clinical(tmp_path)
+    sid = _source(conn, path)
+    real = fhir.parse_bytes
+
+    def flaky(blob, member):
+        if member.endswith("MedicationRequest-ibuprofen.json"):
+            raise KeyError("SECRET-HEALTH-DETAIL")
+        return real(blob, member)
+
+    monkeypatch.setattr(fhir, "parse_bytes", flaky)
+    # The CLI's configure() turns propagation off on the package logger, so
+    # attach caplog's handler to it directly to be order-independent.
+    package_logger = logging.getLogger("health_agent")
+    package_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level("WARNING", logger="health_agent"):
+            stats = fhir.ingest_clinical(conn, path, source_file_id=sid)
+    finally:
+        package_logger.removeHandler(caplog.handler)
+    conn.commit()
+    assert stats.unreadable == 2            # malformed.json plus the KeyError one
+    assert stats.medications == 0
+    assert stats.labs == 3 and stats.vitals == 3 and stats.conditions == 1
+    assert stats.allergies == 1 and stats.immunizations == 1
+    assert stats.procedures == 1 and stats.notes == 2
+    logged = caplog.text
+    assert "MedicationRequest-ibuprofen.json" in logged and "KeyError" in logged
+    assert "SECRET-HEALTH-DETAIL" not in logged

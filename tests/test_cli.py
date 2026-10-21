@@ -1580,3 +1580,33 @@ def test_skip_clinical_skips_the_named_kind(tmp_path, capsys):
     assert code == 0
     assert "labs" not in out.split("clinical records", 1)[1].split("\n")[0]
     assert "skipped by --skip-clinical" in out
+
+
+def test_clinical_records_ingest_when_the_export_is_unchanged(tmp_path, capsys):
+    """The upgrade path: an export ingested before clinical support existed
+    (or with --no-clinical) gets its clinical records on a plain re-run,
+    without --force, even though HealthKit skips it as unchanged."""
+    index = tmp_path / "h.db"
+    zip_path = _clinical_zip(tmp_path)
+    assert main(["--index", str(index), "ingest", str(zip_path),
+                 "--no-embed", "--no-clinical"]) == 0
+    capsys.readouterr()
+
+    from health_agent.store import sqlite_schema
+    conn = sqlite_schema.connect(index)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    assert main(["--index", str(index), "ingest", str(zip_path),
+                 "--no-embed"]) == 0
+    out = capsys.readouterr().out
+    assert "already ingested and unchanged" in out
+    assert "clinical records    " in out and "3 labs" in out
+    conn = sqlite_schema.connect(index)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM lab_result").fetchone()[0] == 3
+    finally:
+        conn.close()
