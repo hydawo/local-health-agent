@@ -749,7 +749,8 @@ def test_a_draw_reported_by_both_sources_is_one_point_with_its_source(two_source
     add(fhir_doc, 112.0, extracted_by="fhir")
     result = tools.dispatch(ctx_, "get_lab_trend", {"analyte": "ldl"})
     (point,) = result["points"]
-    assert point["source"] in ("pdf", "fhir")
+    assert point["source"] == "pdf"   # the row carrying the range wins; see also_from
+    assert "source_disagreement" not in result
     assert "source_disagreement" not in result
 
 
@@ -763,3 +764,42 @@ def test_conflicting_sources_produce_a_note_naming_both_values(two_source_ctx):
     assert "2026-03-10" in note
     assert "112" in note and "mg/dL" in note and "pdf" in note
     assert "5.4" in note and "mmol/L" in note and "fhir" in note
+
+
+def test_a_since_that_filters_history_to_empty_names_the_plural_kinds(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"since": "2099-01-01"})
+    assert result["facts"] == []
+    assert "no_clinical_records" not in result
+    assert "conditions" in result["kinds_available"]
+    assert "condition," not in result["note"] and "conditions" in result["note"]
+
+
+def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"start_date": "2099-01-01"})
+    assert result["measurements"] == []
+    assert "No clinician-measured vitals" in result["note"]
+    assert "pulse" in result["note"]
+
+
+def test_a_metric_miss_names_the_metric(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"metric": "pulse", "start_date": "2099-01-01"})
+    assert "clinician-measured pulse" in result["note"]
+
+
+def test_vitals_absence_distinguishes_no_vitals_from_no_records(tmp_path, clinical_ctx):
+    conn = clinical_ctx.conn
+    conn.execute("DELETE FROM clinical_vital")
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals", {})
+    assert "no_clinical_records" not in result
+    assert "but no clinician-measured vitals" in result["note"]
+
+
+def test_disagreement_note_skips_dates_not_in_the_payload():
+    d = ({"collected_date": "2020-01-01",
+          "reported": [{"value": 1.0, "unit": "x", "sources": ["pdf"]},
+                       {"value": 2.0, "unit": "x", "sources": ["fhir"]}]},)
+    assert tools._source_disagreement_note(d, {"2021-01-01"}) is None
+    assert "2020-01-01" in tools._source_disagreement_note(d, {"2020-01-01"})

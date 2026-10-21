@@ -1,6 +1,6 @@
 """The agent's tool contract.
 
-Three tools, matching plan §4: `query_healthkit`, `search_records`,
+Seven tools; the first three are from plan §4: `query_healthkit`, `search_records`,
 `get_lab_trend`. Each is a thin adapter over `store/queries.py` — the same
 functions the CLI calls — so the model and `health-agent metric` cannot report
 different numbers for the same question. A tool that reimplemented its own
@@ -46,14 +46,9 @@ log = get_logger("agent.tools")
 MAX_SERIES_POINTS = 60
 # Lab results per analyte. Someone with a decade of annual panels has ~10.
 MAX_LAB_POINTS = 40
+# Clinical facts and clinician-measured vitals returned per call.
 MAX_CLINICAL_FACTS = 200
 MAX_CLINICAL_VITALS = 200
-_FACT_KIND_ARG = {
-    "conditions": "condition", "medications": "medication",
-    "allergies": "allergy", "immunizations": "immunization",
-    "procedures": "procedure",
-}
-_FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
 # Search snippets, and characters per snippet. Five chunks of ~600 chars is
 # roughly 800 tokens, which leaves room for the other tools in one turn.
 MAX_SEARCH_RESULTS = 8
@@ -348,11 +343,13 @@ MAX_BATCH_ANALYTES = 30
 MAX_BATCH_POINTS = 6
 
 
-def _source_disagreement_note(disagreements) -> str | None:
+def _source_disagreement_note(disagreements, dates=None) -> str | None:
     """What each source reported on each date they did not agree, as a note.
 
     Reported, never resolved: the model is told to say what each source said
     and not to pick one."""
+    if dates is not None:
+        disagreements = [d for d in disagreements if d["collected_date"] in dates]
     if not disagreements:
         return None
     parts = []
@@ -363,7 +360,7 @@ def _source_disagreement_note(disagreements) -> str | None:
             for r in d["reported"])
         parts.append(f"{d['collected_date']}: {said}")
     return (
-        "Two sources reported different results for the same draw ("
+        "Sources reported different results for the same draw ("
         + " | ".join(parts) + "). Say what each source reported, with its "
         "unit. Do not choose between them or call either one correct."
     )
@@ -440,7 +437,8 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
             "digits, so reference ranges especially may be wrong. Say that these "
             "should be checked against the original report."
         )
-    note = _source_disagreement_note(trend.disagreements)
+    note = _source_disagreement_note(
+        trend.disagreements, {p.collected_date for p in points})
     if note:
         payload["source_disagreement"] = note
     return payload
@@ -485,7 +483,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
                 for p in points
             ],
             **({"source_disagreement": n} if (n := _source_disagreement_note(
-                trend.disagreements)) else {}),
+                trend.disagreements, {p.collected_date for p in points})) else {}),
         }
         latest = trend.points[-1]
         if latest.out_of_range:
@@ -733,6 +731,15 @@ def _literature_hits(ctx: ToolContext, query: str, limit: int,
 # Clinical records (FHIR)
 # --------------------------------------------------------------------------- #
 
+# The `kind` argument is plural; rows store the singular. The model sees the
+# plural everywhere (argument, payload, inventory) so it sends back what it read.
+_FACT_KIND_ARG = {
+    "conditions": "condition", "medications": "medication",
+    "allergies": "allergy", "immunizations": "immunization",
+    "procedures": "procedure",
+}
+_FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
+
 def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
     kind = (args.get("kind") or "").strip().lower()
     row_kind = _FACT_KIND_ARG.get(kind)
@@ -744,7 +751,8 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
                                    limit=MAX_CLINICAL_FACTS)
     payload: dict = {
         "facts": facts,
-        "kinds_available": {k: v["count"] for k, v in coverage.items()},
+        "kinds_available": {_FACT_KIND_PLURAL.get(k, k): v["count"]
+                            for k, v in coverage.items()},
     }
     if not coverage:
         payload["no_clinical_records"] = True
@@ -775,10 +783,16 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
 def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
     metrics_available = queries.clinical_vital_metrics(ctx.conn)
     if not metrics_available:
+        if queries.clinical_fact_coverage(ctx.conn):
+            return {"measurements": [],
+                    "note": ("This index holds clinical records but no "
+                             "clinician-measured vitals among them. Say so, "
+                             "and do not substitute watch data.")}
         return {"measurements": [], "no_clinical_records": True,
-                "note": ("This index holds no clinician-measured vitals. They "
+                "note": ("This index holds no clinical records at all. They "
                          "come from the clinical-records folder of an Apple "
-                         "Health export. Say so.")}
+                         "Health export, which this person has either not "
+                         "ingested or skipped. Say so.")}
     metric = args.get("metric")
     try:
         limit = int(args.get("limit") or 100)
@@ -801,10 +815,18 @@ def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
                  "query_healthkit and the two must not be mixed or compared "
                  "as if they were one series."),
     }
-    if metric and not rows:
+    if len(rows) >= MAX_CLINICAL_VITALS:
+        payload["truncated"] = True
+    if not rows:
+        first = min((m["first"] for m in metrics_available if m["first"]),
+                    default=None)
+        last = max((m["last"] for m in metrics_available if m["last"]),
+                   default=None)
+        what = f"clinician-measured {metric}" if metric else "clinician-measured vitals"
         payload["note"] = (
-            f"No clinician-measured {metric} in the requested range. "
-            f"Available: {', '.join(m['metric_key'] for m in metrics_available)}.")
+            f"No {what} in the requested range. The index does hold "
+            f"{', '.join(m['metric_key'] for m in metrics_available)}, "
+            f"from {first} to {last}. Say what is absent.")
     return payload
 
 
@@ -1026,7 +1048,8 @@ TOOLS: tuple[Tool, ...] = (
             "delivered through their Apple Health export. These are not "
             "wearable readings: use query_healthkit for anything a watch or "
             "phone recorded, and never merge the two into one series. "
-            "Without a metric it lists which clinical vitals exist."
+            "Without a metric it returns the most recent measurements of every "
+            "vital together with a list of which vitals exist."
         ),
         parameters={
             "type": "object",
