@@ -1,0 +1,12 @@
+{
+ "resourceType": "Procedure",
+ "id": "proc-1",
+ "status": "completed",
+ "code": {
+  "text": "ACL reconstruction"
+ },
+ "performedDateTime": "2023-09-15",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

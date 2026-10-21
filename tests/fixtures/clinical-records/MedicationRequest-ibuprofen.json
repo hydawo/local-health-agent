@@ -1,0 +1,41 @@
+{
+ "resourceType": "MedicationRequest",
+ "id": "med-ibu",
+ "status": "completed",
+ "category": [
+  {
+   "text": "Outpatient"
+  }
+ ],
+ "medicationReference": {
+  "reference": "#med1",
+  "display": "ibuprofen 600 MG tablet"
+ },
+ "contained": [
+  {
+   "resourceType": "Medication",
+   "id": "med1",
+   "code": {
+    "text": "ibuprofen 600 MG tablet",
+    "coding": [
+     {
+      "system": "http://www.nlm.nih.gov/research/umls/rxnorm",
+      "code": "197806"
+     }
+    ]
+   }
+  }
+ ],
+ "dosageInstruction": [
+  {
+   "text": "Take 1 tablet (600 mg total) by mouth every 6 hours as needed."
+  }
+ ],
+ "authoredOn": "2023-09-15",
+ "recorder": {
+  "display": "RECORDER-SHOULD-NOT-BE-STORED"
+ },
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

@@ -1,0 +1,12 @@
+{
+ "resourceType": "Immunization",
+ "id": "imm-1",
+ "status": "completed",
+ "vaccineCode": {
+  "text": "Influenza vaccine"
+ },
+ "occurrenceDateTime": "2024-10-02",
+ "patient": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

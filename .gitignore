@@ -25,6 +25,8 @@
 # Real exports and clinical documents anywhere in the tree
 **/apple_health_export/
 **/clinical-records/
+# ...except the synthetic fixtures, every value of which is invented
+!/tests/fixtures/clinical-records/
 **/workout-routes/
 *.dcm
 

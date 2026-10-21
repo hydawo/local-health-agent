@@ -1,0 +1,21 @@
+{
+ "resourceType": "DocumentReference",
+ "id": "doc-1",
+ "status": "current",
+ "type": {
+  "text": "Progress Notes"
+ },
+ "date": "2023-09-16T08:00:00Z",
+ "description": "Orthopedic follow-up",
+ "content": [
+  {
+   "attachment": {
+    "contentType": "text/html",
+    "url": "https://example-health.invalid/fhir/Binary/SHOULD-NOT-BE-FETCHED"
+   }
+  }
+ ],
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

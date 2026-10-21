@@ -1,0 +1,55 @@
+{
+ "resourceType": "Observation",
+ "id": "lab-chol",
+ "status": "final",
+ "category": [
+  {
+   "text": "Laboratory",
+   "coding": [
+    {
+     "code": "laboratory"
+    }
+   ]
+  }
+ ],
+ "code": {
+  "text": "CHOLESTEROL",
+  "coding": [
+   {
+    "system": "http://loinc.org",
+    "code": "2093-3"
+   },
+   {
+    "system": "urn:oid:1.2.3.4",
+    "code": "CHOL"
+   }
+  ]
+ },
+ "valueQuantity": {
+  "value": 192,
+  "unit": "mg/dL",
+  "system": "http://unitsofmeasure.org",
+  "code": "mg/dL"
+ },
+ "referenceRange": [
+  {
+   "text": "<200",
+   "high": {
+    "value": 200
+   }
+  }
+ ],
+ "effectiveDateTime": "2024-11-06T17:04:00Z",
+ "issued": "2024-11-06T19:00:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ },
+ "encounter": {
+  "reference": "Encounter/ENC-SHOULD-NOT-BE-STORED"
+ },
+ "performer": [
+  {
+   "display": "PERFORMER-SHOULD-NOT-BE-STORED"
+  }
+ ]
+}

@@ -1,0 +1,32 @@
+{
+ "resourceType": "Observation",
+ "id": "lab-ldl-norange",
+ "status": "final",
+ "category": [
+  {
+   "text": "Laboratory",
+   "coding": [
+    {
+     "code": "laboratory"
+    }
+   ]
+  }
+ ],
+ "code": {
+  "text": "CALCULATED LDL",
+  "coding": [
+   {
+    "system": "http://loinc.org",
+    "code": "13457-7"
+   }
+  ]
+ },
+ "valueQuantity": {
+  "value": 118,
+  "unit": "mg/dL"
+ },
+ "effectiveDateTime": "2024-11-06T17:04:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

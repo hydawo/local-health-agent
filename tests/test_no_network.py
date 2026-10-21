@@ -403,3 +403,11 @@ def test_cli_imports_fetch_only_inside_function_bodies():
         if stripped.startswith("from .literature.fetch") or stripped.startswith(
                 "from .literature import fetch"):
             assert line != stripped, f"unindented fetch import: {line!r}"
+
+
+def test_fhir_parser_imports_no_transport_and_fetches_nothing():
+    text = (Path(offline_check.__file__).parent / "ingest" / "fhir.py").read_text()
+    for forbidden in ("import urllib", "from urllib", "import http",
+                      "import socket", "import requests", "import httpx",
+                      "urlopen"):
+        assert forbidden not in text, f"ingest/fhir.py mentions {forbidden!r}"

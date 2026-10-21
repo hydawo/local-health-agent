@@ -1,0 +1,21 @@
+{
+ "resourceType": "Observation",
+ "id": "img-1",
+ "status": "final",
+ "category": [
+  {
+   "text": "Imaging"
+  }
+ ],
+ "code": {
+  "text": "Knee effusion size"
+ },
+ "valueQuantity": {
+  "value": 3,
+  "unit": "mm"
+ },
+ "effectiveDateTime": "2023-09-20T09:00:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

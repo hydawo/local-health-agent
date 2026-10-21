@@ -1,0 +1,30 @@
+{
+ "resourceType": "Condition",
+ "id": "cond-knee",
+ "clinicalStatus": {
+  "coding": [
+   {
+    "code": "active"
+   }
+  ]
+ },
+ "category": [
+  {
+   "text": "Problem List Item"
+  }
+ ],
+ "code": {
+  "text": "Left anterior cruciate ligament tear",
+  "coding": [
+   {
+    "system": "http://snomed.info/sct",
+    "code": "239720000"
+   }
+  ]
+ },
+ "onsetDateTime": "2023-09-15",
+ "recordedDate": "2023-09-16",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}
