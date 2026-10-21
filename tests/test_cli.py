@@ -158,6 +158,8 @@ def test_query_before_ingest_is_actionable(tmp_path, capsys):
 # Records, labs and search (milestone 2)
 # --------------------------------------------------------------------------- #
 
+from health_agent.ingest import fhir  # noqa: E402
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -196,7 +198,7 @@ def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):
 def test_stats_includes_documents(cli_records):
     code, out = cli_records("stats")
     assert code == 0
-    assert "lab values         39" in out
+    assert "lab values         42" in out
 
 
 def test_documents_listing(cli_records):
@@ -217,7 +219,7 @@ def test_lab_trend_shows_values_with_citations(cli_records):
     assert code == 0
     assert "128" in out and "112" in out
     assert "labs_2025-09-12.pdf, p.1" in out
-    assert "down 16" in out
+    assert "down 6" in out
 
 
 def test_lab_trend_marks_out_of_range(cli_records):
@@ -244,8 +246,11 @@ def test_lab_trend_json(cli_records):
     payload = json.loads(out)
     assert code == 0
     assert payload["analyte_key"] == "hba1c"
-    assert payload["points"][0]["out_of_range"] is True
-    assert payload["points"][0]["page_no"] == 1
+    # points[0] is now the clinical-records text-only result (2023-05-02);
+    # the PDF-derived 5.7 % is the second point.
+    assert payload["points"][0]["value_text"] == "see comment"
+    assert payload["points"][1]["out_of_range"] is True
+    assert payload["points"][1]["page_no"] == 1
 
 
 def test_search_falls_back_to_keywords_and_says_so(cli_records):
@@ -1519,3 +1524,59 @@ def test_visit_prep_without_an_index(tmp_path, capsys):
     code = main(["--index", str(tmp_path / "none.db"), "visit-prep"])
     assert code == 2
     assert "ingest" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Clinical records (FHIR) in an Apple Health export
+# --------------------------------------------------------------------------- #
+
+def _clinical_zip(tmp_path: Path) -> Path:
+    import zipfile
+    target = tmp_path / "export.zip"
+    with zipfile.ZipFile(target, "w") as archive:
+        archive.writestr("apple_health_export/export.xml",
+                         '<?xml version="1.0"?><HealthData locale="en_US">'
+                         '<ExportDate value="2026-10-21 09:00:00 -0400"/></HealthData>')
+        for member in sorted((FIXTURES / "clinical-records").glob("*.json")):
+            archive.writestr(f"apple_health_export/clinical-records/{member.name}",
+                             member.read_bytes())
+    return target
+
+
+def test_ingest_reports_clinical_records(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "clinical records    " in out
+    assert "3 labs" in out and "3 vitals" in out and "1 conditions" in out
+    assert "1 unreadable" in out
+
+
+def test_no_clinical_omits_the_clinical_line(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed", "--no-clinical"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "clinical records" not in out
+
+
+def test_skip_clinical_rejects_an_unknown_kind(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed",
+                 "--skip-clinical", "labs,bogus"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "bogus" in err
+    for kind in fhir.CLINICAL_KINDS:
+        assert kind in err
+
+
+def test_skip_clinical_skips_the_named_kind(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed",
+                 "--skip-clinical", "labs"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "labs" not in out.split("clinical records", 1)[1].split("\n")[0]
+    assert "skipped by --skip-clinical" in out

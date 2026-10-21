@@ -27,7 +27,7 @@ from pathlib import Path
 from . import (__version__, agent, config, consent, embeddings, labs, metrics,
                offline_check,
                ollama_client)
-from .ingest import healthkit, notes, readers, records
+from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .store import queries, sqlite_schema, vector_store
 
@@ -153,6 +153,12 @@ def _warn_photos_in_records(records_dir: Path) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
+    try:
+        skip_clinical = fhir.parse_skip_list(args.skip_clinical)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     export, record_files, note_files = _plan_ingest(args, cfg)
 
     if export is None and not record_files and not note_files:
@@ -183,6 +189,8 @@ def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
 
         if export is not None:
             _ingest_healthkit(conn, export, cfg, force=force)
+            if not args.no_clinical:
+                _ingest_clinical(conn, export, skip_clinical)
         if record_files:
             _ingest_records(conn, record_files, cfg, force=force,
                             use_ocr=not args.no_ocr)
@@ -231,6 +239,39 @@ def _ingest_healthkit(conn: sqlite3.Connection, target: Path,
               "up to the parse error. Re-export and run `ingest --force`.",
               file=sys.stderr)
     print()
+
+
+def _ingest_clinical(conn: sqlite3.Connection, target: Path,
+                     skip: frozenset[str]) -> None:
+    """Read the export's clinical-records folder under the HealthKit file's
+    source_file row. Runs even when the HealthKit XML was unchanged: every
+    store is idempotent, so a re-run reports zeros."""
+    # HealthKit ingest has just upserted this row; reuse its stored hash
+    # rather than reading a multi-gigabyte export a second time.
+    row = conn.execute("SELECT sha256 FROM source_file WHERE path = ?",
+                       (str(target),)).fetchone()
+    digest = row["sha256"] if row else healthkit.sha256_file(target)
+    source_file_id, _ = healthkit.register_source_file(
+        conn, target, "healthkit", digest)
+
+    clinical = fhir.ingest_clinical(
+        conn, target, source_file_id=source_file_id, skip=skip,
+        on_progress=lambda n: print(f"  ... {n:,} clinical records read",
+                                    flush=True))
+    conn.commit()
+    counted = clinical.counted()
+    if counted:
+        print("  clinical records    " + ", ".join(
+            f"{v:,} {k}" for k, v in counted.items()))
+        if clinical.skipped:
+            print(f"                      {clinical.skipped:,} skipped by "
+                  f"--skip-clinical")
+        if clinical.unreadable:
+            print(f"                      {clinical.unreadable:,} unreadable")
+    elif clinical.skipped:
+        print(f"  clinical records    all {clinical.skipped:,} skipped")
+    if counted or clinical.skipped:
+        print()
 
 
 def _ingest_records(conn: sqlite3.Connection, files: list[Path],
@@ -2174,6 +2215,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="re-parse even if the file hash is unchanged")
     p_ingest.add_argument("--no-ocr", action="store_true",
                           help="skip OCR for pages with no text layer")
+    p_ingest.add_argument("--no-clinical", action="store_true",
+                          help="skip the clinical-records folder of an Apple "
+                               "Health export (FHIR labs, vitals, conditions, "
+                               "medications, notes)")
+    p_ingest.add_argument("--skip-clinical", metavar="KINDS", default="",
+                          help="comma-separated clinical kinds to skip: "
+                               + ", ".join(fhir.CLINICAL_KINDS))
     p_ingest.add_argument("--no-embed", action="store_true",
                           help="store chunks without embedding them")
     p_ingest.add_argument("--embedder", default="ollama",

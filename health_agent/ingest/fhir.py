@@ -19,10 +19,14 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from .. import labs as labs_module
+from ..logging_setup import get_logger
 
 CLINICAL_KINDS = ("labs", "vitals", "conditions", "medications", "allergies",
                   "immunizations", "procedures", "notes")
@@ -309,8 +313,6 @@ def parse_bytes(blob: bytes, member: str):
     return parse_resource(obj, member)
 
 
-from .. import labs as labs_module
-
 _SLUG = re.compile(r"[^a-z0-9]+")
 # kind -> the singular `clinical_fact.kind` value stored in the row.
 _FACT_ROW_KIND = {"conditions": "condition", "medications": "medication",
@@ -392,7 +394,7 @@ def store_clinical(conn, parsed, *, source_file_id: int,
     """Write one parsed record. Idempotent: the document is keyed by its
     resource id and every row carries a dedup key."""
     document_id, doc_new = _document_id(conn, parsed, source_file_id=source_file_id,
-                               stats=stats)
+                                       stats=stats)
 
     if isinstance(parsed, ParsedLab):
         key, panel = labs_module.resolve_coded(parsed.codings, parsed.name)
@@ -447,3 +449,82 @@ def store_clinical(conn, parsed, *, source_file_id: int,
         return
 
     stats.notes += int(doc_new)
+
+
+log = get_logger("ingest.fhir")
+
+CLINICAL_DIR = "clinical-records"
+
+
+def parse_skip_list(raw: str) -> frozenset[str]:
+    """A comma-separated list of kinds to skip. An unknown name is an error
+    naming the valid ones, rather than a silent no-op that looks like it
+    worked."""
+    names = [part.strip().lower() for part in (raw or "").split(",") if part.strip()]
+    unknown = [n for n in names if n not in CLINICAL_KINDS]
+    if unknown:
+        raise ValueError(
+            f"unknown clinical kind(s): {', '.join(unknown)}. "
+            f"Valid kinds: {', '.join(CLINICAL_KINDS)}")
+    return frozenset(names)
+
+
+def iter_members(path: Path) -> Iterator[tuple[str, bytes]]:
+    """(member path, bytes) for every clinical record under `path`.
+
+    Accepts an `export.zip`, a directory holding `clinical-records/`, or a
+    directory holding `apple_health_export/clinical-records/`. Zip members
+    are read one at a time rather than extracted: a real archive is
+    hundreds of megabytes and there is no reason to write a second copy of
+    the user's health data to disk.
+    """
+    path = Path(path)
+    if path.is_file() and path.suffix.lower() == ".zip":
+        with zipfile.ZipFile(path) as archive:
+            for name in sorted(archive.namelist()):
+                if f"/{CLINICAL_DIR}/" in f"/{name}" and name.endswith(".json"):
+                    yield name, archive.read(name)
+        return
+    root = path if path.is_dir() else path.parent
+    for candidate in (root / CLINICAL_DIR,
+                      root / "apple_health_export" / CLINICAL_DIR,
+                      root.parent / CLINICAL_DIR):
+        if candidate.is_dir():
+            for member in sorted(candidate.glob("*.json")):
+                yield f"{CLINICAL_DIR}/{member.name}", member.read_bytes()
+            return
+
+
+def ingest_clinical(conn, path: Path, *, source_file_id: int,
+                    skip: frozenset[str] = frozenset(),
+                    on_progress=None) -> ClinicalStats:
+    """Parse and store every clinical record beside `path`.
+
+    A file that will not parse is counted and skipped: one bad resource in
+    an archive of thousands must not cost the rest. The log line carries the
+    member path and the exception type only, never the exception's content,
+    which could quote health data.
+    """
+    stats = ClinicalStats()
+    for index, (member, blob) in enumerate(iter_members(path), start=1):
+        try:
+            parsed = parse_bytes(blob, member)
+        except FhirParseError as exc:
+            log.warning("skipped a clinical record: %s (%s)", member,
+                        type(exc).__name__)
+            stats.unreadable += 1
+            continue
+        except Exception as exc:  # noqa: BLE001 - one bad file must not stop the run
+            log.warning("skipped a clinical record: %s (%s)", member,
+                        type(exc).__name__)
+            stats.unreadable += 1
+            continue
+        if parsed is not None:
+            if kind_of(parsed) in skip:
+                stats.skipped += 1
+            else:
+                store_clinical(conn, parsed, source_file_id=source_file_id,
+                               stats=stats)
+        if on_progress is not None and index % 500 == 0:
+            on_progress(index)
+    return stats
