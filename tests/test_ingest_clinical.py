@@ -182,22 +182,55 @@ def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
 
 def test_a_failure_while_storing_one_file_does_not_stop_the_run(conn, tmp_path,
                                                                 monkeypatch):
+    """The failing record raises AFTER its document row is written, inside the
+    real store. It must leave no document and no child row, be counted
+    unreadable, and cost no other member its rows."""
     path = _zip_with_clinical(tmp_path)
-    sid = _source(conn, path)
-    real = fhir.store_clinical
-    calls = {"n": 0}
+    baseline_conn = sqlite_schema.connect(tmp_path / "baseline.db", create=True)
+    sqlite_schema.initialize(baseline_conn)
+    baseline = fhir.ingest_clinical(
+        baseline_conn, path, source_file_id=_source(baseline_conn, path))
+    baseline_conn.commit()
 
-    def flaky(c, parsed, *, source_file_id, stats):
-        calls["n"] += 1
-        if calls["n"] == 3:
-            raise RuntimeError("SECRET-HEALTH-DETAIL")
-        return real(c, parsed, source_file_id=source_file_id, stats=stats)
+    target = "Observation-lab-chol.json"
+    state = {"armed": False}
+    real_store = fhir.store_clinical
+    real_key = fhir._dedup_key
 
-    monkeypatch.setattr(fhir, "store_clinical", flaky)
-    stats = fhir.ingest_clinical(conn, path, source_file_id=sid)
+    def store(c, parsed, *, source_file_id, stats):
+        state["armed"] = parsed.member.endswith(target)
+        return real_store(c, parsed, source_file_id=source_file_id, stats=stats)
+
+    def key(*parts):
+        if state["armed"]:
+            raise RuntimeError("SECRET-HEALTH-DETAIL")   # after the document insert
+        return real_key(*parts)
+
+    monkeypatch.setattr(fhir, "store_clinical", store)
+    monkeypatch.setattr(fhir, "_dedup_key", key)
+    stats = fhir.ingest_clinical(conn, path, source_file_id=_source(conn, path))
     conn.commit()
-    assert stats.unreadable == 2            # malformed.json plus the failed store
-    assert calls["n"] > 3                   # the run went on past the failure
+
+    assert stats.unreadable == baseline.unreadable + 1
+    assert stats.labs == baseline.labs - 1
+    assert stats.documents == baseline.documents - 1
+    for name in ("vitals", "conditions", "medications", "allergies",
+                 "immunizations", "procedures", "notes"):
+        assert getattr(stats, name) == getattr(baseline, name), name
+    assert conn.execute("SELECT COUNT(*) FROM document WHERE path LIKE ?",
+                        (f"%{target}",)).fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM document d WHERE NOT EXISTS "
+                        "(SELECT 1 FROM lab_result l WHERE l.document_id = d.id) "
+                        "AND NOT EXISTS (SELECT 1 FROM clinical_vital v "
+                        "WHERE v.document_id = d.id) AND NOT EXISTS "
+                        "(SELECT 1 FROM clinical_fact f WHERE f.document_id = d.id) "
+                        "AND d.fhir_resource_type NOT IN "
+                        "('DocumentReference','DiagnosticReport')"
+                        ).fetchone()[0] == 0
+    for table in ("lab_result", "clinical_vital", "clinical_fact", "document"):
+        got = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        want = baseline_conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+        assert got == want - (1 if table in ("lab_result", "document") else 0), table
 
 
 def test_the_nested_export_folder_layout_is_read(conn, tmp_path):
@@ -224,7 +257,6 @@ def test_a_clinical_folder_outside_the_given_path_is_never_read(tmp_path):
 
 
 def test_all_unreadable_still_prints_a_clinical_line(tmp_path, capsys):
-    import zipfile
     from health_agent.cli import main
     target = tmp_path / "export.zip"
     with zipfile.ZipFile(target, "w") as archive:

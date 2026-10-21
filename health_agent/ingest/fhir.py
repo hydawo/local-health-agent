@@ -21,7 +21,7 @@ import json
 import re
 import zipfile
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import datetime
 from pathlib import Path
 
@@ -507,6 +507,14 @@ def ingest_clinical(conn, path: Path, *, source_file_id: int,
     """
     stats = ClinicalStats()
     for index, (member, blob) in enumerate(iter_members(path), start=1):
+        # Each record lands completely or not at all: the document row and
+        # its child rows are written inside one savepoint, and the counters
+        # are restored with it, so a failure leaves no childless document and
+        # no half-counted record.
+        if not conn.in_transaction:
+            conn.execute("BEGIN")
+        conn.execute("SAVEPOINT clinical_record")
+        before = {f.name: getattr(stats, f.name) for f in fields(stats)}
         try:
             parsed = parse_bytes(blob, member)
             if parsed is not None:
@@ -516,9 +524,14 @@ def ingest_clinical(conn, path: Path, *, source_file_id: int,
                     store_clinical(conn, parsed, source_file_id=source_file_id,
                                    stats=stats)
         except Exception as exc:  # noqa: BLE001 - one bad file must not stop the run
+            conn.execute("ROLLBACK TO clinical_record")
+            for name, value in before.items():
+                setattr(stats, name, value)
             log.warning("skipped a clinical record: %s (%s)", member,
                         type(exc).__name__)
             stats.unreadable += 1
+        finally:
+            conn.execute("RELEASE clinical_record")
         if on_progress is not None and index % 500 == 0:
             on_progress(index)
     return stats
