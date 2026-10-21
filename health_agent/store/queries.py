@@ -607,7 +607,7 @@ def _collapse(points: list[LabPoint]) -> tuple[list[LabPoint], tuple[dict, ...]]
 
     kept: list[tuple[int, LabPoint]] = []
     clashes: list[dict] = []
-    for date, group in by_date.items():
+    for day, group in by_date.items():
         by_value: dict[tuple, list[LabPoint]] = {}
         for point in group:
             by_value.setdefault((point.value_num, point.value_text, point.unit),
@@ -644,7 +644,7 @@ def _collapse(points: list[LabPoint]) -> tuple[list[LabPoint], tuple[dict, ...]]
                    if len(srcs) == 1}
         if len(singles) > 1:
             clashes.append({
-                "collected_date": date,
+                "collected_date": day,
                 "reported": [
                     {"value": v[0].value_num if v[0].value_num is not None
                      else v[0].value_text,
