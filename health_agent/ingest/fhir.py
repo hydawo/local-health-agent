@@ -16,8 +16,13 @@ is coverage rather than content.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass
+from datetime import datetime
+
+from .. import labs as labs_module
 
 CLINICAL_KINDS = ("labs", "vitals", "conditions", "medications", "allergies",
                   "immunizations", "procedures", "notes")
@@ -302,3 +307,132 @@ def parse_bytes(blob: bytes, member: str):
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise FhirParseError(f"{member}: not valid JSON: {exc}") from exc
     return parse_resource(obj, member)
+
+
+from .. import labs as labs_module
+
+_SLUG = re.compile(r"[^a-z0-9]+")
+# kind -> the singular `clinical_fact.kind` value stored in the row.
+_FACT_ROW_KIND = {"conditions": "condition", "medications": "medication",
+                  "allergies": "allergy", "immunizations": "immunization",
+                  "procedures": "procedure"}
+
+
+@dataclass
+class ClinicalStats:
+    documents: int = 0
+    labs: int = 0
+    vitals: int = 0
+    conditions: int = 0
+    medications: int = 0
+    allergies: int = 0
+    immunizations: int = 0
+    procedures: int = 0
+    notes: int = 0
+    unreadable: int = 0
+    skipped: int = 0
+
+    def counted(self) -> dict[str, int]:
+        """Only the kinds that produced rows, for a report line that does
+        not list six zeroes."""
+        return {k: getattr(self, k) for k in CLINICAL_KINDS
+                if getattr(self, k, 0)}
+
+
+def _dedup_key(*parts) -> bytes:
+    joined = "\x1f".join("" if p is None else str(p) for p in parts)
+    return hashlib.blake2b(joined.encode("utf-8"), digest_size=16).digest()
+
+
+def _slug(text: str) -> str:
+    return _SLUG.sub("_", (text or "").strip().lower()).strip("_") or "unknown"
+
+
+def _now() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def _document_id(conn, parsed, *, source_file_id: int, stats: ClinicalStats) -> int:
+    """One document row per FHIR resource, created once and reused."""
+    title = None
+    doc_date = None
+    if isinstance(parsed, ParsedClinicalDoc):
+        title, doc_date = (parsed.doc_type or parsed.title), parsed.doc_date
+    elif isinstance(parsed, ParsedLab):
+        title, doc_date = parsed.name, parsed.collected_date
+    elif isinstance(parsed, ParsedVital):
+        title, doc_date = parsed.name, parsed.local_date
+    elif isinstance(parsed, ParsedFact):
+        title, doc_date = parsed.name, parsed.onset_date
+    before = conn.total_changes
+    conn.execute(
+        "INSERT INTO document(source_file_id, path, kind, title, doc_date, "
+        "page_count, extraction, ingested_at, fhir_resource_type, fhir_id) "
+        "VALUES(?,?,'fhir',?,?,0,'none',?,?,?) "
+        "ON CONFLICT(fhir_resource_type, fhir_id) WHERE fhir_id IS NOT NULL "
+        "DO NOTHING",
+        (source_file_id, parsed.member, title, doc_date, _now(),
+         parsed.resource_type, parsed.resource_id))
+    if conn.total_changes > before:
+        stats.documents += 1
+    return conn.execute(
+        "SELECT id FROM document WHERE fhir_resource_type = ? AND fhir_id = ?",
+        (parsed.resource_type, parsed.resource_id)).fetchone()["id"]
+
+
+def store_clinical(conn, parsed, *, source_file_id: int,
+                   stats: ClinicalStats) -> None:
+    """Write one parsed record. Idempotent: the document is keyed by its
+    resource id and every row carries a dedup key."""
+    document_id = _document_id(conn, parsed, source_file_id=source_file_id,
+                               stats=stats)
+
+    if isinstance(parsed, ParsedLab):
+        key, panel = labs_module.resolve_coded(parsed.codings, parsed.name)
+        value = (f"{parsed.value_num:g}" if parsed.value_num is not None
+                 else (parsed.value_text or ""))
+        raw_line = f"{parsed.name}: {value} {parsed.unit or ''}".strip()
+        conn.execute(
+            "INSERT OR IGNORE INTO lab_result(document_id, page_no, analyte, "
+            "analyte_key, panel, value_num, value_text, unit, ref_low, "
+            "ref_high, ref_text, flag, collected_date, raw_line, "
+            "extracted_by, via_ocr, dedup_key) "
+            "VALUES(?,0,?,?,?,?,?,?,?,?,?,?,?,?,'fhir',0,?)",
+            (document_id, parsed.name, key, panel, parsed.value_num,
+             parsed.value_text, parsed.unit, parsed.ref_low, parsed.ref_high,
+             parsed.ref_text, parsed.flag, parsed.collected_date, raw_line,
+             _dedup_key(document_id, 0, key, parsed.value_num,
+                        parsed.value_text, parsed.unit)))
+        stats.labs += 1
+        return
+
+    if isinstance(parsed, ParsedVital):
+        conn.execute(
+            "INSERT OR IGNORE INTO clinical_vital(document_id, metric, "
+            "metric_key, code, code_system, category, value_num, value_text, "
+            "unit, measured_at, local_date, dedup_key) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (document_id, parsed.name, _slug(parsed.name),
+             parsed.codings[0][1] if parsed.codings else None,
+             parsed.codings[0][0] if parsed.codings else None,
+             parsed.category, parsed.value_num, parsed.value_text, parsed.unit,
+             parsed.measured_at, parsed.local_date,
+             _dedup_key(_slug(parsed.name), parsed.measured_at,
+                        parsed.value_num, parsed.value_text, parsed.unit)))
+        stats.vitals += 1
+        return
+
+    if isinstance(parsed, ParsedFact):
+        conn.execute(
+            "INSERT OR IGNORE INTO clinical_fact(document_id, kind, name, "
+            "code, code_system, status, onset_date, detail_text, category, "
+            "dedup_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (document_id, _FACT_ROW_KIND[parsed.kind], parsed.name,
+             parsed.code, parsed.code_system, parsed.status, parsed.onset_date,
+             parsed.detail_text, parsed.category,
+             _dedup_key(parsed.kind, parsed.name, parsed.code,
+                        parsed.onset_date, parsed.detail_text)))
+        setattr(stats, parsed.kind, getattr(stats, parsed.kind) + 1)
+        return
+
+    stats.notes += 1

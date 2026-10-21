@@ -186,3 +186,107 @@ def test_a_structurally_wrong_code_degrades_instead_of_raising(resource):
     assert parsed.name == ""
     assert not getattr(parsed, "codings", ())
     assert getattr(parsed, "code", None) is None
+
+
+from health_agent.store import sqlite_schema
+
+
+@pytest.fixture
+def index(tmp_path):
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    conn.execute("INSERT INTO source_file(path, kind, sha256, size_bytes, "
+                 "record_count, status, ingested_at) "
+                 "VALUES('export.zip','healthkit','deadbeef',1,0,'ok','2026-10-21T00:00:00-04:00')")
+    conn.commit()
+    return conn
+
+
+def _source_id(conn) -> int:
+    return conn.execute("SELECT id FROM source_file").fetchone()["id"]
+
+
+def test_schema_version_is_5():
+    assert sqlite_schema.SCHEMA_VERSION == 5
+
+
+def test_storing_a_lab_writes_a_document_and_a_lab_result(index):
+    stats = fhir.ClinicalStats()
+    fhir.store_clinical(index, parse("Observation-lab-chol.json"),
+                        source_file_id=_source_id(index), stats=stats)
+    index.commit()
+    doc = index.execute("SELECT * FROM document").fetchone()
+    assert doc["kind"] == "fhir"
+    assert doc["fhir_resource_type"] == "Observation" and doc["fhir_id"] == "lab-chol"
+    assert doc["page_count"] == 0 and doc["extraction"] == "none"
+    row = index.execute("SELECT * FROM lab_result").fetchone()
+    assert row["analyte_key"] == "cholesterol_total"
+    assert row["value_num"] == 192 and row["unit"] == "mg/dL"
+    assert row["ref_text"] == "<200" and row["ref_high"] == 200
+    assert row["extracted_by"] == "fhir" and row["via_ocr"] == 0
+    assert row["page_no"] == 0
+    assert row["collected_date"] == "2024-11-06"
+    assert stats.labs == 1 and stats.documents == 1
+
+
+def test_storing_a_vital_stays_out_of_daily_metric(index):
+    stats = fhir.ClinicalStats()
+    fhir.store_clinical(index, parse("Observation-vital-pulse.json"),
+                        source_file_id=_source_id(index), stats=stats)
+    index.commit()
+    row = index.execute("SELECT * FROM clinical_vital").fetchone()
+    assert row["metric"] == "Pulse" and row["value_num"] == 72
+    assert row["unit"] == "bpm" and row["local_date"] == "2023-09-15"
+    assert row["measured_at"] == "2023-09-15T14:22:00Z"
+    assert index.execute("SELECT COUNT(*) FROM daily_metric").fetchone()[0] == 0
+    assert index.execute("SELECT COUNT(*) FROM record").fetchone()[0] == 0
+    assert stats.vitals == 1
+
+
+def test_storing_facts_fills_clinical_fact(index):
+    stats = fhir.ClinicalStats()
+    for name in ("Condition-knee.json", "MedicationRequest-ibuprofen.json",
+                 "AllergyIntolerance-pollen.json", "Immunization-flu.json",
+                 "Procedure-acl.json"):
+        fhir.store_clinical(index, parse(name),
+                            source_file_id=_source_id(index), stats=stats)
+    index.commit()
+    rows = {r["kind"]: r for r in index.execute("SELECT * FROM clinical_fact")}
+    assert set(rows) == {"condition", "medication", "allergy",
+                         "immunization", "procedure"}
+    assert rows["condition"]["name"] == "Left anterior cruciate ligament tear"
+    assert rows["condition"]["status"] == "active"
+    assert rows["medication"]["detail_text"].startswith("Take 1 tablet")
+    assert stats.conditions == 1 and stats.medications == 1
+
+
+def test_a_note_reference_is_a_document_with_no_content(index):
+    stats = fhir.ClinicalStats()
+    fhir.store_clinical(index, parse("DocumentReference-progress.json"),
+                        source_file_id=_source_id(index), stats=stats)
+    index.commit()
+    doc = index.execute("SELECT * FROM document").fetchone()
+    assert doc["kind"] == "fhir" and doc["title"] == "Progress Notes"
+    assert doc["doc_date"] == "2023-09-16"
+    assert index.execute("SELECT COUNT(*) FROM document_page").fetchone()[0] == 0
+    assert index.execute("SELECT COUNT(*) FROM chunk").fetchone()[0] == 0
+    assert stats.notes == 1
+
+
+def test_storing_the_same_resource_twice_is_idempotent(index):
+    for _ in range(2):
+        stats = fhir.ClinicalStats()
+        for name in ("Observation-lab-chol.json", "Observation-vital-pulse.json",
+                     "Condition-knee.json"):
+            fhir.store_clinical(index, parse(name),
+                                source_file_id=_source_id(index), stats=stats)
+        index.commit()
+    counts = {t: index.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+              for t in ("document", "lab_result", "clinical_vital", "clinical_fact")}
+    assert counts == {"document": 3, "lab_result": 1,
+                      "clinical_vital": 1, "clinical_fact": 1}
+
+
+def test_counted_reports_only_nonzero_kinds(index):
+    stats = fhir.ClinicalStats(labs=2, vitals=0, conditions=1)
+    assert stats.counted() == {"labs": 2, "conditions": 1}
