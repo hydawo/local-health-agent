@@ -165,9 +165,17 @@ def _anchored_note(anchor: Anchor) -> str:
     One place knows how to say this, so the layers above do not each invent
     their own anchored wording.
     """
-    return (f"These are the spans before and after {anchor.label} on "
-            f"{anchor.date}, reported side by side. The tool makes no claim "
-            "that anything in one span brought about anything in the other.")
+    return (f"These are the spans before and after {_anchor_phrase(anchor)}, "
+            "reported side by side. The tool makes no claim that anything in "
+            "one span brought about anything in the other.")
+
+
+def _anchor_phrase(anchor: Anchor) -> str:
+    """The anchor named once. An explicit date is its own label, so "on
+    {date}" after it would print the date twice."""
+    if anchor.label == anchor.date:
+        return anchor.date
+    return f"{anchor.label} on {anchor.date}"
 
 
 # --------------------------------------------------------------------------- #
@@ -257,12 +265,16 @@ def _series(conn, spec: SeriesSpec, start: str, end: str, period: str):
             # Summarizing them as they come would report a spread across
             # stages as a range and three stages on one day as three periods,
             # which defeats the thin rule and can read as a false "ok".
+            # The refusal names the tool that can answer, not a Python
+            # function: `query_healthkit` with metric "sleep" routes to the
+            # per-night answer, and a reader who cannot act on a refusal
+            # reads it as a dead end.
             _refuse(f"{spec.metric} is a category metric ({metric.label}): "
                     "its series holds one point per period per category "
                     "value, and which combination of those values a window "
                     "should compare is not something this layer decides. Ask "
-                    "for the category series itself through "
-                    "queries.metric_series, or name a quantity metric")
+                    "query_healthkit for this metric, which reports the "
+                    "categories as they are, or compare a quantity metric")
         return queries.metric_series(
             conn, metric, period=period, start=start, end=end,
             source_exclude=tuple(spec.source_exclude))
@@ -454,7 +466,7 @@ def as_comparison(window_: Window, *, sample_counts: bool = False) -> Comparison
     the verdict without reaching into a private name.
     """
     anchor = window_.anchor
-    where = f" either side of {anchor.label} on {anchor.date}" if anchor else ""
+    where = f" either side of {_anchor_phrase(anchor)}" if anchor else ""
     comparable = _verdict(window_.before, window_.after,
                           names=("before", "after"), spec=window_.spec,
                           sample_counts=sample_counts)
@@ -494,12 +506,24 @@ def compare(conn, *, spec: SeriesSpec, left, right, period: str = "day",
 # Absence, in one place
 # --------------------------------------------------------------------------- #
 
-def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
-    """What else the reader needs to know about an absence on this side.
+def _spec_clauses(sides, spec: SeriesSpec | None) -> list[str]:
+    """What the reader needs to know about the figure, said once.
 
     The index-wide count a bare absence quotes is about every record or every
     workout, so a narrowed spec says what it narrowed to and what is there.
+    These facts are about the figure and the filters, not about one side, so
+    they are stated once after the per-side facts. Said per side they ran a
+    refusal past 600 characters, and a refusal nobody reads is a refusal that
+    failed.
     """
+    for side in sides:
+        clauses = _held_clauses(side, spec)
+        if clauses:
+            return clauses
+    return []
+
+
+def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
     held = side.coverage.get("held") or {}
     out = []
     if "measure_asked" in held:
@@ -534,30 +558,32 @@ def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
     if held.get("indoor_only") is not None:
         out.append("only workouts the export marked indoor"
                    + ("" if held["indoor_only"] else " as false")
-                   + " were read for this side")
+                   + " were read, on both sides")
     if held.get("sources_excluded"):
-        out.append("this side was read with "
+        out.append("both sides were read with "
                    + ", ".join(held["sources_excluded"]) + " excluded")
     return out
 
 
-def _absence_clause(side: SideSummary, spec: SeriesSpec | None) -> str:
-    """One wording for an empty side, used by the verdict and by `render`."""
+def _coverage_tail(side: SideSummary, spec: SeriesSpec | None) -> str:
+    """What the index holds of this figure, as the tail of an absence.
+
+    One wording, used by the verdict and by `render`, so a side with no
+    periods reads as coverage in both places rather than as two different
+    absences in two different voices. The facts about the figure itself are
+    said once by `_spec_clauses`, not repeated under each side.
+    """
     total = side.coverage.get(f"total_{side.counted}") or 0
     if not total:
-        head = ("no periods in that range, and the index holds no "
+        return (", and the index holds no "
                 f"{side.counted} of this figure at all")
-    elif spec is not None and not spec.metric:
-        head = (f"no periods in that range, while the index holds "
-                f"{_count(total, 'workouts')} in all, from "
-                f"{side.coverage.get('available_from')} to "
-                f"{side.coverage.get('available_to')}")
-    else:
-        head = (f"no periods in that range, while the index holds "
-                f"{_count(total, side.counted)} of this figure from "
-                f"{side.coverage.get('available_from')} to "
-                f"{side.coverage.get('available_to')}")
-    return "; ".join([head, *_held_clauses(side, spec)])
+    first = side.coverage.get("available_from")
+    last = side.coverage.get("available_to")
+    if spec is not None and not spec.metric:
+        return (f", while the index holds {_count(total, 'workouts')} in all, "
+                f"from {first} to {last}")
+    return (f", while the index holds {_count(total, side.counted)} of this "
+            f"figure from {first} to {last}")
 
 
 # --------------------------------------------------------------------------- #
@@ -593,9 +619,18 @@ def _verdict(left: SideSummary, right: SideSummary, *,
     empty = [(name, side) for name, side in zip(names, (left, right))
              if side.n == 0]
     if empty:
-        because = "; ".join(f"the {name} side has {_absence_clause(side, spec)}"
-                            for name, side in empty)
-        return {**block, "verdict": "insufficient_data", "because": because}
+        if len(empty) == 2:
+            # Both sides quote the same index-wide coverage, because it is
+            # coverage of the figure and not of a side. Printed twice it is
+            # the same sentence again for no reader's benefit.
+            parts = ["neither side has any periods in that range"
+                     + _coverage_tail(left, spec)]
+        else:
+            parts = [f"the {name} side has no periods in that range"
+                     + _coverage_tail(side, spec) for name, side in empty]
+        return {**block, "verdict": "insufficient_data",
+                "because": "; ".join(parts + _spec_clauses((left, right),
+                                                           spec))}
 
     if left.unit_mixed or right.unit_mixed:
         parts = []
@@ -609,7 +644,7 @@ def _verdict(left: SideSummary, right: SideSummary, *,
             parts.append(
                 f"the {name} side reports this figure in more than one unit "
                 + (f"({', '.join(side.units_seen)})" if side.units_seen
-                   else "which the layer below did not name"))
+                   else ", which the layer below did not name"))
         return {**block, "verdict": "unit_mixed_on_one_side",
                 "because": ("; ".join(parts) + ", and this tool never "
                             "converts a unit, so there is no one figure to "
@@ -621,17 +656,13 @@ def _verdict(left: SideSummary, right: SideSummary, *,
                            "this tool never converts a unit"}
 
     if left.value_periods == 0 or right.value_periods == 0:
-        parts = []
-        for name, side in zip(names, (left, right)):
-            if side.value_periods:
-                continue
-            clauses = _held_clauses(side, spec)
-            parts.append(f"the {name} side has "
-                         + _count(side.n, "periods")
-                         + " but no value for this figure in any of them"
-                         + ("; " + "; ".join(clauses) if clauses else ""))
+        parts = [f"the {name} side has " + _count(side.n, "periods")
+                 + " but no value for this figure in any of them"
+                 for name, side in zip(names, (left, right))
+                 if not side.value_periods]
         return {**block, "verdict": "missing_measure_on_one_side",
-                "because": "; ".join(parts)}
+                "because": "; ".join(parts + _spec_clauses((left, right),
+                                                           spec))}
 
     if left.n < THIN_ROWS or right.n < THIN_ROWS:
         thin = [(name, side) for name, side in zip(names, (left, right))
@@ -660,18 +691,17 @@ def _verdict(left: SideSummary, right: SideSummary, *,
 
 def _side_line(name: str, side: SideSummary, spec: SeriesSpec | None) -> str:
     if side.n == 0:
-        return f"{name}: {_absence_clause(side, spec)}."
+        return (f"{name}: no periods in that range"
+                + _coverage_tail(side, spec) + ".")
     span = f"{_count(side.n, 'periods')}, {side.first} to {side.last}"
     if side.unit_mixed:
         units = ", ".join(side.units_seen)
         return (f"{name}: {span}, reported in more than one unit "
                 + (f"({units})" if units
-                   else "which the layer below did not name")
+                   else ", which the layer below did not name")
                 + ", so no one figure is given for them.")
     if side.value_periods == 0:
-        clauses = _held_clauses(side, spec)
-        return (f"{name}: {span}, none of which carries this figure"
-                + ("; " + "; ".join(clauses) if clauses else "") + ".")
+        return f"{name}: {span}, none of which carries this figure."
     unit = f" {side.unit}" if side.unit else ""
     tail = (f", {_count(side.empty_periods, 'periods')} with no data."
             if side.empty_periods else ".")
@@ -696,6 +726,9 @@ def render(comparison: Comparison) -> str:
                         spec),
              _side_line(comparison.right_label.capitalize(), comparison.right,
                         spec)]
+    # The facts about the figure travel inside `because`, which the verdict
+    # line below prints in full. A line of their own here would be the third
+    # place one page says them.
     anchor_day = comparison.comparable.get("anchor_day")
     if anchor_day:
         lines.append(f"The day of the event itself, {anchor_day}, is in "

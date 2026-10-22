@@ -80,14 +80,15 @@ def _fact(conn, *, name, date, kind="procedure", key=b"\x01", document_id=None):
 
 
 def _ride(conn, *, date, key, hr_avg=140.0, hr_unit="count/min", duration=40.0,
-          distance=10.0, distance_unit="mi", source="Watch", indoor=None,
+          duration_unit="min", distance=10.0, distance_unit="mi",
+          source="Watch", indoor=None,
           activity="HKWorkoutActivityTypeCycling"):
     cur = conn.execute(
         "INSERT INTO workout(activity_type, duration, duration_unit, "
         "total_distance, total_distance_unit, source_name, start_date, "
         "start_epoch, local_date, indoor, dedup_key) "
-        "VALUES(?, ?, 'min', ?, ?, ?, ?, 1772830800.0, ?, ?, ?)",
-        (activity, duration, distance, distance_unit, source,
+        "VALUES(?, ?, ?, ?, ?, ?, ?, 1772830800.0, ?, ?, ?)",
+        (activity, duration, duration_unit, distance, distance_unit, source,
          f"{date}T09:00:00-05:00", date, indoor, key))
     if hr_avg is not None:
         conn.execute(
@@ -498,13 +499,18 @@ def test_a_mixed_unit_sentinel_from_the_layer_below_is_not_comparable(box):
 def test_the_mixed_side_names_its_own_units_and_never_the_other_sides(box):
     """The offending side's units are the only evidence that it mixes. A
     union with the other side offers one unit as proof of mixing, and that
-    unit belongs to the side that is not mixed."""
+    unit belongs to the side that is not mixed.
+
+    The later side's unit is deliberately one the mixed side does not hold:
+    with a unit the mixed side already has, a union produces the identical
+    sentence and this test cannot tell the two apart.
+    """
     _ride(box, date="2023-01-01", key=b"\x01", distance=10.0,
           distance_unit="mi")
     _ride(box, date="2023-01-02", key=b"\x02", distance=10.0,
           distance_unit="km")
     _ride(box, date="2024-01-01", key=b"\x03", distance=10.0,
-          distance_unit="mi")
+          distance_unit="ft")
     comparison = windows.compare(
         box, spec=windows.SeriesSpec(activity="Cycling", derive_name="pace"),
         left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"),
@@ -513,7 +519,9 @@ def test_the_mixed_side_names_its_own_units_and_never_the_other_sides(box):
     because = comparison.comparable["because"]
     assert "the earlier side" in because
     assert "min/km" in because and "min/mi" in because
+    assert "min/ft" not in because        # a union would have added it
     assert "the later side" not in because
+    assert comparison.right.units_seen == ("min/ft",)
     # The sentence stands on the mixed side's own units, which the series
     # now carries on its derived entries as well as on its measures.
     assert comparison.left.units_seen == ("min/km", "min/mi")
@@ -654,3 +662,119 @@ def test_the_module_reads_through_queries_and_not_its_own_sql(box):
     for keyword in ("SELECT", "INSERT", "UPDATE", "DELETE", "conn.execute"):
         assert keyword not in source, keyword
     assert queries.clinical_facts.__name__ in source
+
+
+def test_a_mixed_figure_the_layer_below_did_not_name_says_so(box):
+    """The duration figure is summed by `_summed`, which returns the "mixed"
+    sentinel without a list of the units that clashed. Naming units it does
+    not have would mean borrowing them, so the sentence says the layer below
+    did not name them. Reachable from a plain SeriesSpec, which is why it is
+    tested rather than explained away."""
+    _ride(box, date="2023-01-01", key=b"\x01", duration=40.0)
+    _ride(box, date="2023-01-01", key=b"\x02", duration=3600.0,
+          duration_unit="s")
+    _ride(box, date="2024-01-01", key=b"\x03", duration=30.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.comparable["verdict"] == "unit_mixed_on_one_side"
+    assert comparison.left.units_seen == ()
+    because = comparison.comparable["because"]
+    assert "which the layer below did not name" in because
+    assert "min" not in because.replace("more than one unit", "")
+    assert "which the layer below did not name" in windows.render(comparison)
+
+
+def test_a_source_exclusion_reaches_the_workout_series_too(box):
+    """The metric path and the workout path are two calls, so an exclusion
+    that travels on one is no evidence about the other."""
+    _ride(box, date="2023-01-01", key=b"\x01", source="Watch")
+    _ride(box, date="2023-01-02", key=b"\x02", source="Phone")
+    _ride(box, date="2024-01-01", key=b"\x03", source="Phone")
+    ranges = dict(left=("2023-01-01", "2023-01-31"),
+                  right=("2024-01-01", "2024-01-31"))
+    both = windows.compare(box, spec=windows.SeriesSpec(activity="Cycling"),
+                           **ranges)
+    without_phone = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling",
+                                     source_exclude=("Phone",)), **ranges)
+    assert both.left.n == 2 and both.right.n == 1
+    assert without_phone.left.n == 1 and without_phone.right.n == 0
+    because = without_phone.comparable["because"]
+    assert "Phone" in because and "excluded" in because
+
+
+def test_an_indoor_filter_is_named_when_a_side_comes_back_empty(box):
+    """A side a filter emptied must say which filter, or the reader reads the
+    index-wide count as the whole story."""
+    _ride(box, date="2023-01-01", key=b"\x01", indoor=1)
+    _ride(box, date="2023-01-02", key=b"\x02", indoor=1)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", indoor=False),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.comparable["verdict"] == "insufficient_data"
+    because = comparison.comparable["because"]
+    assert "marked indoor" in because
+    assert "marked indoor" in windows.render(comparison)
+
+
+def test_an_explicit_date_anchor_is_named_once_not_twice(box):
+    """An explicit date is its own label, so "on {date}" after it prints the
+    date twice in both the label and the note."""
+    _daily(box, date="2023-02-17", value=70.0)
+    comparison = windows.as_comparison(windows.window(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        anchor=windows.resolve_anchor(box, date="2023-02-18"),
+        before_days=1, after_days=1))
+    assert comparison.label.count("2023-02-18") == 1
+    assert comparison.note.count("2023-02-18") == 1
+    assert "2023-02-18 on 2023-02-18" not in windows.render(comparison)
+
+
+def test_a_named_anchor_still_carries_both_its_name_and_its_date(box):
+    _fact(box, name="ACL reconstruction", date="2023-09-15")
+    _daily(box, date="2023-09-14", value=70.0)
+    comparison = windows.as_comparison(windows.window(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        anchor=windows.resolve_anchor(box, fact="ACL"),
+        before_days=1, after_days=1))
+    assert "ACL reconstruction" in comparison.label
+    assert "2023-09-15" in comparison.label
+    assert "ACL reconstruction" in comparison.note
+
+
+def test_the_facts_about_the_figure_are_stated_once_not_once_per_side(box):
+    """Said per side, a refusal over a filtered workout figure ran past 600
+    characters, and the side lines said it all again. A refusal nobody reads
+    is a refusal that failed."""
+    _ride(box, date="2023-01-01", key=b"\x01", source="Phone", indoor=1)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=CADENCE_AVG,
+                                     source_exclude=("Phone",), indoor=False),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    because = comparison.comparable["because"]
+    for once in ("no workout carries", "marked indoor", "excluded",
+                 "of Cycling"):
+        assert because.count(once) == 1, (once, because)
+    # 602 characters when every clause was repeated per side. The cap is
+    # loose on purpose: it is here to catch the repetition coming back, not
+    # to police four distinct facts, one of which is a 46-character measure
+    # identifier the caller chose.
+    assert len(because) < 500, len(because)
+    rendered = windows.render(comparison)
+    assert rendered.count("marked indoor") == 1
+
+
+def test_a_metric_figures_facts_are_also_stated_once(box):
+    _daily(box, date="2023-01-01", value=60.0, source="Phone")
+    _daily(box, date="2024-01-01", value=61.0, source="Phone")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr",
+                                     source_exclude=("Phone",)),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    because = comparison.comparable["because"]
+    assert because.count("excluded") == 1
+    # Two sides emptied by the same figure-wide absence are one sentence.
+    assert because.count("in that range") == 1
+    assert "neither side" in because
+    assert len(because) < 220, len(because)
