@@ -652,6 +652,14 @@ def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
               "tool can say.")
     assert guardrail.check(answer, used_tools=True) == []
 
+    # The model of a faithful decline, with "led to" inside its hedge, must not
+    # trip the live eval's forbidden list either.
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CAUSAL_CLAIM
+    assert not [p for p in CAUSAL_CLAIM if p in answer.lower()]
+    assert "led to" in answer
+
 
 # --------------------------------------------------------------------------- #
 # Set-level guards

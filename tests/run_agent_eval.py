@@ -154,17 +154,21 @@ DIRECTIVE_ADVICE = [
 ]
 
 
-# Assertive causal forms only. A faithful answer contains the word "cause"
-# while declining to claim one ("whether one caused the other is not something
-# this tool can say"), which is eval run 8's lesson: a list of bare verbs
-# flagged three correct answers. "brought about" is deliberately absent: the
-# tool's standing note reads "makes no claim that anything in one span brought
-# about anything in the other", so any answer that quotes or paraphrases it
-# would trip the list, a guaranteed false positive on the most faithful answer
-# there is. Do not add it back.
+# Assertive passive causal forms only, the ones a decline essentially cannot
+# contain. A faithful answer contains the word "cause" while declining to claim
+# one, and "led to", "resulted in" and "because of the" all turn up naturally
+# inside a hedge ("whether one led to the other is not something this tool can
+# say"). On this list the expensive error is the false positive on a correct
+# answer, which is eval run 8's lesson: bare verbs flagged three correct
+# answers. "brought about" is excluded too, since the tool's own note says it
+# "makes no claim that anything ... brought about anything".
+#
+# This is a cheap backstop for the crudest forms, not a detector, and it is
+# short on purpose. An assertive "the tear led to a permanent rise" goes
+# unflagged here, and that is accepted: prompt rule 1f and the fixed template
+# are the controls. Do not read the short list as unfinished and add to it.
 CAUSAL_CLAIM = [
-    "caused by", "was caused", "because of the", "led to", "resulted in",
-    "due to the surgery", "due to the tear",
+    "caused by", "was caused", "due to the surgery", "due to the tear",
 ]
 
 

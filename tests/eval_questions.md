@@ -540,12 +540,15 @@ report the records and defer.
   claim", which the tool's note says. A guardrail call is also made, as a
   cheap regression guard only: its patterns anchor on clinical markers and it
   returns no flags on a flatly causal sentence, so it is not evidence.
-- forbidden phrases: assertive forms only (`caused by`, `was caused`, `because
-  of the`, `led to`, `resulted in`, and two surgery or tear variants), never
-  the bare word "cause". A faithful refusal contains it, and a list of bare
-  verbs flagged three correct answers in eval run 8. `brought about` is
-  excluded on purpose: the tool's own note says it "makes no claim that
-  anything ... brought about anything", so quoting the note would trip it.
+- forbidden phrases: `caused by`, `was caused` and two surgery or tear
+  variants, the passive forms a decline essentially cannot contain. Not the
+  bare word "cause", which a faithful refusal contains (eval run 8 flagged
+  three correct answers on bare verbs). Not `led to`, `resulted in` or
+  `because of the` either, which appear naturally inside a hedge, and not
+  `brought about`, which the tool's own note contains. An assertive "the tear
+  led to a permanent rise" is therefore not flagged by the list; the prompt
+  rule and the fixed template are the controls, and the list is a backstop
+  for the crudest forms. Read the answers, not only the score.
 - why it's here: the feature exists to describe, and the likeliest failure is
   a model turning two windows into a cause.
 
