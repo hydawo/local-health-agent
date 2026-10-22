@@ -36,7 +36,7 @@ from typing import Any
 from .. import labs, metrics
 from ..literature import tiers as lit_tiers
 from ..logging_setup import get_logger
-from ..store import queries, vector_store
+from ..store import queries, vector_store, windows
 
 log = get_logger("agent.tools")
 
@@ -44,6 +44,9 @@ log = get_logger("agent.tools")
 # Points returned from a time series. 60 covers two months daily, a year weekly,
 # or five years monthly — enough to describe a trend without flooding context.
 MAX_SERIES_POINTS = 60
+# Per side of a window comparison. Over this the side's summary still covers
+# every period; only the listed points are cut, and the payload says so.
+MAX_COMPARE_POINTS = 60
 # Lab results per analyte. Someone with a decade of annual panels has ~10.
 MAX_LAB_POINTS = 40
 # Clinical facts and clinician-measured vitals returned per call.
@@ -251,6 +254,11 @@ def _query_sleep(ctx: ToolContext, args: dict) -> dict:
 
 
 def _get_workouts(ctx: ToolContext, args: dict) -> dict:
+    if args.get("detail") in (True, "true", "True"):
+        try:
+            return _get_workouts_detail(ctx, args)
+        except ValueError as exc:
+            return {"error": "invalid_request", "note": str(exc)}
     start, end = args.get("start_date"), args.get("end_date")
     limit = min(int(args.get("limit") or 25), 50)
     sessions = queries.list_workouts(ctx.conn, start=start, end=end, limit=limit)
@@ -295,6 +303,293 @@ def _get_workouts(ctx: ToolContext, args: dict) -> dict:
             for t in totals
         ],
     }
+
+
+def _workout_name(activity_type) -> str:
+    return (activity_type or "").replace("HKWorkoutActivityType", "")
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, (list, tuple)) else [value]
+
+
+def _measure_absence(ctx: ToolContext, requested: list, rows_or_points) -> dict:
+    """What the index holds of the measures asked for, when they are not all
+    there. Three absences stay apart: a key no workout carries (names what the
+    index does hold), a key the index holds that none of the workouts in the
+    answer carry (names where it does), and no measures held at all."""
+    held = queries.workout_measures(ctx.conn)
+    by_key = {m["key"]: m for m in held}
+    unheld = [k for k in requested if k not in by_key]
+    out: dict = {}
+    notes = []
+    if unheld:
+        out["measures_available"] = [
+            {"key": m["key"], "label": m["label"], "kind": m["kind"],
+             "workouts": m["n"], "from": m["first"], "to": m["last"],
+             "unit": m["unit"]} for m in held]
+        if held:
+            notes.append(
+                f"No workout carries {', '.join(unheld)}. The measures the "
+                "index does hold are listed in measures_available; say which "
+                "one was asked for and which are held.")
+        else:
+            notes.append(
+                f"No workout carries {', '.join(unheld)}, and the index holds "
+                "no workout measures of any kind. Say that.")
+    carried = set()
+    for item in rows_or_points:
+        for key, entry in item.items():
+            if entry is not None:
+                carried.add(key)
+    quiet = [k for k in requested if k in by_key and k not in carried]
+    if quiet:
+        out["measures_not_in_this_answer"] = [
+            {"key": k, "held_on_workouts": by_key[k]["n"],
+             "from": by_key[k]["first"], "to": by_key[k]["last"]}
+            for k in quiet]
+        notes.append(
+            f"The index holds {', '.join(quiet)} on other workouts, but none "
+            "of the workouts in this answer carry it. Say that, with the span "
+            "it is held for.")
+    if notes:
+        out["note"] = " ".join(notes)
+    return out
+
+
+def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
+    start, end = args.get("start_date"), args.get("end_date")
+    activity = args.get("activity")
+    measures = tuple(_as_list(args.get("measures")))
+    derive_names = tuple(_as_list(args.get("derive")))
+    exclude = tuple(_as_list(args.get("exclude_source")))
+    indoor = args.get("indoor")
+    period = args.get("period")
+    sample_counts = args.get("samples") in (True, "true", "True")
+    ratio_of = tuple(args["ratio_of"]) if args.get("ratio_of") else None
+    percentile_of = args.get("percentile_of") or None
+
+    if period:
+        series = queries.workout_series(
+            ctx.conn, period=period, activity=activity, start=start, end=end,
+            indoor=indoor, source_exclude=exclude, measures=measures,
+            derive_names=derive_names, ratio_of=ratio_of,
+            percentile_of=percentile_of)
+        if series.is_empty:
+            return _no_workouts_payload(ctx)
+        shown = series.points[-MAX_SERIES_POINTS:]
+        payload = {
+            "period": period, "series": series.label, "unit": series.unit,
+            "points": [_workout_point(p) for p in shown],
+        }
+        if len(series.points) > len(shown):
+            payload["truncated"] = True
+            payload["total_periods"] = len(series.points)
+            payload["note_truncated"] = (
+                f"Only the latest {len(shown)} of {len(series.points)} "
+                "periods are listed.")
+        absence = _measure_absence(
+            ctx, list(measures),
+            [{k: (v if v.get("n") else None)
+              for k, v in p.measures.items()} for p in shown])
+        payload.update(absence)
+        return payload
+
+    if ratio_of or percentile_of:
+        raise ValueError("ratio_of and percentile_of need period, because "
+                         "they are taken over many workouts")
+    limit = min(int(args.get("limit") or 25), 50)
+    rows = queries.workout_detail(
+        ctx.conn, activity=activity, start=start, end=end, indoor=indoor,
+        source_exclude=exclude, measures=measures, derive_names=derive_names,
+        sample_counts=sample_counts, limit=limit)
+    if not rows:
+        return _no_workouts_payload(ctx)
+    payload = {"workouts": [_workout_row(w) for w in rows]}
+    payload.update(_measure_absence(
+        ctx, list(measures),
+        [{k: (v if v.get("value") is not None else None)
+          for k, v in w.measures.items()} for w in rows]))
+    return payload
+
+
+def _no_workouts_payload(ctx: ToolContext) -> dict:
+    total, first, last = queries.workout_coverage(ctx.conn)
+    return {
+        "workouts": [],
+        "no_data_in_range": True,
+        "total_workouts": total,
+        "available_from": first,
+        "available_to": last,
+        "note": ("No workouts in that range. Say so rather than inferring "
+                 "activity from step counts or energy burned."),
+    }
+
+
+def _workout_row(w) -> dict:
+    row = {
+        "date": w.local_date,
+        "activity": _workout_name(w.activity_type),
+        "duration": w.duration, "duration_unit": w.duration_unit,
+        "distance": w.total_distance,
+        "distance_unit": w.total_distance_unit,
+        "energy": w.total_energy, "energy_unit": w.total_energy_unit,
+        "source": w.source_name,
+        "indoor": None if w.indoor is None else bool(w.indoor),
+        "citation": w.citation,
+        "measures": w.measures,
+        "derived": w.derived,
+    }
+    if w.sample_depth is not None:
+        row["sample_depth"] = w.sample_depth
+    return row
+
+
+def _workout_point(p) -> dict:
+    return {"period": p.period, "start": p.period_start, "end": p.period_end,
+            "workouts": p.n,
+            "duration": p.duration, "duration_unit": p.duration_unit,
+            "distance": p.distance, "distance_unit": p.distance_unit,
+            "energy": p.energy, "energy_unit": p.energy_unit,
+            "measures": p.measures, "derived": p.derived}
+
+
+# --------------------------------------------------------------------------- #
+# compare_windows
+# --------------------------------------------------------------------------- #
+
+def _side_payload(summary, *, sample_counts: bool = False) -> dict:
+    out = {
+        "periods": summary.n,
+        "periods_with_no_data": summary.empty_periods,
+        "periods_with_a_value": summary.value_periods,
+        "min": summary.min, "max": summary.max, "median": summary.median,
+        "mean": summary.mean, "unit": summary.unit,
+        "units_seen": list(summary.units_seen),
+        "unit_mixed": summary.unit_mixed,
+        "from": summary.first, "to": summary.last,
+        "coverage": summary.coverage,
+    }
+    if sample_counts:
+        out["samples"] = summary.samples
+    return out
+
+
+def _points_payload(points) -> tuple[list[dict], bool]:
+    out = []
+    for point in points[:MAX_COMPARE_POINTS]:
+        row = {"period": point.period, "start": point.period_start,
+               "end": point.period_end}
+        if hasattr(point, "value"):
+            row["value"] = point.value
+            row["n"] = point.n
+        else:
+            row["workouts"] = point.n
+            row["duration"] = point.duration
+            row["duration_unit"] = point.duration_unit
+            row["measures"] = point.measures
+            row["derived"] = point.derived
+        out.append(row)
+    return out, len(points) > MAX_COMPARE_POINTS
+
+
+def _compare_windows(ctx: ToolContext, args: dict) -> dict:
+    try:
+        return _compare_windows_inner(ctx, args)
+    except ValueError as exc:
+        return {"error": "invalid_request", "note": str(exc)}
+
+
+def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
+    spec = windows.SeriesSpec(
+        metric=args.get("metric"),
+        activity=args.get("activity"),
+        measure=args.get("measure"),
+        derive_name=args.get("derive"),
+        source_exclude=tuple(_as_list(args.get("exclude_source"))),
+        indoor=args.get("indoor"),
+    )
+    period = args.get("period") or "day"
+    sample_counts = args.get("sample_counts") in (True, "true", "True")
+    needs = ("Pass either anchor_date or anchor_fact with before_days and "
+             "after_days, or all four of left_start, left_end, right_start "
+             "and right_end.")
+
+    anchor_date, anchor_fact = args.get("anchor_date"), args.get("anchor_fact")
+    ranges = [args.get(k) for k in
+              ("left_start", "left_end", "right_start", "right_end")]
+    if (anchor_date or anchor_fact) and any(ranges):
+        return {"error": "two_ways_to_name_windows",
+                "note": "Give an anchor or four range dates, not both. " + needs}
+
+    if anchor_date or anchor_fact:
+        resolved = windows.resolve_anchor(ctx.conn, date=anchor_date,
+                                          fact=anchor_fact)
+        if resolved is None:
+            held = queries.clinical_fact_coverage(ctx.conn)
+            payload = {
+                "error": "anchor_not_found",
+                "note": ("No dated row in the clinical record matches that "
+                         "name. Ask get_clinical_history for the conditions, "
+                         "procedures and prescriptions that carry a date, "
+                         "then pass one; or pass anchor_date."),
+            }
+            if held:
+                payload["clinical_kinds_held"] = held
+            else:
+                payload["note"] = (
+                    "The index holds no clinical facts at all, so there is "
+                    "nothing to anchor on by name. Say that, or pass "
+                    "anchor_date if the person gives a date.")
+            return payload
+        if isinstance(resolved, windows.AnchorAmbiguous):
+            return {
+                "anchor_ambiguous": True,
+                "candidates": [dict(c) for c in resolved.candidates],
+                "note": ("More than one dated row matches that name, on "
+                         "different dates. Ask the person which one they "
+                         "mean, naming the dates, and choose none yourself."),
+            }
+        result = windows.window(
+            ctx.conn, spec=spec, anchor=resolved,
+            before_days=int(args.get("before_days") or 30),
+            after_days=int(args.get("after_days") or 30), period=period)
+        comparison = windows.as_comparison(result, sample_counts=sample_counts)
+        anchor_block = {"date": resolved.date, "label": resolved.label,
+                        "citation": resolved.citation}
+    else:
+        left = (args.get("left_start"), args.get("left_end"))
+        right = (args.get("right_start"), args.get("right_end"))
+        if not all(left) or not all(right):
+            return {"error": "no_window_given", "note": needs}
+        comparison = windows.compare(ctx.conn, spec=spec, left=left,
+                                     right=right, period=period,
+                                     sample_counts=sample_counts)
+        anchor_block = None
+
+    left_points, left_cut = _points_payload(comparison.left_points)
+    right_points, right_cut = _points_payload(comparison.right_points)
+    payload = {
+        "series": spec.label,
+        "period": period,
+        "anchor": anchor_block,
+        "left_label": comparison.left_label,
+        "right_label": comparison.right_label,
+        "left": _side_payload(comparison.left, sample_counts=sample_counts),
+        "right": _side_payload(comparison.right, sample_counts=sample_counts),
+        "left_points": left_points,
+        "right_points": right_points,
+        "comparable": comparison.comparable,
+        "rendered": windows.render(comparison),
+        "note": comparison.note,
+    }
+    if left_cut or right_cut:
+        payload["points_truncated"] = {
+            "left": left_cut, "right": right_cut,
+            "listed_per_side": MAX_COMPARE_POINTS}
+    return payload
 
 
 def _overall(points: list, aggregation: str) -> dict | None:
@@ -979,9 +1274,78 @@ TOOLS: tuple[Tool, ...] = (
                 "end_date": {"type": "string", "description": "YYYY-MM-DD."},
                 "limit": {"type": "integer",
                           "description": "Max sessions to return, up to 50."},
+                "detail": {"type": "boolean", "description": (
+                    "Set true to read per-workout measures, derivations or "
+                    "periods. Without it nothing below applies.")},
+                "activity": {"type": "string", "description":
+                             "Only with detail. e.g. Cycling, Running."},
+                "measures": {"type": "array", "items": {"type": "string"},
+                             "description": (
+                    "Only with detail. Workout measure keys such as "
+                    "HKQuantityTypeIdentifierHeartRate:average.")},
+                "derive": {"type": "array", "items": {"type": "string", "enum":
+                           ["pace", "speed", "efficiency", "ratio",
+                            "percentile"]},
+                           "description": (
+                    "Only with detail. ratio and percentile need period and "
+                    "ratio_of or percentile_of.")},
+                "ratio_of": {"type": "array", "items": {"type": "string"},
+                             "description": "[numerator, denominator] measures."},
+                "percentile_of": {"type": "string", "description":
+                                  "The one measure to take percentiles of."},
+                "period": {"type": "string", "enum": ["day", "week", "month"],
+                           "description": (
+                    "Only with detail. Group workouts by period, each measure "
+                    "summarized by median.")},
+                "indoor": {"type": "boolean"},
+                "exclude_source": {"type": "array",
+                                   "items": {"type": "string"}},
+                "samples": {"type": "boolean", "description": (
+                    "Only with detail and measures. Count the raw records "
+                    "inside each workout.")},
             },
         },
         handler=_get_workouts,
+    ),
+    Tool(
+        name="compare_windows",
+        description=(
+            "Two spans of time side by side for one metric or one workout "
+            "measure, either side of a dated event or between two explicit "
+            "ranges. Use for any question of the form 'before and after', "
+            "'has X changed since Y', or 'how does this year compare with "
+            "last'. Returns both sides and a verdict on whether they can be "
+            "compared at all; it never returns a gap between them."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "metric": {"type": "string", "description":
+                           "A HealthKit metric name, e.g. resting-hr."},
+                "activity": {"type": "string", "description":
+                             "A workout activity instead of a metric."},
+                "measure": {"type": "string", "description":
+                            "A workout measure key, with activity."},
+                "derive": {"type": "string", "enum":
+                           ["pace", "speed", "efficiency"]},
+                "anchor_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "anchor_fact": {"type": "string", "description":
+                                "Name of a dated row in the clinical record."},
+                "before_days": {"type": "integer"},
+                "after_days": {"type": "integer"},
+                "left_start": {"type": "string"},
+                "left_end": {"type": "string"},
+                "right_start": {"type": "string"},
+                "right_end": {"type": "string"},
+                "period": {"type": "string", "enum": ["day", "week", "month"]},
+                "indoor": {"type": "boolean"},
+                "exclude_source": {"type": "array",
+                                   "items": {"type": "string"}},
+                "sample_counts": {"type": "boolean", "description":
+                                  "Also report the records behind each side."},
+            },
+        },
+        handler=_compare_windows,
     ),
     Tool(
         name="search_records",
