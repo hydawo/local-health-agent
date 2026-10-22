@@ -470,10 +470,14 @@ def _side_payload(summary, *, sample_counts: bool = False) -> dict:
         "units_seen": list(summary.units_seen),
         "unit_mixed": summary.unit_mixed,
         "from": summary.first, "to": summary.last,
+        "window": [summary.window_start, summary.window_end],
+        # The noun travels with the count: a metric side counts records and a
+        # workout side counts workouts, and "samples" named neither.
+        "counted": summary.counted,
         "coverage": summary.coverage,
     }
     if sample_counts:
-        out["samples"] = summary.samples
+        out[summary.counted] = summary.counted_n
     return out
 
 

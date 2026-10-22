@@ -601,7 +601,13 @@ def _median_in_one_unit(pairs, name: str) -> dict:
 
 
 def _entry(d) -> dict:
-    return {"value": d.value, "unit": d.unit, "reason": d.reason}
+    # `units` is carried here as well as on the measure entries. A caller
+    # explaining a refused derived figure has to name the units that clashed,
+    # and an entry that leaves the key off sends it looking elsewhere for
+    # them, which is how an explanation ends up quoting another side's unit.
+    return {"value": d.value, "unit": d.unit,
+            "units": [d.unit] if d.unit and d.unit != _MIXED else [],
+            "reason": d.reason}
 
 
 def workout_series(conn, *, period="week", activity=None, start=None, end=None,
@@ -692,7 +698,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                 if pct_measure is None:
                     for p in (50, 90):
                         derived[f"p{p}"] = {
-                            "value": None, "unit": None,
+                            "value": None, "unit": None, "units": [],
                             "reason": "percentile needs percentile_of when "
                                       "more than one measure is requested"}
                     continue
@@ -704,6 +710,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                     if pct_unit == _MIXED:
                         derived[f"p{p}"] = {
                             "value": None, "unit": _MIXED,
+                            "units": summarized[pct_measure]["units"],
                             "reason": summarized[pct_measure]["reason"]}
                     else:
                         derived[f"p{p}"] = _entry(
@@ -711,7 +718,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
             elif name == "ratio":
                 if ratio_of is None:
                     derived["ratio"] = {
-                        "value": None, "unit": None,
+                        "value": None, "unit": None, "units": [],
                         "reason": "ratio needs ratio_of, a (numerator, "
                                   "denominator) pair of requested measures"}
                 else:
@@ -720,6 +727,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                                    None)
                     if refused:
                         derived["ratio"] = {"value": None, "unit": _MIXED,
+                                            "units": refused["units"],
                                             "reason": refused["reason"]}
                         continue
                     derived["ratio"] = _entry(derive.ratio(
@@ -731,7 +739,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                          if r.derived.get(name, {}).get("value") is not None]
                 m = _median_in_one_unit(pairs, name)
                 derived[name] = {"value": m["value"], "unit": m["unit"],
-                                 "reason": m["reason"]}
+                                 "units": m["units"], "reason": m["reason"]}
         dur, dur_u = _summed(group, "duration", "duration_unit")
         dist, dist_u = _summed(group, "total_distance", "total_distance_unit")
         en, en_u = _summed(group, "total_energy", "total_energy_unit")

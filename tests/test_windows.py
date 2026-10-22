@@ -3,6 +3,11 @@ them can be compared at all.
 
 T7's refusal is the point of this module: a tool that compares two windows
 will be asked to compare windows that cannot be compared.
+
+The word scans in `test_every_verdict_is_scanned_for_a_claim_it_cannot_carry`
+are the real control here, not the guardrail run beside them: the guardrail's
+patterns are anchored on clinical markers and condition names, and it holds
+no pattern for cause, for a percentage or for a gap between two spans.
 """
 from __future__ import annotations
 
@@ -13,6 +18,14 @@ from health_agent.store import queries, sqlite_schema, windows
 
 HR = "HKQuantityTypeIdentifierHeartRate"
 HR_AVG = f"{HR}:average"
+CADENCE_AVG = "HKQuantityTypeIdentifierCyclingCadence:average"
+
+# Words a comparison of two spans must never produce: the gap between the
+# sides, a direction read into it, or a verdict on what it means.
+FORBIDDEN = ("difference", "delta", "change", "percent", "pct", "%", "rise",
+             "fall", "increase", "decrease", "worse", "better", "improved",
+             "significant", "likely", "suggests", "caused by", "led to",
+             "resulted in")
 
 
 @pytest.fixture
@@ -30,6 +43,15 @@ def _daily(conn, *, date, value, metric_type="HKQuantityTypeIdentifierRestingHea
         "sum_value, avg_value, min_value, max_value) "
         "VALUES(?, ?, ?, ?, 1, ?, ?, ?, ?)",
         (date, metric_type, source, unit, value, value, value, value))
+    conn.commit()
+
+
+def _sleep(conn, *, date, category, seconds):
+    conn.execute(
+        "INSERT INTO daily_metric(local_date, type, source_name, unit, "
+        "category, n, duration_sec) "
+        "VALUES(?, 'HKCategoryTypeIdentifierSleepAnalysis', 'Watch', NULL, "
+        "?, 1, ?)", (date, category, seconds))
     conn.commit()
 
 
@@ -58,18 +80,20 @@ def _fact(conn, *, name, date, kind="procedure", key=b"\x01", document_id=None):
 
 
 def _ride(conn, *, date, key, hr_avg=140.0, hr_unit="count/min", duration=40.0,
-          source="Watch"):
+          distance=10.0, distance_unit="mi", source="Watch", indoor=None,
+          activity="HKWorkoutActivityTypeCycling"):
     cur = conn.execute(
         "INSERT INTO workout(activity_type, duration, duration_unit, "
         "total_distance, total_distance_unit, source_name, start_date, "
-        "start_epoch, local_date, dedup_key) "
-        "VALUES('HKWorkoutActivityTypeCycling', ?, 'min', 10.0, 'mi', ?, ?, "
-        "1772830800.0, ?, ?)",
-        (duration, source, f"{date}T09:00:00-05:00", date, key))
-    conn.execute(
-        "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
-        "VALUES(?, 'statistic', ?, ?, ?)",
-        (cur.lastrowid, HR_AVG, hr_avg, hr_unit))
+        "start_epoch, local_date, indoor, dedup_key) "
+        "VALUES(?, ?, 'min', ?, ?, ?, ?, 1772830800.0, ?, ?, ?)",
+        (activity, duration, distance, distance_unit, source,
+         f"{date}T09:00:00-05:00", date, indoor, key))
+    if hr_avg is not None:
+        conn.execute(
+            "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+            "VALUES(?, 'statistic', ?, ?, ?)",
+            (cur.lastrowid, HR_AVG, hr_avg, hr_unit))
     conn.commit()
 
 
@@ -166,6 +190,39 @@ def test_the_day_of_the_event_belongs_to_neither_side(box):
                                                        "2023-02-19")
 
 
+def test_the_excluded_anchor_day_is_named_rather_than_dropped_in_silence(box):
+    """A day the tool set aside is an absence the tool created, so it is
+    reported rather than left for the reader to notice."""
+    for day in ("2023-02-17", "2023-02-18", "2023-02-19"):
+        _daily(box, date=day, value=70.0)
+    comparison = windows.as_comparison(windows.window(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        anchor=windows.resolve_anchor(box, date="2023-02-18"),
+        before_days=1, after_days=1))
+    assert comparison.comparable["anchor_day"] == "2023-02-18"
+    text = windows.render(comparison)
+    assert "2023-02-18" in text and "neither side" in text
+
+
+def test_a_range_comparison_names_no_anchor_day(box):
+    _daily(box, date="2023-01-01", value=60.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert "anchor_day" not in comparison.comparable
+    assert "neither side" not in windows.render(comparison)
+
+
+def test_the_anchored_note_names_the_anchor_in_one_place(box):
+    _daily(box, date="2023-02-17", value=70.0)
+    comparison = windows.as_comparison(windows.window(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        anchor=windows.resolve_anchor(box, date="2023-02-18"),
+        before_days=1, after_days=1))
+    assert "2023-02-18" in comparison.note
+    assert "no claim" in comparison.note
+
+
 def test_a_window_hands_back_a_comparison_through_a_public_name(box):
     for day, value in (("2023-02-11", 63.0), ("2023-02-19", 90.0)):
         _daily(box, date=day, value=value)
@@ -181,11 +238,102 @@ def test_a_window_hands_back_a_comparison_through_a_public_name(box):
     assert "2023-02-18" in comparison.label
 
 
+def test_a_bucketed_span_is_clipped_to_the_window_it_was_asked_for(box):
+    """A week bucket runs past the window at both ends. Unclipped, the after
+    side appears to start before the anchor and both sides show one span."""
+    for day in ("2023-02-06", "2023-02-07", "2023-02-09", "2023-02-10"):
+        _daily(box, date=day, value=70.0)
+    result = windows.window(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        anchor=windows.resolve_anchor(box, date="2023-02-08"),
+        before_days=7, after_days=7, period="week")
+    assert result.before.last == "2023-02-07"
+    assert result.after.first == "2023-02-09"
+    assert result.before.window_start == "2023-02-01"
+    assert result.after.window_end == "2023-02-15"
+    rendered = windows.render(windows.as_comparison(result))
+    assert "2023-02-07" in rendered and "2023-02-09" in rendered
+
+
 def test_an_unknown_metric_errors_rather_than_coming_back_empty(box):
     with pytest.raises(ValueError):
         windows.window(box, spec=windows.SeriesSpec(metric="not-a-metric"),
                        anchor=windows.resolve_anchor(box, date="2023-02-18"),
                        before_days=7, after_days=7)
+
+
+def test_a_category_metric_is_refused_rather_than_summarized_across_stages(box):
+    """A sleep series carries one point per stage per period. Summarizing it
+    as it comes reports the spread across stages as a range and one night as
+    three periods, which defeats the thin rule and can read as a false ok."""
+    for category, seconds in (("Core", 900.0), ("REM", 1800.0),
+                              ("Deep", 3600.0)):
+        _sleep(box, date="2023-01-01", category=category, seconds=seconds)
+    for day in ("2024-01-01", "2024-01-02", "2024-01-03"):
+        _sleep(box, date=day, category="Core", seconds=1800.0)
+    with pytest.raises(ValueError) as caught:
+        windows.compare(box, spec=windows.SeriesSpec(metric="sleep"),
+                        left=("2023-01-01", "2023-01-31"),
+                        right=("2024-01-01", "2024-01-31"))
+    assert "category" in str(caught.value)
+
+
+# --------------------------------------------------------------------------- #
+# What the spec passes through to the layer below
+# --------------------------------------------------------------------------- #
+
+def test_a_derivation_is_read_from_the_periods_derived_figures(box):
+    """The derived figure is what the spec named, not the first measure that
+    happens to carry a median."""
+    _ride(box, date="2023-01-01", key=b"\x01", distance=10.0, duration=40.0)
+    _ride(box, date="2023-01-02", key=b"\x02", distance=8.0, duration=40.0)
+    _ride(box, date="2024-01-01", key=b"\x03", distance=10.0, duration=45.0)
+    _ride(box, date="2024-01-02", key=b"\x04", distance=10.0, duration=55.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", derive_name="pace"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.median == 4.5          # 4.0 and 5.0 min/mi
+    assert comparison.right.median == 5.0         # 4.5 and 5.5 min/mi
+    assert comparison.left.unit == "min/mi"
+    assert comparison.comparable["verdict"] == "ok"
+
+
+def test_a_derivation_a_spec_cannot_pin_down_is_refused_by_name(box):
+    for name in ("ratio", "percentile"):
+        with pytest.raises(ValueError) as caught:
+            windows.compare(
+                box, spec=windows.SeriesSpec(activity="Cycling",
+                                             derive_name=name),
+                left=("2023-01-01", "2023-01-31"),
+                right=("2024-01-01", "2024-01-31"))
+        assert name in str(caught.value)
+
+
+def test_the_indoor_filter_reaches_the_series(box):
+    _ride(box, date="2023-01-01", key=b"\x01", indoor=1)
+    _ride(box, date="2023-01-02", key=b"\x02", indoor=0)
+    _ride(box, date="2024-01-01", key=b"\x03", indoor=0)
+    ranges = dict(left=("2023-01-01", "2023-01-31"),
+                  right=("2024-01-01", "2024-01-31"))
+    both = windows.compare(box, spec=windows.SeriesSpec(activity="Cycling"),
+                           **ranges)
+    outdoor = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", indoor=False),
+        **ranges)
+    assert both.left.n == 2 and outdoor.left.n == 1
+
+
+def test_a_source_exclusion_reaches_the_series_and_is_named_when_it_empties_a_side(box):
+    _daily(box, date="2023-01-01", value=60.0, source="Watch")
+    _daily(box, date="2024-01-01", value=61.0, source="Phone")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr",
+                                     source_exclude=("Phone",)),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.n == 1 and comparison.right.n == 0
+    because = comparison.comparable["because"]
+    assert "Phone" in because and "excluded" in because
+    assert "Phone" in windows.render(comparison)
 
 
 # --------------------------------------------------------------------------- #
@@ -208,6 +356,25 @@ def test_two_windows_whose_ranges_never_overlap_are_not_comparable(box):
     assert comparison.comparable["right_range"] == [90.0, 95.0]
 
 
+def test_a_single_period_is_thin_rather_than_a_statement_about_ranges(box):
+    """One period is a point, not a range. A range claim over a point reads
+    as more than it knows, so the thin rule runs first."""
+    _daily(box, date="2023-01-01", value=60.0)
+    _daily(box, date="2024-01-01", value=95.0)
+    one_each = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert one_each.comparable["verdict"] == "thin_on_one_side"
+    for day, value in (("2023-01-02", 62.0), ("2023-01-03", 64.0)):
+        _daily(box, date=day, value=value)
+    three_against_one = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert three_against_one.comparable["verdict"] == "thin_on_one_side"
+    assert three_against_one.comparable["right_n"] == 1
+    assert "1 period" in three_against_one.comparable["because"]
+
+
 def test_a_comparison_never_returns_the_gap_between_its_two_sides(box):
     for day, value in (("2023-01-01", 60.0), ("2024-01-01", 62.0)):
         _daily(box, date=day, value=value)
@@ -215,7 +382,7 @@ def test_a_comparison_never_returns_the_gap_between_its_two_sides(box):
         box, spec=windows.SeriesSpec(metric="resting-hr"),
         left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
     flat = str(comparison.comparable) + str(comparison.left) + str(comparison.right)
-    for forbidden in ("difference", "delta", "change", "percent", "pct"):
+    for forbidden in FORBIDDEN:
         assert forbidden not in flat.lower()
 
 
@@ -242,9 +409,52 @@ def test_an_empty_side_reports_what_the_index_holds(box):
     assert (out_of_range.comparable["because"]
             != nothing_at_all.comparable["because"])
     assert "2023-01-01" in out_of_range.comparable["because"]
+    # One record, named in the singular.
+    assert "1 record" in out_of_range.comparable["because"]
     assert out_of_range.comparable["right_coverage"]["total_records"] == 1
     assert nothing_at_all.comparable["right_coverage"]["total_records"] == 0
     assert "2023-01-01" not in nothing_at_all.comparable["because"]
+
+
+def test_an_empty_workout_side_counts_workouts_and_says_so(box):
+    """A metric side counts records and a workout side counts workouts. One
+    unlabelled number for both was a count of nothing in particular."""
+    _ride(box, date="2023-01-01", key=b"\x01")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=HR_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.right.counted == "workouts"
+    assert comparison.comparable["right_coverage"]["total_workouts"] == 1
+    assert "1 workout" in comparison.comparable["because"]
+    assert "1 records" not in comparison.comparable["because"]
+
+
+def test_an_activity_the_index_does_not_hold_names_the_ones_it_does(box):
+    _ride(box, date="2023-01-01", key=b"\x01")
+    _ride(box, date="2023-01-02", key=b"\x02")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Swimming"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    because = comparison.comparable["because"]
+    assert "no workout named like Swimming" in because
+    assert "Cycling (2 workouts)" in because
+
+
+def test_a_measure_no_workout_carries_names_what_is_carried(box):
+    """Periods present and no figure in them, with the measures the index
+    does hold named: three absences that must not read alike."""
+    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0)
+    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=CADENCE_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.comparable["verdict"] == "missing_measure_on_one_side"
+    assert comparison.comparable["left_n"] == 1
+    assert comparison.comparable["left_value_periods"] == 0
+    because = comparison.comparable["because"]
+    assert f"no workout carries {CADENCE_AVG}" in because
+    assert HR_AVG in because
+    assert f"no workout carries {CADENCE_AVG}" in windows.render(comparison)
 
 
 def test_sides_in_different_units_are_never_called_comparable(box):
@@ -285,30 +495,28 @@ def test_a_mixed_unit_sentinel_from_the_layer_below_is_not_comparable(box):
     assert comparison.comparable["verdict"] == "unit_mixed_on_one_side"
 
 
-def test_a_side_with_periods_but_no_value_for_the_measure(box):
-    """Periods present and no figure in them is not the same absence as no
-    periods at all."""
-    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0)
-    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0)
+def test_the_mixed_side_names_its_own_units_and_never_the_other_sides(box):
+    """The offending side's units are the only evidence that it mixes. A
+    union with the other side offers one unit as proof of mixing, and that
+    unit belongs to the side that is not mixed."""
+    _ride(box, date="2023-01-01", key=b"\x01", distance=10.0,
+          distance_unit="mi")
+    _ride(box, date="2023-01-02", key=b"\x02", distance=10.0,
+          distance_unit="km")
+    _ride(box, date="2024-01-01", key=b"\x03", distance=10.0,
+          distance_unit="mi")
     comparison = windows.compare(
-        box, spec=windows.SeriesSpec(activity="Cycling",
-                                     measure="HKQuantityTypeIdentifierCyclingCadence:average"),
-        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
-    assert comparison.comparable["verdict"] == "missing_measure_on_one_side"
-    assert comparison.comparable["left_n"] == 1
-    assert comparison.comparable["left_value_periods"] == 0
-
-
-def test_a_thin_side_is_named_as_thin(box):
-    for day, value in (("2023-01-01", 60.0), ("2023-01-02", 61.0),
-                       ("2023-01-03", 62.0), ("2023-01-04", 63.0)):
-        _daily(box, date=day, value=value)
-    _daily(box, date="2024-01-01", value=61.5)
-    comparison = windows.compare(
-        box, spec=windows.SeriesSpec(metric="resting-hr"),
-        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
-    assert comparison.comparable["verdict"] == "thin_on_one_side"
-    assert comparison.comparable["right_n"] == 1
+        box, spec=windows.SeriesSpec(activity="Cycling", derive_name="pace"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"),
+        period="month")
+    assert comparison.comparable["verdict"] == "unit_mixed_on_one_side"
+    because = comparison.comparable["because"]
+    assert "the earlier side" in because
+    assert "min/km" in because and "min/mi" in because
+    assert "the later side" not in because
+    # The sentence stands on the mixed side's own units, which the series
+    # now carries on its derived entries as well as on its measures.
+    assert comparison.left.units_seen == ("min/km", "min/mi")
 
 
 def test_overlapping_sides_with_enough_periods_are_comparable(box):
@@ -326,12 +534,7 @@ def test_overlapping_sides_with_enough_periods_are_comparable(box):
     assert comparison.right.median == 66.0
 
 
-def test_every_verdict_this_module_can_reach_is_a_named_one(box):
-    assert "unit_mixed_on_one_side" in windows.VERDICTS
-    assert len(set(windows.VERDICTS)) == len(windows.VERDICTS)
-
-
-def test_sample_counts_adds_the_record_counts_and_nothing_else(box):
+def test_sample_counts_adds_the_counts_under_their_own_noun(box):
     for day, value in (("2023-01-01", 60.0), ("2023-01-02", 64.0),
                        ("2023-01-03", 68.0)):
         _daily(box, date=day, value=value)
@@ -343,44 +546,33 @@ def test_sample_counts_adds_the_record_counts_and_nothing_else(box):
                   right=("2024-01-01", "2024-01-31"))
     plain = windows.compare(box, **kwargs)
     counted = windows.compare(box, sample_counts=True, **kwargs)
-    assert "left_samples" not in plain.comparable
-    assert counted.comparable["left_samples"] == 3
-    assert counted.comparable["right_samples"] == 3
+    assert "left_records" not in plain.comparable
+    assert counted.comparable["left_records"] == 3
+    assert counted.comparable["right_records"] == 3
+    assert counted.left.counted == "records"
     assert counted.comparable["verdict"] == plain.comparable["verdict"]
 
 
-# --------------------------------------------------------------------------- #
-# The rendered text
-# --------------------------------------------------------------------------- #
-
-def test_the_rendered_verdict_passes_the_guardrail(box):
-    for day, value in (("2023-01-01", 60.0), ("2024-01-01", 95.0)):
-        _daily(box, date=day, value=value)
+def test_a_workout_side_counts_workouts_when_counts_are_asked_for(box):
+    for day, key in (("2023-01-01", b"\x01"), ("2023-01-02", b"\x02")):
+        _ride(box, date=day, key=key)
+    for day, key in (("2024-01-01", b"\x03"), ("2024-01-02", b"\x04")):
+        _ride(box, date=day, key=key)
     comparison = windows.compare(
-        box, spec=windows.SeriesSpec(metric="resting-hr"),
-        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
-    text = windows.render(comparison)
-    assert text
-    flags = guardrail.check(text, used_tools=True, returned_pmids=frozenset())
-    assert not flags, flags
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=HR_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"),
+        sample_counts=True)
+    assert comparison.comparable["left_workouts"] == 2
+    assert "left_records" not in comparison.comparable
 
 
-def test_every_verdict_renders_and_passes_the_guardrail(box):
-    """`render` works from a fixed template, so the guardrail can be run over
-    it as a test oracle. Every branch of the template is run here."""
-    seen = set()
-    for comparison in _one_of_each_verdict(box):
-        seen.add(comparison.comparable["verdict"])
-        text = windows.render(comparison)
-        assert comparison.comparable["verdict"] in text
-        flags = guardrail.check(text, used_tools=True,
-                                returned_pmids=frozenset())
-        assert not flags, (text, flags)
-    assert seen == set(windows.VERDICTS)
-
+# --------------------------------------------------------------------------- #
+# The rendered text, over every verdict
+# --------------------------------------------------------------------------- #
 
 def _one_of_each_verdict(box):
-    """One comparison per verdict, each from its own throwaway index."""
+    """One comparison per verdict, from one index mutated in place between
+    them, in an order that reaches every rule."""
     spec = windows.SeriesSpec(metric="resting-hr")
     left, right = ("2023-01-01", "2023-01-31"), ("2024-01-01", "2024-01-31")
 
@@ -417,22 +609,40 @@ def _one_of_each_verdict(box):
     _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0)
     _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0)
     yield windows.compare(
-        box, spec=windows.SeriesSpec(
-            activity="Cycling",
-            measure="HKQuantityTypeIdentifierCyclingCadence:average"),
+        box, spec=windows.SeriesSpec(activity="Cycling",
+                                     measure=CADENCE_AVG),
         left=left, right=right)
+    # Every branch again with an anchor, so the anchor-day line is scanned.
+    _fact(box, name="knee surgery", date="2023-01-02")
+    yield windows.as_comparison(windows.window(
+        box, spec=spec, anchor=windows.resolve_anchor(box, fact="knee"),
+        before_days=30, after_days=30))
 
 
-def test_the_verdict_never_claims_significance_or_cause(box):
-    for day, value in (("2023-01-01", 60.0), ("2024-01-01", 95.0)):
-        _daily(box, date=day, value=value)
-    comparison = windows.compare(
-        box, spec=windows.SeriesSpec(metric="resting-hr"),
-        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
-    text = (windows.render(comparison) + comparison.note).lower()
-    for forbidden in ("significant", "likely", "suggests", "caused by",
-                      "because of the", "led to", "resulted in"):
-        assert forbidden not in text
+def test_every_verdict_is_scanned_for_a_claim_it_cannot_carry(box):
+    """The real control on the template. Every verdict's own `because`, both
+    side lines and the rendered text are scanned, because a word that reads a
+    gap into two spans is the failure this module exists to avoid.
+
+    The guardrail runs here too, as a cheap regression guard and nothing
+    more: it holds no pattern for cause, for a percentage or for a comparison
+    between two spans.
+    """
+    seen = set()
+    for comparison in _one_of_each_verdict(box):
+        verdict = comparison.comparable["verdict"]
+        seen.add(verdict)
+        text = windows.render(comparison)
+        assert verdict in text
+        flat = (text + str(comparison.comparable) + str(comparison.left)
+                + str(comparison.right) + comparison.note).lower()
+        for forbidden in FORBIDDEN:
+            assert forbidden not in flat, (verdict, forbidden, flat)
+        flags = guardrail.check(text, used_tools=True,
+                                returned_pmids=frozenset())
+        assert not flags, (text, flags)
+    assert seen == set(windows.VERDICTS)
+    assert len(set(windows.VERDICTS)) == len(windows.VERDICTS)
 
 
 def test_the_module_reads_through_queries_and_not_its_own_sql(box):

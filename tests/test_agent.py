@@ -1004,14 +1004,14 @@ def test_compare_windows_anchored_uses_the_windows_own_note_and_labels(workoutbo
     assert result["left_label"] == "before"
     assert result["left"]["periods"] == 7 and result["right"]["periods"] == 7
     assert "no claim" in result["note"]
-    assert "samples" not in result["left"]
+    assert "records" not in result["left"]
 
 
 def test_compare_windows_sample_counts_only_when_asked(workoutbox):
     result = tools.dispatch(workoutbox, "compare_windows",
                             {**_RANGES, "sample_counts": True})
-    assert result["left"]["samples"] == 31
-    assert result["comparable"]["left_samples"] == 31
+    assert result["left"]["records"] == 31
+    assert result["comparable"]["left_records"] == 31
 
 
 def test_an_empty_side_names_what_the_index_holds(workoutbox):
@@ -1068,7 +1068,7 @@ def test_compare_windows_over_a_workout_measure(workoutbox):
         "right_start": "2023-03-01", "right_end": "2023-03-14"})
     assert result["left"]["median"] == 141.0
     assert result["right"]["periods"] == 0
-    assert result["right"]["coverage"]["total_records"] == 3
+    assert result["right"]["coverage"]["total_workouts"] == 3
 
 
 def test_compare_windows_lists_every_point_under_the_cap(workoutbox):
