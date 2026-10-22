@@ -443,3 +443,35 @@ asking whether an injury caused a change. They run against their own synthetic
 index (`tests/window_fixture.py`), and a model run is recorded separately.
 
 Four of the five sub-projects in the decomposition remain.
+
+**Known gaps, carried deliberately.** Four things this work left open, recorded
+here because a scratch ledger does not survive and each needs a decision rather
+than a fix.
+
+- The comparability block names a `sample_depth` check that is not implemented.
+  Reaching it needs `workout_series` to propagate `workout_detail`'s own
+  per-workout `sample_depth`. The capability exists through
+  `get_workouts(detail=True, sample_counts=True)`, so nothing is unreachable,
+  but a comparison cannot say "these runs carry about three heart-rate samples
+  each", which was one of the things the window work was for.
+- **No phrase that appears in a tool's own output may be used in an eval
+  scorer, in either direction.** The model receives that output and quotes it.
+  Forbidding such a phrase flags faithful answers; requiring one admits
+  unfaithful ones. This was learned four times over on one question, the last
+  time when a required decline phrase turned out to be a line from the tool's
+  own disclaimer. Three model-facing strings still match the decline pattern
+  (`store/windows.py`'s layer refusal, reached through the compare handler's
+  error path, and two notes in `_get_clinical_history`), none on that
+  question's path. A test that scans tool output against scorer patterns would
+  catch the next one, and needs an exemption mechanism designed on purpose
+  rather than at the end of a branch.
+- A metric whose rows carry no unit now reports the string `unlabelled` rather
+  than nothing, which is honest, since the alternative is borrowing a
+  neighbour's unit. But that sentinel reaches `metric`'s printed title and the
+  `query_healthkit` payload, and that tool's description did not get the "never
+  report a sentinel as a unit" sentence its neighbours did.
+- Three layers classify a measure key by three different rules: the store by
+  its stored `kind`, the window layer by summing both kinds, and the ingest by
+  whether the key carries an aggregate suffix. They agree on every real export,
+  because statistic keys carry a suffix and metadata keys do not. They are
+  three rules for one fact.
