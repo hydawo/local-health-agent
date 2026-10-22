@@ -184,6 +184,7 @@ def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
     conn = sqlite_schema.connect(cfg.index_path, create=True)
     try:
         if cfg.index_path.stat().st_size > 0 and _has_tables(conn):
+            sqlite_schema.migrate(conn)
             sqlite_schema.check_version(conn)
         sqlite_schema.initialize(conn)
 

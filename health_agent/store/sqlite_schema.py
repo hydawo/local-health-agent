@@ -33,7 +33,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+from health_agent.store import workout_stats
+
+SCHEMA_VERSION = 6
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS workout (
     local_date          TEXT NOT NULL,
     metadata_json       TEXT,
     statistics_json     TEXT,
+    indoor              INTEGER,          -- HKIndoorWorkout: 1, 0, or NULL for "the export did not say"
     source_file_id      INTEGER REFERENCES source_file(id),
     dedup_key           BLOB NOT NULL
 );
@@ -118,6 +121,22 @@ CREATE TABLE IF NOT EXISTS workout (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_workout_dedup  ON workout(dedup_key);
 CREATE INDEX IF NOT EXISTS idx_workout_date          ON workout(local_date);
 CREATE INDEX IF NOT EXISTS idx_workout_type          ON workout(activity_type, start_epoch);
+
+-- One row per statistic or metadata entry a workout carries. The key is the
+-- name the export used: '<type>:<aggregate>' for a WorkoutStatistics value,
+-- the bare key for a MetadataEntry.
+CREATE TABLE IF NOT EXISTS workout_stat (
+    workout_id  INTEGER NOT NULL REFERENCES workout(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,            -- 'statistic' | 'metadata'
+    key         TEXT NOT NULL,
+    value_num   REAL,
+    value_text  TEXT,
+    unit        TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_workout_stat_key
+    ON workout_stat(workout_id, kind, key);
+CREATE INDEX IF NOT EXISTS idx_workout_stat_lookup
+    ON workout_stat(kind, key);
 
 -- Apple's own per-day ring totals. Kept separate from `daily_metric` because
 -- these are Apple's numbers, not ours; useful as a cross-check on our own
@@ -439,6 +458,60 @@ def check_version(conn: sqlite3.Connection) -> None:
         )
 
 
+def migrate(conn: sqlite3.Connection) -> int | None:
+    """Bring a v5 index to v6 in place. Returns the version migrated from.
+
+    This is the first in-place migration for the personal index, which has
+    refused every earlier bump. The argument is the one the literature corpus
+    already accepts at its own v5: refusing costs a multi-gigabyte, minutes-long
+    reparse of an export whose bytes have not changed, to recover data the index
+    already holds in `statistics_json` and `metadata_json`. A migration that
+    reads only columns already in the file cannot produce a number the export
+    did not contain.
+
+    Anything below v5 is left alone, so `check_version` still refuses it and
+    still names `ingest --rebuild`.
+    """
+    if read_version(conn) != 5:
+        return None
+    conn.executescript(SCHEMA_SQL)      # idempotent; creates workout_stat
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(workout)")}
+    if "indoor" not in columns:
+        conn.execute("ALTER TABLE workout ADD COLUMN indoor INTEGER")
+    _backfill_workout_stats(conn)
+    conn.execute(
+        "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (str(SCHEMA_VERSION),),
+    )
+    conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    conn.commit()
+    return 5
+
+
+def _backfill_workout_stats(conn: sqlite3.Connection) -> int:
+    """Fill `workout_stat` and `workout.indoor` from each row's own JSON."""
+    written = 0
+    rows = conn.execute(
+        "SELECT id, statistics_json, metadata_json FROM workout"
+    ).fetchall()
+    for row in rows:
+        entries = workout_stats.stat_rows(row["statistics_json"],
+                                          row["metadata_json"])
+        if entries:
+            conn.executemany(
+                "INSERT OR IGNORE INTO workout_stat(workout_id, kind, key, "
+                "value_num, value_text, unit) VALUES(?, ?, ?, ?, ?, ?)",
+                [(row["id"], *entry) for entry in entries],
+            )
+            written += len(entries)
+        conn.execute(
+            "UPDATE workout SET indoor = ? WHERE id = ?",
+            (workout_stats.indoor_flag(row["metadata_json"]), row["id"]),
+        )
+    return written
+
+
 class AggregatesMissing(RuntimeError):
     """Raised when raw records exist but the daily rollup was never built."""
 
@@ -467,8 +540,9 @@ def check_aggregates(conn: sqlite3.Connection) -> None:
 
 
 def open_for_read(path: Path) -> sqlite3.Connection:
-    """Open an existing index, verify its schema version and its rollup."""
+    """Open an existing index, migrate it if we can, verify version and rollup."""
     conn = connect(path, create=False)
+    migrate(conn)
     check_version(conn)
     check_aggregates(conn)
     return conn
