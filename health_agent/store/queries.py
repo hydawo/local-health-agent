@@ -25,7 +25,9 @@ from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
 
 from ..labs import slug as _labs_slug
+from .. import metrics
 from ..metrics import Kind, Metric
+from . import derive
 
 PERIODS = ("day", "week", "month")
 AGGREGATIONS = ("sum", "avg", "min", "max", "count", "duration")
@@ -290,6 +292,190 @@ def workout_summary(conn: sqlite3.Connection, start: str | None = None,
             "total_energy_unit ORDER BY n DESC LIMIT ?")
     params.append(limit)
     return [dict(r) for r in conn.execute(sql, params)]
+
+
+@dataclass(frozen=True)
+class WorkoutRow:
+    local_date: str
+    activity_type: str
+    duration: float | None
+    duration_unit: str | None
+    total_distance: float | None
+    total_distance_unit: str | None
+    total_energy: float | None
+    total_energy_unit: str | None
+    source_name: str | None
+    indoor: int | None
+    citation: str
+    measures: dict
+    derived: dict
+    sample_count: int | None = None
+
+
+# Derivations that need more than one row, or two named measures, and so are
+# not available per workout. Task 6 offers them at the series level.
+_SERIES_ONLY_DERIVATIONS = ("ratio", "percentile")
+
+_HEART_RATE_AVERAGE = "HKQuantityTypeIdentifierHeartRate:average"
+
+_SECONDS_PER = {"min": 60.0, "minute": 60.0, "minutes": 60.0,
+                "hr": 3600.0, "hour": 3600.0, "hours": 3600.0,
+                "s": 1.0, "sec": 1.0, "second": 1.0, "seconds": 1.0}
+
+
+def _source_clauses(source_include, source_exclude, column="source_name"):
+    """Shared include/exclude SQL. Naming a source in both is an error rather
+    than a precedence rule nobody would remember."""
+    include = tuple(source_include or ())
+    exclude = tuple(source_exclude or ())
+    both = set(include) & set(exclude)
+    if both:
+        raise ValueError(
+            f"source named in both include and exclude: {sorted(both)}")
+    sql, params = "", []
+    if include:
+        sql += f" AND {column} IN ({','.join('?' * len(include))})"
+        params += list(include)
+    if exclude:
+        sql += (f" AND ({column} IS NULL OR {column} NOT IN "
+                f"({','.join('?' * len(exclude))}))")
+        params += list(exclude)
+    return sql, params
+
+
+def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
+                   source_include=(), source_exclude=(), measures=(),
+                   derive_names=(), sample_counts=False,
+                   limit=200) -> list[WorkoutRow]:
+    """One row per workout, with the measures and derivations requested."""
+    for name in derive_names:
+        if name in _SERIES_ONLY_DERIVATIONS:
+            raise ValueError(
+                f"{name} needs more than one workout; use workout_series")
+        if name not in derive.DERIVATIONS:
+            raise ValueError(f"unknown derivation: {name}")
+
+    sql = ("SELECT id, local_date, activity_type, duration, duration_unit, "
+           "total_distance, total_distance_unit, total_energy, "
+           "total_energy_unit, source_name, indoor, start_epoch "
+           "FROM workout WHERE 1=1")
+    params: list = []
+    if activity:
+        sql += " AND activity_type LIKE ?"
+        params.append(f"%{activity}%")
+    if start:
+        sql += " AND local_date >= ?"
+        params.append(start)
+    if end:
+        sql += " AND local_date <= ?"
+        params.append(end)
+    if indoor is True:
+        sql += " AND indoor = 1"
+    elif indoor is False:
+        sql += " AND indoor = 0"
+    clause, extra = _source_clauses(source_include, source_exclude)
+    sql += clause
+    params += extra
+    sql += " ORDER BY start_epoch DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
+    if not rows:
+        return []
+
+    wanted = tuple(measures)
+    by_workout: dict[int, dict] = {r["id"]: {} for r in rows}
+    if wanted:
+        placeholders = ",".join("?" * len(rows))
+        keys = ",".join("?" * len(wanted))
+        for stat in conn.execute(
+                f"SELECT workout_id, key, value_num, value_text, unit "
+                f"FROM workout_stat WHERE workout_id IN ({placeholders}) "
+                f"AND key IN ({keys})",
+                [r["id"] for r in rows] + list(wanted)):
+            by_workout[stat["workout_id"]][stat["key"]] = {
+                "value": stat["value_num"],
+                "text": stat["value_text"],
+                "unit": stat["unit"],
+            }
+
+    out: list[WorkoutRow] = []
+    for r in rows:
+        held = by_workout[r["id"]]
+        found = {key: held.get(key, {"value": None, "text": None, "unit": None})
+                 for key in wanted}
+        hr = found.get(_HEART_RATE_AVERAGE)
+        derived = {}
+        for name in derive_names:
+            if name == "pace":
+                d = derive.pace(r["total_distance"], r["total_distance_unit"],
+                                r["duration"], r["duration_unit"])
+            elif name == "speed":
+                d = derive.speed(r["total_distance"], r["total_distance_unit"],
+                                 r["duration"], r["duration_unit"])
+            else:
+                d = derive.efficiency(
+                    r["total_distance"], r["total_distance_unit"],
+                    r["duration"], r["duration_unit"],
+                    (hr or {}).get("value"), (hr or {}).get("unit"))
+            derived[name] = {"value": d.value, "unit": d.unit,
+                             "reason": d.reason}
+        count = None
+        if sample_counts and wanted:
+            count = _sample_depth(conn, r, wanted[0])
+        activity_name = r["activity_type"] or "workout"
+        out.append(WorkoutRow(
+            local_date=r["local_date"], activity_type=activity_name,
+            duration=r["duration"], duration_unit=r["duration_unit"],
+            total_distance=r["total_distance"],
+            total_distance_unit=r["total_distance_unit"],
+            total_energy=r["total_energy"],
+            total_energy_unit=r["total_energy_unit"],
+            source_name=r["source_name"], indoor=r["indoor"],
+            citation=f"{activity_name} on {r['local_date']}",
+            measures=found, derived=derived, sample_count=count))
+    return out
+
+
+def _sample_depth(conn, row, measure_key: str) -> int | None:
+    """How many raw records of the measure's own type fall inside the workout.
+
+    The interval end comes from the stored duration rather than `end_date`,
+    because duration and its unit are both columns and need no parsing. Uses
+    `idx_record_type_epoch`.
+    """
+    base_type = measure_key.split(":")[0]
+    seconds = _SECONDS_PER.get((row["duration_unit"] or "").strip().lower())
+    if seconds is None or row["duration"] is None:
+        return None
+    end_epoch = row["start_epoch"] + row["duration"] * seconds
+    return conn.execute(
+        "SELECT COUNT(*) AS n FROM record WHERE type = ? "
+        "AND start_epoch >= ? AND start_epoch <= ?",
+        (base_type, row["start_epoch"], end_epoch),
+    ).fetchone()["n"]
+
+
+def workout_measures(conn) -> list[dict]:
+    """One row per measure the index holds, for every absence message to read.
+
+    Each row carries the key, its kind, a readable label, a count, the date
+    span and a unit. The label comes from the metric registry when the base
+    type is registered, and is the bare key otherwise.
+    """
+    rows = conn.execute(
+        "SELECT s.kind, s.key, COUNT(*) AS n, MIN(w.local_date) AS first, "
+        "MAX(w.local_date) AS last, MAX(s.unit) AS unit "
+        "FROM workout_stat s JOIN workout w ON w.id = s.workout_id "
+        "GROUP BY s.kind, s.key ORDER BY n DESC, s.key"
+    ).fetchall()
+    out = []
+    for row in rows:
+        base = row["key"].split(":")[0]
+        metric = metrics.lookup(base)          # None for an unregistered type
+        item = dict(row)
+        item["label"] = metric.label if metric else row["key"]
+        out.append(item)
+    return out
 
 
 # --------------------------------------------------------------------------- #
