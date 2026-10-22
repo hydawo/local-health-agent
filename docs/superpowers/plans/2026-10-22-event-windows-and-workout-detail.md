@@ -814,6 +814,17 @@ git commit -m "five derivations, a closed list, with units named and never conve
 
 **Interfaces:**
 - Consumes: `derive` from Task 4; `workout_stat` and `workout.indoor` from Task 2.
+
+> **Amended after review.** Three things in this task changed from the text
+> below. The heart-rate input to `efficiency` is pinned to the exact key
+> `HKQuantityTypeIdentifierHeartRate:average`, because a substring match on
+> `":average"` would feed a step-count average in as a heart rate. The
+> `sample_count` integer became `sample_depth`, a dict with one entry per
+> distinct statistic base type, each carrying `count`, `window_seconds`,
+> `bounds` and `reason`, because a bare integer did not say what it counted and
+> only the first requested measure was used. And `_SECONDS_PER` was deleted in
+> favour of `derive.seconds`, which `queries.py` had duplicated with an
+> inverted factor. See commits 1e130f8, 9f68cfa.
 - Produces:
   - `WorkoutRow` frozen dataclass: `local_date, activity_type, duration, duration_unit, total_distance, total_distance_unit, total_energy, total_energy_unit, source_name, indoor, citation, measures: dict, derived: dict, sample_count: int | None`
   - `workout_detail(conn, *, activity=None, start=None, end=None, indoor=None, source_include=(), source_exclude=(), measures=(), derive_names=(), sample_counts=False, limit=200) -> list[WorkoutRow]`
@@ -983,7 +994,7 @@ class WorkoutRow:
     citation: str
     measures: dict
     derived: dict
-    sample_count: int | None = None
+    sample_depth: dict | None = None   # see the Task 5 note below
 
 
 # Derivations that need more than one row, or two named measures, and so are
