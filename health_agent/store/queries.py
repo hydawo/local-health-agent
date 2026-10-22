@@ -561,6 +561,7 @@ def _summed(rows, value_attr: str, unit_attr: str):
 
 
 _MIXED = "mixed"
+_UNLABELLED = "unlabelled"
 
 
 def _median_in_one_unit(pairs, name: str) -> dict:
@@ -568,12 +569,15 @@ def _median_in_one_unit(pairs, name: str) -> dict:
 
     The reason names the units seen, and `units` lists them, rather than
     picking one to label a figure that mixes them."""
-    units = sorted({u for _, u in pairs if u}, key=str)
-    if len(units) > 1:
+    # An absent unit is a unit of its own, as in _summed: assuming an
+    # unlabelled value shares its neighbours' unit would be assuming a unit.
+    seen = {u or None for _, u in pairs}
+    units = sorted(u or _UNLABELLED for u in seen)
+    if len(seen) > 1:
         return {"value": None, "unit": _MIXED, "units": units,
                 "reason": f"{name} reported in more than one unit: "
                           f"{', '.join(units)}"}
-    unit = units[0] if units else None
+    unit = next(iter(seen)) if seen else None
     d = derive.median([v for v, _ in pairs], unit)
     return {"value": d.value, "unit": d.unit, "units": units,
             "reason": None if d.value is not None else "no value in this period"}
@@ -642,9 +646,13 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         buckets.setdefault(key, []).append(row)
         spans[key] = (first_day, last_day)
 
-    measure_units = {m["unit"] for row in rows for m in row.measures.values()
-                     if m.get("unit")}
-    unit = next(iter(measure_units)) if len(measure_units) == 1 else None
+    measure_units = {m.get("unit") or None for row in rows
+                     for m in row.measures.values()
+                     if m.get("value") is not None}
+    if len(measure_units) > 1:
+        unit = _MIXED
+    else:
+        unit = next(iter(measure_units), None)
 
     pct_measure = percentile_of or (measures[0] if len(measures) == 1 else None)
     points = []

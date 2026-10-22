@@ -231,3 +231,29 @@ def test_ratio_of_and_percentile_of_need_their_derivation_requested(box):
         queries.workout_series(box, measures=(hr, cad), ratio_of=(hr, cad))
     with pytest.raises(ValueError):
         queries.workout_series(box, measures=(hr, cad), percentile_of=hr)
+
+
+def test_a_labelled_value_and_an_unlabelled_one_are_not_averaged(box):
+    _ride(box, date="2026-03-02", duration=40.0, hr_avg=140.0, key=b"\x01")
+    _ride(box, date="2026-03-03", duration=40.0, hr_avg=100.0, key=b"\x02")
+    box.execute("UPDATE workout_stat SET unit = NULL WHERE value_num = 100.0")
+    box.commit()
+    hr = f"{HR}:average"
+    series = queries.workout_series(box, measures=(hr,),
+                                    derive_names=("percentile",))
+    m = series.points[0].measures[hr]
+    assert m["median"] is None and m["unit"] == "mixed"
+    assert m["units"] == ["count/min", "unlabelled"]
+    assert "unlabelled" in m["reason"] and "None" not in m["reason"]
+    assert series.points[0].derived["p50"]["unit"] == "mixed"
+    assert series.unit == "mixed"
+
+
+def test_the_series_unit_is_mixed_when_measure_units_differ(box):
+    _ride(box, date="2026-03-02", duration=40.0, hr_avg=140.0, key=b"\x01")
+    _ride(box, date="2026-03-09", duration=40.0, hr_avg=2.3, key=b"\x02",
+          hr_unit="count/s")
+    hr = f"{HR}:average"
+    assert queries.workout_series(box, measures=(hr,)).unit == "mixed"
+    assert queries.workout_series(
+        box, measures=(hr,), end="2026-03-03").unit == "count/min"
