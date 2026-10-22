@@ -33,7 +33,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS schema_meta (
@@ -171,7 +171,7 @@ CREATE TABLE IF NOT EXISTS document (
     id               INTEGER PRIMARY KEY,
     source_file_id   INTEGER NOT NULL REFERENCES source_file(id),
     path             TEXT NOT NULL,
-    kind             TEXT NOT NULL,   -- 'pdf' (records) | 'note' (markdown, text, docx) | 'image' (photo or screenshot, OCR)
+    kind             TEXT NOT NULL,   -- 'pdf' (records) | 'note' (markdown, text, docx) | 'image' (photo or screenshot, OCR) | 'fhir' (a clinical record from the export)
     title            TEXT,
     doc_date         TEXT,            -- collection date, or a note's own date
     page_count       INTEGER NOT NULL DEFAULT 0,
@@ -179,11 +179,18 @@ CREATE TABLE IF NOT EXISTS document (
     ingested_at      TEXT NOT NULL,
     -- Raw note frontmatter, kept whole even when only some keys are understood,
     -- so nothing the user wrote is silently dropped (schema v3).
-    frontmatter_json TEXT
+    frontmatter_json TEXT,
+    -- Set only for kind='fhir': the resource type and its id inside the
+    -- Apple Health export's clinical-records folder. A partial unique
+    -- index on them makes a re-ingest update nothing (schema v5).
+    fhir_resource_type TEXT,
+    fhir_id            TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_document_source ON document(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_document_kind   ON document(kind, doc_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_document_fhir
+    ON document(fhir_resource_type, fhir_id) WHERE fhir_id IS NOT NULL;
 
 -- Tags from note frontmatter and inline #hashtags. A separate table rather than
 -- a delimited column so filtering is an index lookup instead of a LIKE scan.
@@ -225,7 +232,7 @@ CREATE TABLE IF NOT EXISTS lab_result (
     flag           TEXT,              -- H / L / A as printed by the lab
     collected_date TEXT,
     raw_line       TEXT,              -- the source line, for citation and audit
-    extracted_by   TEXT NOT NULL,     -- 'table' | 'line' — which pass found it
+    extracted_by   TEXT NOT NULL,     -- 'table' | 'line' | 'fhir', which pass found it
     -- 1 when the page had no text layer and this value came through OCR.
     -- OCR misreads digits (a reference range of 100-199 can arrive as 100-139),
     -- so these values carry real uncertainty that a text-layer value does not,
@@ -269,6 +276,49 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
     content_rowid='id',
     tokenize='porter unicode61'
 );
+
+-- Diagnoses, prescriptions, allergies, immunizations and procedures that a
+-- health system sent back through the Apple Health export. One table rather
+-- than five because the queries are the same shape and the differences are
+-- two columns; `kind` keeps them apart. `dedup_key` excludes document_id so
+-- the same fact arriving from two exports collapses (schema v5).
+CREATE TABLE IF NOT EXISTS clinical_fact (
+    id            INTEGER PRIMARY KEY,
+    document_id   INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    kind          TEXT NOT NULL,   -- condition|medication|allergy|immunization|procedure
+    name          TEXT NOT NULL,   -- as the health system wrote it
+    code          TEXT,
+    code_system   TEXT,
+    status        TEXT,            -- clinicalStatus or request status, verbatim
+    onset_date    TEXT,
+    detail_text   TEXT,            -- dosage instructions, for a medication
+    category      TEXT,
+    dedup_key     BLOB NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clinical_fact_dedup ON clinical_fact(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_clinical_fact_kind ON clinical_fact(kind, onset_date);
+
+-- Clinician-measured vitals: a handful of readings taken at an encounter,
+-- not a continuous wearable series. Deliberately absent from daily_metric,
+-- which query_healthkit reads, so a perioperative pulse-ox reading can
+-- never land in a resting heart-rate trend (schema v5).
+CREATE TABLE IF NOT EXISTS clinical_vital (
+    id          INTEGER PRIMARY KEY,
+    document_id INTEGER NOT NULL REFERENCES document(id) ON DELETE CASCADE,
+    metric      TEXT NOT NULL,     -- as measured and labelled
+    metric_key  TEXT NOT NULL,     -- slug, for grouping
+    code        TEXT,
+    code_system TEXT,
+    category    TEXT,
+    value_num   REAL,
+    value_text  TEXT,
+    unit        TEXT,
+    measured_at TEXT,
+    local_date  TEXT,
+    dedup_key   BLOB NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_clinical_vital_dedup ON clinical_vital(dedup_key);
+CREATE INDEX IF NOT EXISTS idx_clinical_vital_metric ON clinical_vital(metric_key, local_date);
 """
 
 # Weekly/monthly rollups are cheap views over the daily table: the daily table
@@ -422,6 +472,23 @@ def open_for_read(path: Path) -> sqlite3.Connection:
     check_version(conn)
     check_aggregates(conn)
     return conn
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Record one fact about this index itself, beside the schema version.
+
+    Used for things no row can carry, such as whether the last ingested export
+    had a clinical-records folder: a switch that skipped it writes no rows, so
+    without a note here `check` could not tell "skipped" from "not there"."""
+    conn.execute(
+        "INSERT INTO schema_meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM schema_meta WHERE key = ?",
+                       (key,)).fetchone()
+    return row["value"] if row else None
 
 
 def mark_source_file(conn: sqlite3.Connection, source_file_id: int, *,

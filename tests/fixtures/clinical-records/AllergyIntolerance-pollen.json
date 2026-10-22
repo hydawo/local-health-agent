@@ -1,0 +1,21 @@
+{
+ "resourceType": "AllergyIntolerance",
+ "id": "allergy-1",
+ "clinicalStatus": {
+  "coding": [
+   {
+    "code": "active"
+   }
+  ]
+ },
+ "code": {
+  "text": "Pollen"
+ },
+ "recordedDate": "2018-06-05",
+ "category": [
+  "environment"
+ ],
+ "patient": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

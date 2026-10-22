@@ -27,8 +27,10 @@ from pathlib import Path
 from . import (__version__, agent, config, consent, embeddings, labs, metrics,
                offline_check,
                ollama_client)
-from .ingest import healthkit, notes, readers, records
+from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
+from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
+from .literature import store as literature_store
 from .store import queries, sqlite_schema, vector_store
 
 log = get_logger("cli")
@@ -153,6 +155,12 @@ def _warn_photos_in_records(records_dir: Path) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
+    try:
+        skip_clinical = fhir.parse_skip_list(args.skip_clinical)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
     export, record_files, note_files = _plan_ingest(args, cfg)
 
     if export is None and not record_files and not note_files:
@@ -183,6 +191,15 @@ def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
 
         if export is not None:
             _ingest_healthkit(conn, export, cfg, force=force)
+            if args.no_clinical:
+                # Nothing is read, so nothing would record that the folder was
+                # there; `check` has to be able to name the switch.
+                _record_clinical_ingest(
+                    conn, folder_seen=fhir.has_clinical_records(export),
+                    skipped_by="--no-clinical")
+                conn.commit()
+            else:
+                _ingest_clinical(conn, export, skip_clinical)
         if record_files:
             _ingest_records(conn, record_files, cfg, force=force,
                             use_ocr=not args.no_ocr)
@@ -231,6 +248,76 @@ def _ingest_healthkit(conn: sqlite3.Connection, target: Path,
               "up to the parse error. Re-export and run `ingest --force`.",
               file=sys.stderr)
     print()
+
+
+def _ingest_clinical(conn: sqlite3.Connection, target: Path,
+                     skip: frozenset[str]) -> None:
+    """Read the export's clinical-records folder under the HealthKit file's
+    source_file row. Runs even when the HealthKit XML was unchanged: every
+    store is idempotent, so a re-run reports zeros."""
+    # HealthKit ingest has just upserted this row; reuse its stored hash
+    # rather than reading a multi-gigabyte export a second time.
+    row = conn.execute("SELECT sha256 FROM source_file WHERE path = ?",
+                       (str(target),)).fetchone()
+    digest = row["sha256"] if row else healthkit.sha256_file(target)
+    source_file_id, _ = healthkit.register_source_file(
+        conn, target, "healthkit", digest)
+
+    clinical = fhir.ingest_clinical(
+        conn, target, source_file_id=source_file_id, skip=skip,
+        on_progress=lambda n: print(f"  ... {n:,} clinical records read",
+                                    flush=True))
+    _record_clinical_ingest(
+        conn, folder_seen=fhir.has_clinical_records(target),
+        skipped_by=f"--skip-clinical {','.join(sorted(skip))}" if skip else None)
+    conn.commit()
+    counted = clinical.counted()
+    if counted:
+        print("  clinical records    " + ", ".join(
+            f"{v:,} {k}" for k, v in counted.items()))
+        if clinical.skipped:
+            print(f"                      {clinical.skipped:,} skipped by "
+                  f"--skip-clinical")
+    elif clinical.skipped:
+        print(f"  clinical records    all {clinical.skipped:,} skipped")
+    elif clinical.unreadable or clinical.failed:
+        print("  clinical records    none readable")
+    # Unconditional: a run that skipped every kind and also hit an unreadable
+    # file used to report only the skip, and the unreadable file vanished.
+    if clinical.unreadable:
+        print(f"                      {clinical.unreadable:,} unreadable "
+              f"(not valid FHIR)")
+    if clinical.failed:
+        # Kept apart from "unreadable" on purpose: a store error is this
+        # tool's own defect, and reporting it as the person's unreadable data
+        # would let a systematic failure render as thousands of bad files.
+        print(f"                      {clinical.failed:,} could not be stored "
+              f"(a problem in this tool, not in your records); see the log")
+    if counted or clinical.skipped or clinical.unreadable or clinical.failed:
+        print()
+
+
+# What the last ingest found at the export's clinical-records folder. Needed
+# because a switch that skips the folder writes no rows, and `check` must tell
+# "skipped" from "the export had none" (spec §9).
+_CLINICAL_MARKER = "clinical_ingest"
+
+
+def _record_clinical_ingest(conn: sqlite3.Connection, *, folder_seen: bool,
+                            skipped_by: str | None) -> None:
+    sqlite_schema.set_meta(conn, _CLINICAL_MARKER, json.dumps(
+        {"folder_seen": bool(folder_seen), "skipped_by": skipped_by}))
+
+
+def _clinical_marker(conn: sqlite3.Connection) -> dict | None:
+    raw = sqlite_schema.get_meta(conn, _CLINICAL_MARKER)
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _ingest_records(conn: sqlite3.Connection, files: list[Path],
@@ -453,6 +540,13 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"  text chunks        {docs['chunks']:,}   "
                   f"({docs['chunks_embedded']:,} embedded)")
 
+        clinical = _clinical_counts(conn)
+        if clinical:
+            print("\nClinical records (from the export's clinical-records "
+                  "folder):")
+            for label, n, span in clinical:
+                print(f"  {label:<18} {n:,}" + (f"   {span}" if span else ""))
+
         top = queries.list_types(conn, limit=12)
         print("\nMost common types:")
         rows = [[t["type"].replace("HKQuantityTypeIdentifier", "")
@@ -464,6 +558,16 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
         return 0
     finally:
         conn.close()
+
+
+def _clinical_counts(conn: sqlite3.Connection) -> list[tuple[str, int, str]]:
+    """(label, count, date span) per clinical kind that holds anything.
+
+    Per-kind counts only. A total of clinical `document` rows would overstate
+    content: dedupe collapses and note references leave childless rows. The
+    figures come from `queries.clinical_holdings`, which is the only place in
+    this codebase that answers "what does the index hold clinically"."""
+    return queries.clinical_holdings(conn)["labels"]
 
 
 def _positive_int(text: str) -> int:
@@ -773,15 +877,48 @@ def cmd_workouts(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+_DOC_KINDS = ("pdf", "note", "image", "fhir")
+
+
+def _fhir_documents_note(conn: sqlite3.Connection) -> str:
+    """What the unfiltered listing leaves out, so its absence is coverage.
+
+    The records surface is what a person dropped in a folder. The export's
+    clinical-records resources are documents too, and on a real export there
+    are thousands of them; naming the switch that lists them keeps the
+    unfiltered listing meaning what it meant without hiding them."""
+    n = conn.execute(
+        "SELECT COUNT(*) FROM document WHERE kind = 'fhir'").fetchone()[0]
+    if not n:
+        return ""
+    return (f"\n{n:,} clinical-records resource(s) are not listed here; "
+            f"`health-agent documents --kind fhir` lists them.")
+
+
 def cmd_documents(args: argparse.Namespace, cfg: config.Config) -> int:
+    kind = (args.kind or "").strip().lower() or None
+    if kind and kind not in _DOC_KINDS:
+        print(f"error: --kind must be one of {', '.join(_DOC_KINDS)}",
+              file=sys.stderr)
+        return 2
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
-        docs = queries.list_documents(conn)
+        docs = queries.list_documents(conn, kind=kind)
         if args.json:
             print(json.dumps(docs, indent=2))
             return 0
         if not docs:
-            print("No documents in this index.")
+            if kind == "fhir":
+                held = queries.clinical_holdings(conn)
+                print("No clinical-records resources in this index. It holds "
+                      + queries.clinical_holdings_phrase(conn, holdings=held)
+                      + ". They come from the clinical-records folder of an "
+                        "Apple Health export; `health-agent ingest` reads it "
+                        "unless --no-clinical or --skip-clinical left it out.")
+                return 1
+            print("No documents in this index."
+                  + ("" if kind else
+                     _fhir_documents_note(conn)))
             print(f"Put bloodwork or record PDFs in {cfg.records_dir} and run "
                   f"`health-agent ingest`.")
             return 1
@@ -796,6 +933,8 @@ def cmd_documents(args: argparse.Namespace, cfg: config.Config) -> int:
         ] for d in docs]
         print(_table(["file", "date", "pages", "read via", "labs", "chunks",
                       "title"], rows))
+        if not kind:
+            print(_fhir_documents_note(conn).lstrip())
         return 0
     finally:
         conn.close()
@@ -1100,6 +1239,136 @@ def cmd_notes(args: argparse.Namespace, cfg: config.Config) -> int:
             print(f"\n{summary['undated']} note(s) have no date. Add a "
                   f"`date:` to the frontmatter or name the file "
                   f"`YYYY-MM-DD-something.md` to place them in time.")
+        return 0
+    finally:
+        conn.close()
+
+
+# Column caps for `clinical`: kind (<=12) + name + status + date (10) + detail
+# plus four 2-character separators come to 118 characters, inside a 120 column
+# terminal. Longer text is cut with a trailing "..." so the cut is visible.
+_CLINICAL_NAME_W = 38
+_CLINICAL_STATUS_W = 12
+_CLINICAL_DETAIL_W = 38
+
+
+def _clip(text: str | None, width: int) -> str:
+    """One line, cut at `width`, so long dosage text cannot widen the table."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= width else flat[:width - 3] + "..."
+
+
+def _clinical_holdings(conn: sqlite3.Connection, *, leave_out: set[str],
+                       holdings: dict | None = None) -> str:
+    """What the index holds, as a sentence fragment, for an absence message.
+
+    `leave_out` names the clinical labels the caller just reported as missing.
+    Shared with the clinical tools through `queries`, so the CLI and the model
+    are told the same thing about the same index."""
+    return queries.clinical_holdings_phrase(conn, leave_out=frozenset(leave_out),
+                                            holdings=holdings)
+
+
+def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Diagnoses, prescriptions and the rest, as the health system sent them."""
+    kind = None
+    if args.kind:
+        kind = _FACT_KIND_ARG.get(args.kind.strip().lower())
+        if kind is None:
+            print(f"error: --kind must be one of "
+                  f"{', '.join(sorted(_FACT_KIND_ARG))}", file=sys.stderr)
+            return 2
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    try:
+        holdings = queries.clinical_holdings(conn)
+        coverage = holdings["facts"]
+        if not coverage:
+            held = _clinical_holdings(conn, leave_out=set(_FACT_KIND_ARG),
+                                      holdings=holdings)
+            where = ("They come from the clinical-records folder of an Apple "
+                     "Health export; `health-agent ingest` reads them unless "
+                     "--no-clinical or --skip-clinical left them out.")
+            if holdings["any"]:
+                print("No clinical facts (conditions, medications, allergies, "
+                      f"immunizations or procedures) in the index. It holds "
+                      f"{held}. {where}")
+            else:
+                print(f"No clinical records in the index. It holds {held}. "
+                      f"{where}")
+            return 0
+        rows = queries.clinical_facts(conn, kind=kind)
+        if not rows:
+            held = ", ".join(f"{n['count']:,} {p}" for p, s in
+                             _FACT_KIND_ARG.items()
+                             if (n := coverage.get(s)))
+            print(f"No {args.kind.strip().lower()} in the index. It holds "
+                  f"{held}.")
+            return 0
+        print(_table(["kind", "name", "status", "date", "detail"],
+                     [[r["kind"], _clip(r["name"], _CLINICAL_NAME_W),
+                       _clip(r["status"], _CLINICAL_STATUS_W),
+                       r["onset_date"] or "",
+                       _clip(r["detail_text"], _CLINICAL_DETAIL_W)]
+                      for r in rows]))
+        print(f"\n{len(rows):,} record(s). Source: the clinical-records "
+              f"folder of your Apple Health export.")
+        return 0
+    finally:
+        conn.close()
+
+
+def _vital_value(row: dict) -> str:
+    if row["value_num"] is not None:
+        return literature_store.format_number(row["value_num"])
+    return row["value_text"] or "-"
+
+
+def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
+    """Clinician-measured vitals, which are not the watch's series."""
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    try:
+        metrics_ = queries.clinical_vital_metrics(conn)
+        if not metrics_:
+            held = _clinical_holdings(conn, leave_out={"clinician vitals"})
+            print(f"No clinician-measured vitals in the index. It holds "
+                  f"{held}. Vitals come from the clinical-records folder of "
+                  f"an Apple Health export; `health-agent ingest` reads them "
+                  f"unless --no-clinical or --skip-clinical left them out.")
+            return 0
+        if not args.metric:
+            print(_table(["metric", "unit", "readings", "first", "last"],
+                         [[m["metric_key"],
+                           # Two units for one metric: show both rather than
+                           # attaching one of them to every reading.
+                           m["unit"] or "/".join(m["units"]), f"{m['n']:,}",
+                           m["first"] or "", m["last"] or ""]
+                          for m in metrics_]))
+            print("\nPass --metric to list individual readings. Your watch "
+                  "and phone data is `health-agent metric`.")
+            return 0
+        rows = queries.clinical_vitals(conn, metric=args.metric,
+                                       start=args.start, end=args.end,
+                                       limit=args.limit)
+        if not rows:
+            held = ", ".join(m["metric_key"] for m in metrics_[:12])
+            # A cut list with no count would under-report coverage, which is
+            # the one thing an absence message must not do.
+            if len(metrics_) > 12:
+                held += f" and {len(metrics_) - 12:,} more"
+            ranged = " in that date range" if (args.start or args.end) else ""
+            print(f"No clinician-measured readings of '{args.metric}'"
+                  f"{ranged}. The index holds: {held}.")
+            return 0
+        print(_table(["measured", "metric", "value", "unit", "source file"],
+                     [[r["measured_at"] or r["local_date"] or "", r["metric"],
+                       _vital_value(r), r["unit"] or "",
+                       r["citation"].replace("\\", "/").rsplit("/", 1)[-1]]
+                      for r in rows]))
+        print(f"\n{len(rows):,} reading(s), newest first, taken by a clinician "
+              f"and sent with your health-system records.")
+        if len(rows) == args.limit:
+            print(f"Stopped at --limit {args.limit}; there may be more. "
+                  f"Raise --limit or narrow with --start and --end.")
         return 0
     finally:
         conn.close()
@@ -1980,6 +2249,34 @@ def cmd_literature_consent(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def _check_clinical_line(conn: sqlite3.Connection) -> str:
+    """One line in all three states spec §9 asks for: records present, folder
+    present but skipped by a named switch, or no folder in the export.
+
+    Silence was the old behaviour and it is the one answer that cannot be
+    read: a person who passed --no-clinical and a person whose health system
+    sent nothing saw the same blank."""
+    held = _clinical_counts(conn)
+    marker = _clinical_marker(conn)
+    skipped_by = (marker or {}).get("skipped_by")
+    if held:
+        line = ", ".join(f"{n:,} {label}" for label, n, _ in held)
+        if skipped_by:
+            line += f"   (some kinds left out by {skipped_by})"
+        return line
+    if marker is None:
+        return ("not recorded yet. Run `health-agent ingest` on your export "
+                "to record whether it has a clinical-records folder.")
+    if not marker.get("folder_seen"):
+        return "none; the ingested export had no clinical-records folder."
+    if skipped_by:
+        return (f"a clinical-records folder was in the export and was "
+                f"skipped by {skipped_by}. Re-run `health-agent ingest` "
+                f"without it to read them.")
+    return ("a clinical-records folder was in the export but nothing could "
+            "be read from it; see the log.")
+
+
 def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
     """Environment check (plan §5a): report what works and what doesn't."""
     ok = True
@@ -1999,6 +2296,8 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
                   f"{docs['documents']} document(s), "
                   f"{docs['lab_results']} lab value(s), "
                   f"{docs['chunks_embedded']}/{docs['chunks']} chunks embedded")
+            print("               clinical records: "
+                  + _check_clinical_line(conn))
             conn.close()
         except (sqlite_schema.SchemaVersionMismatch,
                 sqlite_schema.AggregatesMissing) as exc:
@@ -2174,6 +2473,13 @@ def build_parser() -> argparse.ArgumentParser:
                           help="re-parse even if the file hash is unchanged")
     p_ingest.add_argument("--no-ocr", action="store_true",
                           help="skip OCR for pages with no text layer")
+    p_ingest.add_argument("--no-clinical", action="store_true",
+                          help="skip the clinical-records folder of an Apple "
+                               "Health export (FHIR labs, vitals, conditions, "
+                               "medications, notes)")
+    p_ingest.add_argument("--skip-clinical", metavar="KINDS", default="",
+                          help="comma-separated clinical kinds to skip: "
+                               + ", ".join(fhir.CLINICAL_KINDS))
     p_ingest.add_argument("--no-embed", action="store_true",
                           help="store chunks without embedding them")
     p_ingest.add_argument("--embedder", default="ollama",
@@ -2233,9 +2539,35 @@ def build_parser() -> argparse.ArgumentParser:
     p_workouts.add_argument("--json", action="store_true")
     p_workouts.set_defaults(func=cmd_workouts)
 
-    p_docs = sub.add_parser("documents", help="list ingested record documents")
+    p_docs = sub.add_parser("documents", help="list ingested record documents",
+                            description="Record documents: the PDFs and notes "
+                                        "you dropped in. --kind fhir lists the "
+                                        "export's clinical-records resources "
+                                        "instead.")
+    p_docs.add_argument("--kind", metavar="KIND",
+                        help="one of: " + ", ".join(_DOC_KINDS))
     p_docs.add_argument("--json", action="store_true")
     p_docs.set_defaults(func=cmd_documents)
+
+    p_clinical = sub.add_parser(
+        "clinical", help="diagnoses, medications and other clinical records",
+        description="Conditions, medications, allergies, immunizations and "
+                    "procedures from the clinical-records folder of an Apple "
+                    "Health export, as the health system recorded them.")
+    p_clinical.add_argument("--kind", metavar="KIND",
+                            help="one of: " + ", ".join(sorted(_FACT_KIND_ARG)))
+    p_clinical.set_defaults(func=cmd_clinical)
+
+    p_vitals = sub.add_parser(
+        "vitals", help="clinician-measured vitals from your clinical records",
+        description="With no --metric, lists which vitals a clinician measured. "
+                    "With one, lists those readings, newest first. These are "
+                    "not your watch's series; see `metric` for those.")
+    p_vitals.add_argument("--metric", help="vital name or key (e.g. pulse, spo2)")
+    p_vitals.add_argument("--start", metavar="YYYY-MM-DD")
+    p_vitals.add_argument("--end", metavar="YYYY-MM-DD")
+    p_vitals.add_argument("--limit", type=_positive_int, default=100)
+    p_vitals.set_defaults(func=cmd_vitals)
 
     p_ask = sub.add_parser(
         "ask", help="ask a question about your data in plain language",

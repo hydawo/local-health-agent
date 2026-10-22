@@ -1,0 +1,12 @@
+{
+ "resourceType": "DiagnosticReport",
+ "id": "dr-1",
+ "status": "final",
+ "code": {
+  "text": "LIPID PANEL"
+ },
+ "effectiveDateTime": "2024-11-06T17:04:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

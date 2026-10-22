@@ -1,0 +1,27 @@
+{
+ "resourceType": "Observation",
+ "id": "vital-pulse",
+ "status": "final",
+ "category": [
+  {
+   "text": "Vital Signs"
+  }
+ ],
+ "code": {
+  "text": "Pulse",
+  "coding": [
+   {
+    "system": "http://loinc.org",
+    "code": "8867-4"
+   }
+  ]
+ },
+ "valueQuantity": {
+  "value": 72,
+  "unit": "bpm"
+ },
+ "effectiveDateTime": "2023-09-15T14:22:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

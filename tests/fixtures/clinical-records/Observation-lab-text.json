@@ -1,0 +1,29 @@
+{
+ "resourceType": "Observation",
+ "id": "lab-text",
+ "status": "final",
+ "category": [
+  {
+   "text": "Laboratory",
+   "coding": [
+    {
+     "code": "laboratory"
+    }
+   ]
+  }
+ ],
+ "code": {
+  "text": "HEMOGLOBIN A1C",
+  "coding": [
+   {
+    "system": "http://loinc.org",
+    "code": "4548-4"
+   }
+  ]
+ },
+ "valueString": "see comment",
+ "effectiveDateTime": "2023-05-02T10:00:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

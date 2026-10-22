@@ -1,0 +1,27 @@
+{
+ "resourceType": "Observation",
+ "id": "vital-spo2",
+ "status": "final",
+ "category": [
+  {
+   "text": "Vital Signs"
+  }
+ ],
+ "code": {
+  "text": "SpO2",
+  "coding": [
+   {
+    "system": "http://loinc.org",
+    "code": "2708-6"
+   }
+  ]
+ },
+ "valueQuantity": {
+  "value": 98,
+  "unit": "%"
+ },
+ "effectiveDateTime": "2023-09-15T14:22:00Z",
+ "subject": {
+  "reference": "Patient/SHOULD-NOT-BE-STORED"
+ }
+}

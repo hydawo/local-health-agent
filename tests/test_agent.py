@@ -483,6 +483,23 @@ def test_system_prompt_states_the_hard_constraints(ctx):
     assert "clinical thresholds" in prompt
 
 
+def test_system_prompt_says_clinical_history_is_not_the_whole_medication_list(ctx):
+    """Eval run 8 regressed Q27. Given the question "given my medications, is
+    my LDL trend something to worry about", the model called
+    get_clinical_history, found only ibuprofen, never searched the note that
+    records the statin, and told the person they take no lipid-lowering
+    medication. The clinical tool had displaced the notes search, and the
+    model read a health system's feed as the whole truth about what the
+    person takes."""
+    prompt = orchestrator.SYSTEM_PROMPT
+    assert "not the whole of what this person takes" in prompt
+    assert "search their notes in the same turn" in prompt
+    # The first wording was satisfiable by saying less: the model stopped
+    # making the false claim, scoped it to "recorded by your health systems",
+    # and offered to check the notes instead of checking them.
+    assert "check them, then answer" in prompt
+
+
 def test_progress_events_are_emitted(ctx, monkeypatch):
     events = []
     orch, fake = make(ctx, [
@@ -621,3 +638,271 @@ def test_literature_context_failure_does_not_break_the_answer(ctx, tmp_path,
 def test_system_prompt_tells_the_model_the_tool_appends_findings(ctx):
     text = orchestrator.Orchestrator(ctx).system_prompt()
     assert "the tool itself appends published findings" in text
+
+
+# --------------------------------------------------------------------------- #
+# Clinical records (FHIR)
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def clinical_ctx(tmp_path):
+    """A fresh index holding the committed clinical fixtures.
+
+    Separate from the module `ctx`, which must stay free of clinical records so
+    the absence tests mean something."""
+    from health_agent.ingest import fhir
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    import shutil
+    root = tmp_path / "apple_health_export"
+    shutil.copytree(FIXTURES / "clinical-records", root / "clinical-records")
+    marker = next((root / "clinical-records").glob("*.json"))
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    fhir.ingest_clinical(conn, root, source_file_id=sid)
+    conn.commit()
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+    conn.close()
+
+
+def test_clinical_history_returns_facts_with_citations(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"kind": "medications"})
+    assert result["kinds_available"]
+    (row,) = [r for r in result["facts"] if r["name"].startswith("ibuprofen")]
+    assert row["detail_text"].startswith("Take 1 tablet")
+    assert row["citation"].startswith("clinical-records/")
+    assert "not medical advice" not in str(result)   # tools return data, not prose
+
+
+def test_clinical_history_without_a_kind_returns_everything(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history", {})
+    assert {r["kind"] for r in result["facts"]} >= {"condition", "medication"}
+
+
+def test_clinical_history_rejects_an_unknown_kind(clinical_ctx):
+    assert "error" in tools.dispatch(clinical_ctx, "get_clinical_history",
+                                     {"kind": "moods"})
+
+
+def test_clinical_history_reports_absence_as_coverage(ctx):
+    """`ctx` has no clinical records at all."""
+    result = tools.dispatch(ctx, "get_clinical_history", {"kind": "conditions"})
+    assert result["facts"] == []
+    assert result["no_clinical_records"] is True
+    assert "clinical-records" in result["note"]
+
+
+def test_clinical_vitals_are_separate_from_healthkit(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"metric": "pulse"})
+    assert result["measurements"][0]["value"] == 72
+    assert result["measurements"][0]["unit"] == "bpm"
+    assert result["measurements"][0]["citation"].startswith("clinical-records/")
+    assert "query_healthkit" in result["note"]      # names the other tool
+
+
+def test_clinical_vitals_without_a_metric_lists_what_exists(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals", {})
+    assert {m["metric_key"] for m in result["metrics_available"]} >= {"pulse", "spo2"}
+
+
+def test_clinical_vitals_report_absence_as_coverage(ctx):
+    result = tools.dispatch(ctx, "get_clinical_vitals", {})
+    assert result["measurements"] == [] and result["no_clinical_records"] is True
+
+
+def test_both_tools_are_registered_and_schemas_are_well_formed():
+    assert "get_clinical_history" in tools.BY_NAME
+    assert "get_clinical_vitals" in tools.BY_NAME
+    assert len(tools.TOOLS) == 7
+    for schema in tools.schemas():
+        assert schema["function"]["description"]
+        assert schema["function"]["parameters"]["type"] == "object"
+
+
+def test_data_inventory_names_the_clinical_surface(clinical_ctx):
+    inventory = tools.data_inventory(clinical_ctx.conn)
+    assert inventory["clinical"]["conditions"] == 1
+    assert inventory["clinical"]["medications"] == 1
+    assert "pulse" in inventory["clinical"]["vital_metrics_available"]
+
+
+def test_the_prompt_separates_clinic_measurements_from_wearable_data(ctx):
+    text = orchestrator.Orchestrator(ctx).system_prompt()
+    assert "clinician-measured" in text.lower()
+    assert "get_clinical_vitals" in text
+
+
+@pytest.fixture
+def two_source_ctx(tmp_path):
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    ids = []
+    for kind, path in (("pdf", "labs.pdf"), ("fhir", "clinical-records/a.json")):
+        ids.append(conn.execute(
+            "INSERT INTO document(source_file_id, path, kind, page_count, "
+            "extraction, ingested_at) VALUES(?,?,?,1,'text','2026-10-21')",
+            (sid, path, kind)).lastrowid)
+
+    def add(doc, value, unit="mg/dL", extracted_by="line"):
+        conn.execute(
+            "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+            "value_num, unit, collected_date, raw_line, extracted_by, via_ocr, "
+            "dedup_key) VALUES(?,1,'LDL','ldl',?,?,'2026-03-10','x',?,0,?)",
+            (doc, value, unit, extracted_by, f"{doc}{value}{unit}".encode()))
+
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "v"), ids, add
+    conn.close()
+
+
+def test_a_draw_reported_by_both_sources_is_one_point_with_its_source(two_source_ctx):
+    ctx_, (pdf_doc, fhir_doc), add = two_source_ctx
+    add(pdf_doc, 112.0)
+    add(fhir_doc, 112.0, extracted_by="fhir")
+    result = tools.dispatch(ctx_, "get_lab_trend", {"analyte": "ldl"})
+    (point,) = result["points"]
+    assert point["source"] == "pdf"   # the row carrying the range wins; see also_from
+    assert "source_disagreement" not in result
+
+
+def test_conflicting_sources_produce_a_note_naming_both_values(two_source_ctx):
+    ctx_, (pdf_doc, fhir_doc), add = two_source_ctx
+    add(pdf_doc, 112.0)
+    add(fhir_doc, 5.4, unit="mmol/L", extracted_by="fhir")
+    result = tools.dispatch(ctx_, "get_lab_trend", {"analyte": "ldl"})
+    assert {p["source"] for p in result["points"]} == {"pdf", "fhir"}
+    note = result["source_disagreement"]
+    assert "2026-03-10" in note
+    assert "112" in note and "mg/dL" in note and "pdf" in note
+    assert "5.4" in note and "mmol/L" in note and "fhir" in note
+
+
+def test_a_since_that_filters_history_to_empty_names_the_plural_kinds(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"since": "2099-01-01"})
+    assert result["facts"] == []
+    assert "no_clinical_records" not in result
+    assert "conditions" in result["kinds_available"]
+    assert "condition," not in result["note"] and "conditions" in result["note"]
+
+
+def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"start_date": "2099-01-01"})
+    assert result["measurements"] == []
+    assert "No clinician-measured vitals" in result["note"]
+    assert "pulse" in result["note"]
+
+
+@pytest.fixture
+def labs_only_ctx(tmp_path):
+    """An index holding FHIR labs and note references and no facts or vitals.
+
+    The shape C1 was reproduced on: a health system that shared labs and
+    notes but no problem list. Nothing on this path is a switch the person
+    has to have set."""
+    from health_agent.ingest import fhir
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    import shutil
+    root = tmp_path / "apple_health_export"
+    shutil.copytree(FIXTURES / "clinical-records", root / "clinical-records")
+    marker = next((root / "clinical-records").glob("*.json"))
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    fhir.ingest_clinical(
+        conn, root, source_file_id=sid,
+        skip=frozenset({"vitals", "conditions", "medications", "allergies",
+                        "immunizations", "procedures"}))
+    conn.commit()
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+    conn.close()
+
+
+def test_clinical_history_with_labs_but_no_facts_does_not_claim_emptiness(
+        labs_only_ctx):
+    result = tools.dispatch(labs_only_ctx, "get_clinical_history", {})
+    assert result["facts"] == []
+    assert "no_clinical_records" not in result
+    assert result["clinical_records_held"]["lab values"] >= 1
+    assert "lab values" in result["note"]
+    assert "holds no clinical records" not in result["note"]
+
+
+def test_clinical_vitals_with_labs_but_no_vitals_does_not_claim_emptiness(
+        labs_only_ctx):
+    result = tools.dispatch(labs_only_ctx, "get_clinical_vitals", {})
+    assert result["measurements"] == []
+    assert "no_clinical_records" not in result
+    assert result["clinical_records_held"]["lab values"] >= 1
+    assert "lab values" in result["note"]
+
+
+def test_data_inventory_lists_labs_and_notes_when_no_facts_exist(labs_only_ctx):
+    clinical = tools.data_inventory(labs_only_ctx.conn)["clinical"]
+    assert clinical["lab_values"] >= 1
+    assert clinical["note_references"] >= 1
+    assert clinical["date_range"][0] and clinical["date_range"][1]
+
+
+def test_vitals_truncation_is_reported_at_the_limit_that_actually_ran(tmp_path):
+    """More readings than the default limit: the flag has to fire, or the
+    model describes a slice of the record as the record."""
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    doc = conn.execute(
+        "INSERT INTO document(source_file_id, path, kind, page_count, "
+        "extraction, ingested_at) VALUES(?,'clinical-records/v.json','fhir',"
+        "0,'none','2026-10-21')", (sid,)).lastrowid
+    for i in range(150):
+        day = f"2026-01-{i % 28 + 1:02d}"
+        conn.execute(
+            "INSERT INTO clinical_vital(document_id, metric, metric_key, "
+            "value_num, unit, measured_at, local_date, dedup_key) "
+            "VALUES(?,'Pulse','pulse',?,'bpm',?,?,?)",
+            (doc, 60 + i % 20, f"{day}T09:0{i % 10}:00", day, f"v{i}".encode()))
+    conn.commit()
+    ctx_ = tools.ToolContext(conn=conn, vector_path=tmp_path / "v")
+
+    result = tools.dispatch(ctx_, "get_clinical_vitals", {})
+    assert len(result["measurements"]) == 100
+    assert result["truncated"] is True
+    assert "150" in result["truncation_note"]
+
+    narrow = tools.dispatch(ctx_, "get_clinical_vitals", {"limit": 10})
+    assert narrow["truncated"] is True
+    whole = tools.dispatch(ctx_, "get_clinical_vitals", {"limit": 200})
+    assert len(whole["measurements"]) == 150
+    assert "truncated" not in whole
+    conn.close()
+
+
+def test_a_metric_miss_names_the_metric(clinical_ctx):
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                            {"metric": "pulse", "start_date": "2099-01-01"})
+    assert "clinician-measured pulse" in result["note"]
+
+
+def test_vitals_absence_distinguishes_no_vitals_from_no_records(tmp_path, clinical_ctx):
+    conn = clinical_ctx.conn
+    conn.execute("DELETE FROM clinical_vital")
+    result = tools.dispatch(clinical_ctx, "get_clinical_vitals", {})
+    assert "no_clinical_records" not in result
+    assert "but no clinician-measured vitals" in result["note"]
+
+
+def test_disagreement_note_skips_dates_not_in_the_payload():
+    d = ({"collected_date": "2020-01-01",
+          "reported": [{"value": 1.0, "unit": "x", "sources": ["pdf"]},
+                       {"value": 2.0, "unit": "x", "sources": ["fhir"]}]},)
+    assert tools._source_disagreement_note(d, {"2021-01-01"}) is None
+    assert "2020-01-01" in tools._source_disagreement_note(d, {"2020-01-01"})

@@ -221,6 +221,69 @@ Both halves of the index are generated and disposable. `health-agent reset`
 deletes them and `ingest` rebuilds from your source files. Override locations
 with `--data-dir`, `--index`, or `$HEALTH_AGENT_DATA_DIR`.
 
+## Clinical records
+
+An Apple Health export has two halves. The first is `export.xml`, the sensor
+and workout data. The second is a `clinical-records/` folder beside it, with
+one FHIR JSON file per record that a connected health system sent to the
+Health app. `health-agent ingest` reads both when you point it at the export.
+
+The parser reads these resources.
+
+- **Laboratory observations** go into the same lab store as your PDFs, with
+  the reference range the record prints. The agent reports a flag only when
+  the record carries one.
+- **Vital-sign and imaging observations** are stored as clinician-measured
+  vitals. They stay separate from your watch's series.
+- **Conditions, medications, allergies, immunizations and procedures** are
+  stored as the health system recorded them, with status and dates.
+- **Clinical notes** (`DocumentReference` and `DiagnosticReport`) are stored as
+  references with a title, a date and a type. The note text is not available.
+  Those resources carry only a URL to an attachment, the export does not
+  include the attachment, and the tool never fetches it.
+
+Duplicate records that differ only in resource id (the same medication or
+vaccine filed twice) are collapsed when they are stored, so the index holds one
+row. A lab value reported by both a PDF and the clinical records is collapsed
+on read instead, which is where the two sources meet. The `Patient` resource, and every
+subject, encounter and performer reference, is dropped when the file is
+parsed and never reaches the database.
+
+Two switches control what is read.
+
+```bash
+health-agent ingest ~/Downloads/export.zip --no-clinical                # skip the folder
+health-agent ingest ~/Downloads/export.zip --skip-clinical notes,labs   # skip named kinds
+```
+
+The kinds are `labs`, `vitals`, `conditions`, `medications`, `allergies`,
+`immunizations`, `procedures` and `notes`. Two commands show the result.
+`ask` reaches the same data through the `get_clinical_history` and
+`get_clinical_vitals` tools.
+
+```bash
+health-agent clinical [--kind medications]    # conditions, medications and the rest
+health-agent vitals [--metric pulse]          # what a clinician measured, newest first
+health-agent documents --kind fhir            # the resources themselves, one row each
+```
+
+`health-agent check` reports whether the export you ingested had a
+clinical-records folder, and names the switch when one was there and was
+skipped.
+
+The tool reports what these records say. Interpreting a condition or a
+prescription, and deciding what to do about one, is left to you and your
+clinician.
+
+On one real export, 3,568 clinical files in 236 MB spanning 2018 to 2025, this
+took 0.2 seconds once the HealthKit XML was parsed, and none were unreadable.
+2,984 of the files were stored as clinician vitals (2,964 vital signs and 20
+imaging). Notes were 245, labs 117, and the remaining 221 files became 218
+conditions, medications and other facts after duplicates collapsed; the one
+`Patient` resource was not ingested. The
+[design spec](docs/superpowers/specs/2026-10-21-fhir-clinical-records-design.md)
+has the full breakdown.
+
 ## Measured performance
 
 Numbers from an actual Apple Health export. Latency for

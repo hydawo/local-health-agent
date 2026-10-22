@@ -23,6 +23,15 @@ import re
 from dataclasses import dataclass, field
 
 
+_SLUG = re.compile(r"[^a-z0-9]+")
+
+
+def slug(text: str | None) -> str:
+    """The one key form for a free-text name, used when a record is stored and
+    when it is looked up, so the two cannot drift apart."""
+    return _SLUG.sub("_", (text or "").strip().lower()).strip("_") or "unknown"
+
+
 @dataclass(frozen=True)
 class Analyte:
     key: str
@@ -247,6 +256,60 @@ def resolve_key(raw: str) -> tuple[str, str | None]:
     if hit is not None:
         return hit.key, hit.panel
     return slugify(raw), None
+
+
+# LOINC codes for the analytes this registry already knows, so a lab that
+# arrives from a health system resolves by code rather than by whatever
+# string the system prints. Epic writes "CALCULATED LDL" and "CALC MEAN
+# BLD GLUC"; the codes do not vary. This is not a LOINC database: every
+# entry here must point at an analyte the registry above defines, and a
+# test enforces that.
+LOINC_TO_KEY: dict[str, str] = {
+    "2093-3": "cholesterol_total",   # Cholesterol, total
+    "2085-9": "hdl",                 # HDL
+    "13457-7": "ldl",                # LDL, calculated
+    "18262-6": "ldl",                # LDL, direct
+    "2571-8": "triglycerides",       # Triglycerides
+    "4548-4": "hba1c",               # Hemoglobin A1c
+    "2345-7": "glucose",             # Glucose, serum
+    "2339-0": "glucose",             # Glucose, blood
+    "2160-0": "creatinine",          # Creatinine, serum
+    "33914-3": "egfr",               # eGFR (MDRD)
+    "62238-1": "egfr",               # eGFR (CKD-EPI)
+    "3094-0": "bun",                 # Urea nitrogen
+    "2951-2": "sodium",              # Sodium
+    "2823-3": "potassium",           # Potassium
+    "2075-0": "chloride",            # Chloride
+    "17861-6": "calcium",            # Calcium
+    "1751-7": "albumin",             # Albumin
+    "2885-2": "protein_total",       # Protein, total
+    "1975-2": "bilirubin_total",     # Bilirubin, total
+    "6768-6": "alk_phos",            # Alkaline phosphatase
+    "1742-6": "alt",                 # ALT
+    "1920-8": "ast",                 # AST
+    "3016-3": "tsh",                 # TSH
+    "14635-7": "vitamin_d",          # 25-OH vitamin D
+    "1988-5": "crp",                 # C-reactive protein (standard assay)
+    "30522-7": "hs_crp",             # C-reactive protein, high sensitivity
+    "2276-4": "ferritin",            # Ferritin
+}
+_LOINC_SYSTEM = "http://loinc.org"
+
+
+def resolve_coded(codings, name: str) -> tuple[str, str | None]:
+    """(key, panel) for a coded result: LOINC first, printed name second.
+
+    Falls through to `resolve_key`, which slugs an unknown analyte rather
+    than dropping it, so a lab this registry has never seen is still
+    stored and still queryable.
+    """
+    for system, code in codings or ():
+        if system == _LOINC_SYSTEM:
+            key = LOINC_TO_KEY.get(code)
+            if key:
+                hit = _BY_ALIAS.get(key)
+                return key, (hit.panel if hit else None)
+    return resolve_key(name)
 
 
 def label_for(key: str) -> str:

@@ -158,6 +158,8 @@ def test_query_before_ingest_is_actionable(tmp_path, capsys):
 # Records, labs and search (milestone 2)
 # --------------------------------------------------------------------------- #
 
+from health_agent.ingest import fhir  # noqa: E402
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -183,6 +185,283 @@ def cli_records(tmp_path, capsys):
     return run
 
 
+@pytest.fixture
+def cli_no_clinical(tmp_path, capsys):
+    """An index loaded with every fixture source except clinical records."""
+    index = tmp_path / "health.db"
+
+    def run(*args: str) -> tuple[int, str]:
+        code = main(["--index", str(index), *args])
+        captured = capsys.readouterr()
+        run.err = captured.err
+        return code, captured.out
+
+    run.err = ""
+    run("ingest", str(FIXTURES), "--no-ocr", "--no-embed", "--no-clinical")
+    capsys.readouterr()
+    return run
+
+
+def _partial(tmp_path, capsys, *skip):
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", ",".join(skip)])
+    capsys.readouterr()
+
+    def run(*args):
+        code = main(["--index", str(index), *args])
+        return code, capsys.readouterr().out
+    return run
+
+
+_FACTS = ("conditions", "medications", "allergies", "immunizations",
+          "procedures")
+
+
+def test_clinical_with_vitals_but_no_facts_names_what_is_held(tmp_path, capsys):
+    run = _partial(tmp_path, capsys, *_FACTS)
+    code, out = run("clinical")
+    assert code == 0
+    assert "No clinical facts" in out
+    assert "3 clinician vitals" in out and "2 note references" in out
+    assert "No clinical records in the index" not in out
+
+
+def test_vitals_with_facts_but_no_vitals_names_what_is_held(tmp_path, capsys):
+    run = _partial(tmp_path, capsys, "vitals")
+    code, out = run("vitals")
+    assert code == 0
+    assert "No clinician-measured vitals" in out
+    assert "1 medications" in out and "1 conditions" in out
+    assert "3 lab values" in out
+
+
+def test_empty_messages_state_what_the_index_holds(cli_no_clinical):
+    for cmd in ("clinical", "vitals"):
+        code, out = cli_no_clinical(cmd)
+        assert code == 0
+        assert "HealthKit records" in out
+        assert "clinical-records" in out
+
+
+def test_vitals_miss_words_the_range_only_when_one_was_given(cli_records):
+    _, out = cli_records("vitals", "--metric", "nonesuch")
+    assert "date range" not in out and "The index holds" in out
+    _, out = cli_records("vitals", "--metric", "pulse", "--start", "2030-01-01")
+    assert "date range" in out
+
+
+def test_vitals_says_when_limit_cut_the_result(cli_records):
+    _, out = cli_records("vitals", "--metric", "pulse", "--limit", "1")
+    assert "Stopped at --limit 1" in out
+    _, out = cli_records("vitals", "--metric", "pulse", "--limit", "5")
+    assert "Stopped at --limit" not in out
+
+
+def test_clinical_lists_facts_as_a_table(cli_records):
+    code, out = cli_records("clinical")
+    assert code == 0
+    assert "ibuprofen 600 MG tablet" in out
+    assert "Left anterior cruciate ligament tear" in out
+    assert "Take 1 tablet" in out
+
+
+def test_clinical_filters_by_kind(cli_records):
+    code, out = cli_records("clinical", "--kind", "conditions")
+    assert code == 0
+    assert "Left anterior cruciate ligament tear" in out
+    assert "ibuprofen" not in out
+
+
+def test_clinical_rejects_an_unknown_kind(cli_records):
+    code, out = cli_records("clinical", "--kind", "diagnoses")
+    assert code == 2
+    assert "conditions" in cli_records.err
+
+
+def test_clinical_says_so_when_there_are_none(cli_no_clinical):
+    code, out = cli_no_clinical("clinical")
+    assert code == 0
+    assert "no clinical records" in out.lower()
+    assert "clinical-records" in out
+
+
+def test_vitals_lists_clinician_measurements(cli_records):
+    code, out = cli_records("vitals", "--metric", "pulse")
+    assert code == 0
+    assert "72" in out and "bpm" in out
+    assert "2023-09-15" in out
+
+
+def test_vitals_without_a_metric_lists_what_exists(cli_records):
+    code, out = cli_records("vitals")
+    assert code == 0
+    assert "pulse" in out.lower() and "spo2" in out.lower()
+
+
+def test_vitals_says_so_when_there_are_none(cli_no_clinical):
+    code, out = cli_no_clinical("vitals")
+    assert code == 0
+    assert "no clinician-measured vitals" in out.lower()
+    assert "clinical-records" in out
+
+
+def test_stats_counts_clinical_records(cli_records):
+    code, out = cli_records("stats")
+    assert code == 0
+    assert "clinical records" in out.lower()
+    import re
+    for label, n in (("lab values", 3), ("clinician vitals", 3),
+                     ("conditions", 1), ("medications", 1), ("allergies", 1),
+                     ("immunizations", 1), ("procedures", 1),
+                     ("note references", 2)):
+        block = out.split("Clinical records (")[1]
+        assert re.search(rf"^\s+{label}\s+{n}\b", block, re.M), label
+
+
+def test_stats_clinical_block_gives_per_kind_counts_not_a_document_total(
+        cli_records):
+    """Childless document rows (dedupe collapses, note references) make a raw
+    clinical document total misleading; the block reports per-kind counts."""
+    code, out = cli_records("stats")
+    block = out.split("Clinical records (")[1].split("\n\n")[0]
+    assert "documents" not in block.lower()
+    assert "lab values" in block and "clinician vitals" in block
+
+
+def test_stats_omits_clinical_block_when_none(cli_no_clinical):
+    code, out = cli_no_clinical("stats")
+    assert code == 0
+    assert "clinical records" not in out.lower()
+
+
+def test_check_reports_clinical_records(cli_records, monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    code, out = cli_records("check")
+    assert ("clinical records: 3 lab values, 3 clinician vitals, 1 conditions, "
+            "1 medications, 1 allergies, 1 immunizations, 1 procedures, "
+            "2 note references") in out
+
+
+def test_check_names_the_switch_that_skipped_the_folder(cli_no_clinical,
+                                                        monkeypatch):
+    """Spec §9: `check` reports whether the ingested export had clinical
+    records, and names the switch when a folder was there and was skipped.
+    Silence was the old behaviour and it is the one answer the reader cannot
+    act on: --no-clinical and "your health system sent nothing" looked
+    identical."""
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    code, out = cli_no_clinical("check")
+    assert "clinical records: a clinical-records folder was in the export "\
+           "and was skipped by --no-clinical" in out
+
+
+def test_check_reports_an_export_with_no_clinical_folder(tmp_path, capsys,
+                                                         monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    export = tmp_path / "export.xml"
+    export.write_bytes((FIXTURES / "export.xml").read_bytes())
+    main(["--index", str(index), "ingest", str(export), "--no-embed"])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert ("clinical records: none; the ingested export had no "
+            "clinical-records folder." in out)
+
+
+def test_check_names_the_kinds_left_out_by_skip_clinical(tmp_path, capsys,
+                                                         monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", "vitals,conditions"])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert "clinical records: 3 lab values" in out
+    assert "left out by --skip-clinical conditions,vitals" in out
+
+
+def test_check_reports_a_folder_skipped_in_full(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    every = ",".join(("labs", "vitals", "conditions", "medications",
+                      "allergies", "immunizations", "procedures", "notes"))
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", every])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert "was skipped by --skip-clinical" in out
+
+
+def test_clinical_table_stays_within_120_columns_for_long_rows(tmp_path,
+                                                               capsys):
+    from health_agent.cli import _CLINICAL_DETAIL_W, _CLINICAL_NAME_W
+    from health_agent.store import sqlite_schema as ss
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed"])
+    capsys.readouterr()
+    conn = ss.connect(index)
+    long_name = "Bucket-handle tear of lateral meniscus of left knee as currently documented"
+    long_detail = "Take 1 tablet (10 mg total) by mouth 2 (two) times a day with food " * 2
+    conn.execute("UPDATE clinical_fact SET name = ?, detail_text = ? "
+                 "WHERE kind = 'medication'", (long_name, long_detail))
+    long_status = "entered-in-error-and-then-some"
+    conn.execute("UPDATE clinical_fact SET status = ? WHERE kind = 'condition'",
+                 (long_status,))
+    conn.commit()
+    conn.close()
+    code = main(["--index", str(index), "clinical"])
+    out = capsys.readouterr().out
+    table = out.split("\n\n")[0].splitlines()
+    assert code == 0
+    assert max(len(line) for line in table) <= 120
+    row = next(line for line in table if line.startswith("medication"))
+    assert "..." in row
+    assert long_name not in row
+    cond = next(line for line in table if line.startswith("condition"))
+    assert long_status not in cond and "..." in cond
+    assert _CLINICAL_NAME_W < len(long_name) and _CLINICAL_DETAIL_W < len(long_detail)
+
+
+@pytest.mark.parametrize("stored", [
+    "clinical-records/Observation-vital-pulse.json",
+    "apple_health_export/clinical-records/Observation-vital-pulse.json",
+    "clinical-records\\Observation-vital-pulse.json",
+    "Observation-vital-pulse.json",
+])
+def test_vitals_citation_is_the_basename(tmp_path, capsys, stored):
+    from health_agent.store import sqlite_schema as ss
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed"])
+    capsys.readouterr()
+    conn = ss.connect(index)
+    conn.execute("UPDATE document SET path = ? WHERE id IN "
+                 "(SELECT document_id FROM clinical_vital "
+                 "WHERE metric_key = 'pulse')", (stored,))
+    conn.commit()
+    conn.close()
+    code = main(["--index", str(index), "vitals", "--metric", "pulse"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Observation-vital-pulse.json" in out
+    assert "clinical-records" not in out and "apple_health_export" not in out
+
+
 def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):
     index = tmp_path / "health.db"
     code = main(["--index", str(index), "ingest", str(FIXTURES),
@@ -196,7 +475,7 @@ def test_ingest_reports_document_and_lab_counts(tmp_path, capsys):
 def test_stats_includes_documents(cli_records):
     code, out = cli_records("stats")
     assert code == 0
-    assert "lab values         39" in out
+    assert "lab values         42" in out
 
 
 def test_documents_listing(cli_records):
@@ -204,6 +483,36 @@ def test_documents_listing(cli_records):
     assert code == 0
     assert "labs_2026-03-10.pdf" in out
     assert "scan_2025-03-04.pdf" in out
+
+
+def test_documents_listing_keeps_its_meaning_and_names_the_fhir_switch(
+        cli_records):
+    """I5: the records surface is the PDFs and notes a person dropped in. The
+    export's clinical-records resources are documents too, and dumping them
+    here turned a 3-row listing into thousands with no way to filter."""
+    code, out = cli_records("documents")
+    assert code == 0
+    assert "Observation-lab-chol.json" not in out
+    assert "documents --kind fhir" in out
+
+
+def test_documents_kind_fhir_lists_the_clinical_resources(cli_records):
+    code, out = cli_records("documents", "--kind", "fhir")
+    assert code == 0
+    assert "Observation-lab-chol.json" in out
+    assert "labs_2026-03-10.pdf" not in out
+
+
+def test_documents_rejects_an_unknown_kind(cli_records):
+    code, _ = cli_records("documents", "--kind", "nope")
+    assert code == 2
+
+
+def test_documents_kind_fhir_reports_absence_as_coverage(cli_no_clinical):
+    code, out = cli_no_clinical("documents", "--kind", "fhir")
+    assert code == 1
+    assert "No clinical-records resources in this index" in out
+    assert "HealthKit records" in out
 
 
 def test_labs_listing(cli_records):
@@ -217,7 +526,7 @@ def test_lab_trend_shows_values_with_citations(cli_records):
     assert code == 0
     assert "128" in out and "112" in out
     assert "labs_2025-09-12.pdf, p.1" in out
-    assert "down 16" in out
+    assert "down 6" in out
 
 
 def test_lab_trend_marks_out_of_range(cli_records):
@@ -244,8 +553,11 @@ def test_lab_trend_json(cli_records):
     payload = json.loads(out)
     assert code == 0
     assert payload["analyte_key"] == "hba1c"
-    assert payload["points"][0]["out_of_range"] is True
-    assert payload["points"][0]["page_no"] == 1
+    # points[0] is now the clinical-records text-only result (2023-05-02);
+    # the PDF-derived 5.7 % is the second point.
+    assert payload["points"][0]["value_text"] == "see comment"
+    assert payload["points"][1]["out_of_range"] is True
+    assert payload["points"][1]["page_no"] == 1
 
 
 def test_search_falls_back_to_keywords_and_says_so(cli_records):
@@ -1519,3 +1831,89 @@ def test_visit_prep_without_an_index(tmp_path, capsys):
     code = main(["--index", str(tmp_path / "none.db"), "visit-prep"])
     assert code == 2
     assert "ingest" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Clinical records (FHIR) in an Apple Health export
+# --------------------------------------------------------------------------- #
+
+def _clinical_zip(tmp_path: Path) -> Path:
+    import zipfile
+    target = tmp_path / "export.zip"
+    with zipfile.ZipFile(target, "w") as archive:
+        archive.writestr("apple_health_export/export.xml",
+                         '<?xml version="1.0"?><HealthData locale="en_US">'
+                         '<ExportDate value="2026-10-21 09:00:00 -0400"/></HealthData>')
+        for member in sorted((FIXTURES / "clinical-records").glob("*.json")):
+            archive.writestr(f"apple_health_export/clinical-records/{member.name}",
+                             member.read_bytes())
+    return target
+
+
+def test_ingest_reports_clinical_records(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "clinical records    " in out
+    assert "3 labs" in out and "3 vitals" in out and "1 conditions" in out
+    assert "1 unreadable" in out
+
+
+def test_no_clinical_omits_the_clinical_line(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed", "--no-clinical"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "clinical records" not in out
+
+
+def test_skip_clinical_rejects_an_unknown_kind(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed",
+                 "--skip-clinical", "labs,bogus"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "bogus" in err
+    for kind in fhir.CLINICAL_KINDS:
+        assert kind in err
+
+
+def test_skip_clinical_skips_the_named_kind(tmp_path, capsys):
+    code = main(["--index", str(tmp_path / "h.db"), "ingest",
+                 str(_clinical_zip(tmp_path)), "--no-embed",
+                 "--skip-clinical", "labs"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "labs" not in out.split("clinical records", 1)[1].split("\n")[0]
+    assert "skipped by --skip-clinical" in out
+
+
+def test_clinical_records_ingest_when_the_export_is_unchanged(tmp_path, capsys):
+    """The upgrade path: an export ingested before clinical support existed
+    (or with --no-clinical) gets its clinical records on a plain re-run,
+    without --force, even though HealthKit skips it as unchanged."""
+    index = tmp_path / "h.db"
+    zip_path = _clinical_zip(tmp_path)
+    assert main(["--index", str(index), "ingest", str(zip_path),
+                 "--no-embed", "--no-clinical"]) == 0
+    capsys.readouterr()
+
+    from health_agent.store import sqlite_schema
+    conn = sqlite_schema.connect(index)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+    assert main(["--index", str(index), "ingest", str(zip_path),
+                 "--no-embed"]) == 0
+    out = capsys.readouterr().out
+    assert "already ingested and unchanged" in out
+    assert "clinical records    " in out and "3 labs" in out
+    conn = sqlite_schema.connect(index)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM lab_result").fetchone()[0] == 3
+    finally:
+        conn.close()

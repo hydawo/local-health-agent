@@ -1,12 +1,12 @@
 """The agent's tool contract.
 
-Three tools, matching plan §4: `query_healthkit`, `search_records`,
+Seven tools; the first three are from plan §4: `query_healthkit`, `search_records`,
 `get_lab_trend`. Each is a thin adapter over `store/queries.py` — the same
 functions the CLI calls — so the model and `health-agent metric` cannot report
 different numbers for the same question. A tool that reimplemented its own
 aggregation would be a second source of truth, and the two would drift.
 
-**Context budget (plan §4).** A single question can touch all three tools, and
+**Context budget (plan §4).** A single question can touch several tools, and
 raw results are unbounded: a daily step series over three years is 1,100 points,
 and a vector search can return whole pages of a PDF. Every tool here caps what it
 returns *to the model*, separately from what it queried, and says so in the
@@ -46,6 +46,9 @@ log = get_logger("agent.tools")
 MAX_SERIES_POINTS = 60
 # Lab results per analyte. Someone with a decade of annual panels has ~10.
 MAX_LAB_POINTS = 40
+# Clinical facts and clinician-measured vitals returned per call.
+MAX_CLINICAL_FACTS = 200
+MAX_CLINICAL_VITALS = 200
 # Search snippets, and characters per snippet. Five chunks of ~600 chars is
 # roughly 800 tokens, which leaves room for the other tools in one turn.
 MAX_SEARCH_RESULTS = 8
@@ -340,6 +343,29 @@ MAX_BATCH_ANALYTES = 30
 MAX_BATCH_POINTS = 6
 
 
+def _source_disagreement_note(disagreements, dates=None) -> str | None:
+    """What each source reported on each date they did not agree, as a note.
+
+    Reported, never resolved: the model is told to say what each source said
+    and not to pick one."""
+    if dates is not None:
+        disagreements = [d for d in disagreements if d["collected_date"] in dates]
+    if not disagreements:
+        return None
+    parts = []
+    for d in disagreements:
+        said = "; ".join(
+            f"{r['value']}{' ' + r['unit'] if r.get('unit') else ''} "
+            f"from {' and '.join(r['sources'])}"
+            for r in d["reported"])
+        parts.append(f"{d['collected_date']}: {said}")
+    return (
+        "Sources reported different results for the same draw ("
+        + " | ".join(parts) + "). Say what each source reported, with its "
+        "unit. Do not choose between them or call either one correct."
+    )
+
+
 def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
     batch = args.get("analytes")
     if isinstance(batch, str):
@@ -386,11 +412,12 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
             {
                 "collected_date": p.collected_date,
                 "value": p.value_num if p.value_num is not None else p.value_text,
-                "unit": p.unit,
+                "unit": p.reported_unit,
                 "reference_range": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
                 "citation": p.citation,
+                "source": p.source,
                 **({"via_ocr": True} if p.via_ocr else {}),
             }
             for p in points
@@ -410,6 +437,10 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
             "digits, so reference ranges especially may be wrong. Say that these "
             "should be checked against the original report."
         )
+    note = _source_disagreement_note(
+        trend.disagreements, {p.collected_date for p in points})
+    if note:
+        payload["source_disagreement"] = note
     return payload
 
 
@@ -441,15 +472,18 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
                 {
                     "collected_date": p.collected_date,
                     "value": p.value_num if p.value_num is not None else p.value_text,
-                    "unit": p.unit,
+                    "unit": p.reported_unit,
                     "reference_range": p.ref_text,
                     "flag": p.flag,
                     "out_of_range": p.out_of_range,
                     "citation": p.citation,
+                    "source": p.source,
                     **({"via_ocr": True} if p.via_ocr else {}),
                 }
                 for p in points
             ],
+            **({"source_disagreement": n} if (n := _source_disagreement_note(
+                trend.disagreements, {p.collected_date for p in points})) else {}),
         }
         latest = trend.points[-1]
         if latest.out_of_range:
@@ -694,6 +728,151 @@ def _literature_hits(ctx: ToolContext, query: str, limit: int,
 
 
 # --------------------------------------------------------------------------- #
+# Clinical records (FHIR)
+# --------------------------------------------------------------------------- #
+
+# The `kind` argument is plural; rows store the singular. The model sees the
+# plural everywhere (argument, payload, inventory) so it sends back what it read.
+_FACT_KIND_ARG = {
+    "conditions": "condition", "medications": "medication",
+    "allergies": "allergy", "immunizations": "immunization",
+    "procedures": "procedure",
+}
+# Public: the CLI takes the same plural vocabulary.
+FACT_KIND_ARG = _FACT_KIND_ARG
+_FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
+
+def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
+    kind = (args.get("kind") or "").strip().lower()
+    row_kind = _FACT_KIND_ARG.get(kind)
+    if kind and row_kind is None:
+        return {"error": f"kind must be one of {sorted(_FACT_KIND_ARG)}"}
+    # One source for "what does this index hold clinically": facts are one of
+    # three tables, and deciding emptiness from `clinical_fact` alone told the
+    # person their own labs and note references did not exist.
+    holdings = queries.clinical_holdings(ctx.conn)
+    coverage = holdings["facts"]
+    facts = queries.clinical_facts(ctx.conn, kind=row_kind,
+                                   since=args.get("since"),
+                                   limit=MAX_CLINICAL_FACTS)
+    payload: dict = {
+        "facts": facts,
+        "kinds_available": {_FACT_KIND_PLURAL.get(k, k): v["count"]
+                            for k, v in coverage.items()},
+    }
+    if not holdings["any"]:
+        payload["no_clinical_records"] = True
+        payload["note"] = (
+            "This index holds no clinical records. They come from the "
+            "clinical-records folder of an Apple Health export, which this "
+            "person has either not ingested or skipped. Say that rather than "
+            "answering from anything else."
+        )
+        return payload
+    if not coverage:
+        payload["clinical_records_held"] = {
+            label: n for label, n, _ in holdings["labels"]}
+        payload["note"] = (
+            "No clinical facts (conditions, medications, allergies, "
+            "immunizations or procedures) in this index. It does hold "
+            + queries.clinical_holdings_phrase(
+                ctx.conn, leave_out=frozenset(_FACT_KIND_ARG),
+                holdings=holdings)
+            + ". Say what is absent and what is held, and do not say this "
+              "person has no clinical records."
+        )
+        return payload
+    if not facts:
+        payload["note"] = (
+            f"No {kind or 'clinical'} records in the requested range. The "
+            f"index does hold {', '.join(payload['kinds_available'])}. Say "
+            f"what is absent."
+        )
+        return payload
+    if len(facts) >= MAX_CLINICAL_FACTS:
+        payload["truncated"] = True
+    payload["note"] = (
+        "These are what the person's health systems recorded, not what they "
+        "told you. State them as records with their dates, cite the file, and "
+        "do not say whether a regimen or a diagnosis is correct."
+    )
+    return payload
+
+
+def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
+    holdings = queries.clinical_holdings(ctx.conn)
+    metrics_available = holdings["vital_metrics"]
+    if not metrics_available:
+        # "Nothing at all" is decided from every clinical table, not from
+        # facts alone: labs and note references are clinical records too.
+        if holdings["any"]:
+            return {"measurements": [],
+                    "clinical_records_held": {
+                        label: n for label, n, _ in holdings["labels"]},
+                    "note": ("This index holds clinical records but no "
+                             "clinician-measured vitals among them. It does "
+                             "hold "
+                             + queries.clinical_holdings_phrase(
+                                 ctx.conn,
+                                 leave_out=frozenset({"clinician vitals"}),
+                                 holdings=holdings)
+                             + ". Say so, and do not substitute watch data.")}
+        return {"measurements": [], "no_clinical_records": True,
+                "note": ("This index holds no clinical records at all. They "
+                         "come from the clinical-records folder of an Apple "
+                         "Health export, which this person has either not "
+                         "ingested or skipped. Say so.")}
+    metric = args.get("metric")
+    try:
+        limit = int(args.get("limit") or 100)
+    except (TypeError, ValueError):
+        limit = 100
+    # The flag has to be compared against the limit that actually ran. Held
+    # against MAX_CLINICAL_VITALS it was unreachable for every default call,
+    # so a 100-row slice of 2,984 readings looked like the whole set.
+    effective_limit = max(1, min(limit, MAX_CLINICAL_VITALS))
+    rows = queries.clinical_vitals(
+        ctx.conn, metric=metric, start=args.get("start_date"),
+        end=args.get("end_date"), limit=effective_limit)
+    payload: dict = {
+        "measurements": [
+            {"metric": r["metric"],
+             "value": r["value_num"] if r["value_num"] is not None else r["value_text"],
+             "unit": r["unit"], "measured_at": r["measured_at"],
+             "date": r["local_date"], "citation": r["citation"]}
+            for r in rows],
+        "metrics_available": metrics_available,
+        "note": ("These were measured by a clinician at an encounter, not by "
+                 "this person's watch. Wearable series come from "
+                 "query_healthkit and the two must not be mixed or compared "
+                 "as if they were one series."),
+    }
+    if len(rows) >= effective_limit:
+        payload["truncated"] = True
+        window = (f"{rows[-1]['local_date']} to {rows[0]['local_date']}"
+                  if rows[0]["local_date"] and rows[-1]["local_date"]
+                  else "the most recent readings")
+        held = sum(m["n"] for m in metrics_available
+                   if metric is None or m["metric_key"] == labs.slug(metric))
+        payload["truncation_note"] = (
+            f"Only the {len(rows)} most recent readings were read, covering "
+            f"{window}, out of {held} this index holds for that metric "
+            f"selection. Say which window you looked at rather than "
+            f"describing it as the whole record.")
+    if not rows:
+        first = min((m["first"] for m in metrics_available if m["first"]),
+                    default=None)
+        last = max((m["last"] for m in metrics_available if m["last"]),
+                   default=None)
+        what = f"clinician-measured {metric}" if metric else "clinician-measured vitals"
+        payload["note"] = (
+            f"No {what} in the requested range. The index does hold "
+            f"{', '.join(m['metric_key'] for m in metrics_available)}, "
+            f"from {first} to {last}. Say what is absent.")
+    return payload
+
+
+# --------------------------------------------------------------------------- #
 # Registry
 # --------------------------------------------------------------------------- #
 
@@ -872,6 +1051,63 @@ TOOLS: tuple[Tool, ...] = (
         },
         handler=_search_medical_literature,
     ),
+    Tool(
+        name="get_clinical_history",
+        description=(
+            "What this person's health systems recorded about them: "
+            "diagnoses, prescriptions, allergies, immunizations, and "
+            "procedures. The data comes from the clinical-records folder of "
+            "their Apple Health export, so it is the health system's record, "
+            "not what the person typed and not what a watch measured. Use for "
+            "questions about conditions, medications, allergies, vaccines, or "
+            "past procedures. Returns records with dates and the file each "
+            "came from. Lab values are in get_lab_trend and vitals in "
+            "get_clinical_vitals."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": sorted(_FACT_KIND_ARG),
+                    "description": (
+                        "Restrict to one kind of record. Omit to return all "
+                        "kinds."
+                    ),
+                },
+                "since": {"type": "string",
+                          "description": "YYYY-MM-DD. Only records from then on."},
+            },
+        },
+        handler=_get_clinical_history,
+    ),
+    Tool(
+        name="get_clinical_vitals",
+        description=(
+            "Vital signs a clinician measured at an encounter (blood "
+            "pressure, pulse, oxygen saturation, temperature, weight, and "
+            "similar), as recorded by this person's health systems and "
+            "delivered through their Apple Health export. These are not "
+            "wearable readings: use query_healthkit for anything a watch or "
+            "phone recorded, and never merge the two into one series. "
+            "Without a metric it returns the most recent measurements of every "
+            "vital together with a list of which vitals exist."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "metric": {"type": "string",
+                           "description": ("A vital name or key, e.g. pulse, "
+                                           "spo2. Omit to see what exists.")},
+                "start_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD."},
+                "limit": {"type": "integer",
+                          "description": (f"Max measurements, up to "
+                                          f"{MAX_CLINICAL_VITALS}.")},
+            },
+        },
+        handler=_get_clinical_vitals,
+    ),
 )
 
 BY_NAME: dict[str, Tool] = {t.name: t for t in TOOLS}
@@ -932,6 +1168,9 @@ def data_inventory(conn, *, max_metrics: int = 25,
     analytes = [a["analyte_key"] for a in
                 queries.list_analytes(conn, limit=max_analytes)]
     tags = [t["tag"] for t in queries.list_tags(conn, limit=25)]
+    holdings = queries.clinical_holdings(conn)
+    clinical = holdings["facts"]
+    vital_metrics = holdings["vital_metrics"]
 
     return {
         "healthkit": {
@@ -952,5 +1191,22 @@ def data_inventory(conn, *, max_metrics: int = 25,
             "images": notes["images"],
             "date_range": [notes["first"], notes["last"]],
             "tags": tags,
+        },
+        # Records a health system sent back through the export, as distinct
+        # from anything this person typed and from anything their watch
+        # recorded. Named here so the model does not guess whether they exist.
+        # Every clinical kind the index holds, not just the facts: the system
+        # prompt appends "Anything not listed above is not available", so a
+        # block that omitted the labs and note references would turn this into
+        # a false statement about the person's own records.
+        "clinical": {
+            # Plural, matching the `kind` argument get_clinical_history takes.
+            **{_FACT_KIND_PLURAL.get(kind, kind): info["count"]
+               for kind, info in clinical.items()},
+            "lab_values": holdings["labs"],
+            "clinician_vitals": holdings["vitals"],
+            "note_references": holdings["note_references"],
+            "date_range": [holdings["first"], holdings["last"]],
+            "vital_metrics_available": [m["metric_key"] for m in vital_metrics[:25]],
         },
     }
