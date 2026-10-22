@@ -223,8 +223,29 @@ mixed and count/min", which is not true of either side. `unit_mismatch` exists b
 would let two sides measured in different units past as `ok` whenever their
 numbers happened to overlap, and since units are never converted, differing
 units mean the two sides are not the same measurement. It is rendered from a fixed template, the way the visit-prep
-sheet and the literature block are, so the guardrail can be run over the
-rendered text as a test oracle.
+sheet and the literature block are.
+
+**Correction, after review: the guardrail is not a useful oracle here, and an
+earlier draft of this section claimed it was.** Its uncited-claim patterns are
+anchored on clinical markers such as a1c, ldl and glucose; its diagnosis
+patterns are second-person and condition-named; and its refusal patterns run
+only when no tool was used. It holds no pattern for a causal claim, a
+percentage change, a ratio between two spans, or a significance claim, which is
+the whole of what this surface must never say. A reviewer verified that
+`guardrail.check` returns no flags at all on "The event caused a 34.9% rise in
+resting heart rate, a significant and likely permanent change." The real
+controls are therefore the fixed template plus word scans over every verdict's
+rendered text and `because` string. Running the guardrail over the template
+stays as a cheap regression guard against a pattern it may gain later, not as
+evidence about this one.
+
+A second correction: §6 names a `sample_depth` check, the median in-interval
+sample count per side. It is **not implemented**, and reaching it needs
+`workout_series` to propagate `workout_detail`'s own `sample_depth`. The
+capability exists through `get_workouts(detail=True, sample_counts=True)`, so
+nothing is unreachable, but a comparison cannot state T3's "the earlier year's
+rides carry almost no heart-rate samples". Recorded as a known gap rather than
+quietly dropped.
 
 `comparable` never says `significant`, `likely`, `suggests`, or anything about
 cause. Two windows either side of a date are two windows either side of a
