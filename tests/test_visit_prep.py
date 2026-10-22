@@ -297,6 +297,33 @@ def test_fhir_labs_without_a_pdf_are_named_in_looked_at(tmp_path):
     conn.close()
 
 
+def test_the_mixed_pdf_and_fhir_case_does_not_claim_the_values_have_no_pdf(
+        fixture_index):
+    """With PDFs and FHIR labs both present, the line used to read "Of those
+    analytes, N lab value(s) came from your clinical records rather than a
+    PDF". N is a raw row count, so a value a PDF also reported was counted as
+    having no PDF behind it, and analytes and values were mixed in one count.
+    """
+    conn = fixture_index
+    doc = conn.execute(
+        "INSERT INTO document(source_file_id, path, kind, fhir_resource_type, "
+        "page_count, extraction, ingested_at) SELECT source_file_id, "
+        "'clinical-records/Observation-ldl.json','fhir','Observation',0,"
+        "'none','2026-10-21' FROM document LIMIT 1").lastrowid
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, unit, collected_date, raw_line, extracted_by, via_ocr, "
+        "dedup_key) VALUES(?,0,'LDL','ldl',118.0,'mg/dL','2024-11-06','x',"
+        "'fhir',0,?)", (doc, b"mixed-ldl"))
+    conn.commit()
+
+    text = visit_prep.render(visit_prep.gather(conn, window_days=30,
+                                               today=date(2026, 9, 20)))
+    assert "rather than a PDF" not in text
+    assert "Your clinical records contributed 1 lab value(s) as well" in text
+    assert "shown as one point" in text
+
+
 def test_signals_are_ordered_out_of_range_then_near_limit_then_returned_then_shift(fixture_index):
     sheet = visit_prep.gather(fixture_index, window_days=30, today=date(2026, 9, 20))
     kinds = [s.kind for s in sheet.signals]

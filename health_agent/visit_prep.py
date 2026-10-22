@@ -408,8 +408,12 @@ def render(sheet: Sheet) -> str:
     else:
         lines.append("- No lab values in the index")
     if labs["reports"] and clinical_labs:
-        lines.append(f"- Of those analytes, {clinical_labs} lab value(s) came "
-                     f"from your clinical records rather than a PDF")
+        # A raw row count, not a count of points: where a PDF reported the
+        # same result the two collapse into one. Saying "rather than a PDF"
+        # would claim these values have no PDF behind them.
+        lines.append(f"- Your clinical records contributed {clinical_labs} lab "
+                     f"value(s) as well; where a PDF reported the same result, "
+                     f"the two are shown as one point")
     hk = sheet.healthkit
     if hk:
         # Each metric anchors its own pair of windows at its own last day,

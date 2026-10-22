@@ -436,6 +436,19 @@ class LabPoint:
     also_from: tuple[str, ...] = ()  # other sources that reported this same value
 
     @property
+    def reported_unit(self) -> str | None:
+        """The unit, but only when there is a value for it to qualify.
+
+        An invalid `valueQuantity` can carry a unit and no number. Storing the
+        unit is right, since it is the one thing the resource does say, but
+        showing "mg/dL" beside a null value reads as a measurement the lab
+        never made.
+        """
+        if self.value_num is None and self.value_text is None:
+            return None
+        return self.unit
+
+    @property
     def citation(self) -> str:
         from pathlib import Path as _Path
         parts = [_Path(self.path).name, f"p.{self.page_no}"]
@@ -655,7 +668,7 @@ def _collapse(points: list[LabPoint]) -> tuple[list[LabPoint], tuple[dict, ...]]
                 "reported": [
                     {"value": v[0].value_num if v[0].value_num is not None
                      else v[0].value_text,
-                     "unit": v[0].unit,
+                     "unit": v[0].reported_unit,
                      "sources": sorted({p.source for p in v})}
                     for v in by_value.values()],
             })

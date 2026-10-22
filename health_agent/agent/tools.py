@@ -412,7 +412,7 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
             {
                 "collected_date": p.collected_date,
                 "value": p.value_num if p.value_num is not None else p.value_text,
-                "unit": p.unit,
+                "unit": p.reported_unit,
                 "reference_range": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
@@ -472,7 +472,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
                 {
                     "collected_date": p.collected_date,
                     "value": p.value_num if p.value_num is not None else p.value_text,
-                    "unit": p.unit,
+                    "unit": p.reported_unit,
                     "reference_range": p.ref_text,
                     "flag": p.flag,
                     "out_of_range": p.out_of_range,

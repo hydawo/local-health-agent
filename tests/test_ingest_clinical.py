@@ -146,6 +146,43 @@ def test_a_newer_export_updates_a_facts_status(conn, tmp_path):
     ).fetchone()[0] == 1
 
 
+def test_a_fact_whose_status_disappears_is_not_counted_as_a_change(conn, tmp_path):
+    """The status guard is `IS NOT`, which is null-safe in SQLite. A resource
+    that arrives with no status at all must not keep flipping the row, and a
+    re-ingest of it must report zeros."""
+    def folder(where, status):
+        root = _folder_with_clinical(where)
+        member = root / "clinical-records" / "MedicationRequest-ibuprofen.json"
+        resource = json.loads(member.read_text())
+        if status is None:
+            resource.pop("status", None)
+        else:
+            resource["status"] = status
+        member.write_text(json.dumps(resource))
+        return root
+
+    nostatus = folder(tmp_path / "nostatus", None)
+    fhir.ingest_clinical(conn, nostatus, source_file_id=_source(conn, nostatus))
+    conn.commit()
+    assert conn.execute(
+        "SELECT status FROM clinical_fact WHERE kind = 'medication'"
+    ).fetchone()[0] is None
+
+    again = folder(tmp_path / "again", None)
+    stats = fhir.ingest_clinical(conn, again, source_file_id=_source(conn, again))
+    conn.commit()
+    assert stats.medications == 0          # null against null is no change
+
+    stopped = folder(tmp_path / "stopped", "stopped")
+    stats = fhir.ingest_clinical(conn, stopped,
+                                 source_file_id=_source(conn, stopped))
+    conn.commit()
+    assert stats.medications == 1          # null against a value is a change
+    assert conn.execute(
+        "SELECT status FROM clinical_fact WHERE kind = 'medication'"
+    ).fetchone()[0] == "stopped"
+
+
 def test_parse_skip_list_accepts_kinds_and_rejects_anything_else():
     assert fhir.parse_skip_list("labs, vitals") == frozenset({"labs", "vitals"})
     assert fhir.parse_skip_list("") == frozenset()

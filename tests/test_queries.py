@@ -320,6 +320,21 @@ def test_a_different_unit_is_not_the_same_measurement(two_docs):
     assert all(r["value"] == 5.4 for r in clash["reported"])
 
 
+def test_a_unit_with_no_value_behind_it_is_not_reported(two_docs):
+    """An invalid `valueQuantity` can carry a unit and no number. The unit is
+    stored, because it is the one thing the resource says, but "mg/dL" printed
+    beside a null value reads as a measurement nobody made."""
+    conn, pdf_doc, fhir_doc = two_docs
+    _add_lab(conn, document_id=fhir_doc, value=None, extracted_by="fhir")
+    (point,) = queries.lab_trend(conn, "ldl").points
+    assert point.unit == "mg/dL"            # stored
+    assert point.reported_unit is None      # not shown
+    _add_lab(conn, document_id=pdf_doc, value=112.0)
+    (clash,) = queries.lab_trend(conn, "ldl").disagreements
+    reported = {(r["value"], r["unit"]) for r in clash["reported"]}
+    assert reported == {(112.0, "mg/dL"), (None, None)}
+
+
 def test_two_identical_rows_from_one_source_are_not_collapsed(two_docs):
     """Collapse is for a draw reported by two sources. Two rows from one
     source (a repeat test the same day with the same result) stay two."""
