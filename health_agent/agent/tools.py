@@ -274,8 +274,12 @@ def _get_workouts(ctx: ToolContext, args: dict) -> dict:
     result = _get_workouts_plain(ctx, args)
     # An argument that only applies with detail, passed without it, must not
     # come back looking like a filtered answer. Old callers never passed them.
+    # `indoor` is tested with `is not None`: False means outdoor only, which
+    # is a filter, and reading it as unset returned every workout, indoor
+    # ones included, with nothing saying the filter had been dropped.
     ignored = [k for k in _DETAIL_ONLY_ARGS
-               if args.get(k) not in (None, "", [], False)]
+               if (args.get(k) is not None if k == "indoor"
+                   else args.get(k) not in (None, "", [], False))]
     if ignored:
         result["ignored_arguments"] = ignored
         result["ignored_note"] = (
@@ -403,6 +407,17 @@ def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
     sample_counts = args.get("samples") in (True, "true", "True")
     ratio_of = tuple(args["ratio_of"]) if args.get("ratio_of") else None
     percentile_of = args.get("percentile_of") or None
+
+    if sample_counts and period:
+        # The depth is per workout and a period is a group of workouts, so
+        # there is nothing to attach it to. Read and then dropped, the answer
+        # came back with no depth and no reason, against a schema that
+        # promises the count.
+        raise ValueError(
+            "samples counts the raw records inside each workout, so it needs "
+            "detail with measures and no period: a period groups workouts "
+            "and the count has nothing to attach to. Ask again without "
+            "period, or without samples")
 
     if period:
         series = queries.workout_series(
@@ -1369,7 +1384,10 @@ TOOLS: tuple[Tool, ...] = (
             "Workout sessions the user recorded — activity type, date, "
             "duration, distance, and energy. Use for any question about "
             "workouts, exercise sessions, runs, rides, or training. Step counts "
-            "and active energy are NOT workouts; use query_healthkit for those."
+            "and active energy are NOT workouts; use query_healthkit for those. "
+            "A unit of \"mixed\" beside a null figure means that period's "
+            "records were in more than one unit and nothing was added up: "
+            "report it as a refusal, never as a unit."
         ),
         parameters={
             "type": "object",
@@ -1401,12 +1419,15 @@ TOOLS: tuple[Tool, ...] = (
                            "description": (
                     "Only with detail. Group workouts by period, each measure "
                     "summarized by median.")},
-                "indoor": {"type": "boolean"},
+                "indoor": {"type": "boolean", "description": (
+                    "Only with detail. True for indoor workouts only, false "
+                    "for outdoor only; leave it out for both. Workouts the "
+                    "export did not flag match neither.")},
                 "exclude_source": {"type": "array",
                                    "items": {"type": "string"}},
                 "samples": {"type": "boolean", "description": (
-                    "Only with detail and measures. Count the raw records "
-                    "inside each workout.")},
+                    "Only with detail and measures, and not with period. "
+                    "Count the raw records inside each workout.")},
             },
         },
         handler=_get_workouts,
@@ -1419,7 +1440,10 @@ TOOLS: tuple[Tool, ...] = (
             "ranges. Use for any question of the form 'before and after', "
             "'has X changed since Y', or 'how does this year compare with "
             "last'. Returns both sides and a verdict on whether they can be "
-            "compared at all; it never returns a gap between them."
+            "compared at all; it never returns a gap between them. A unit of "
+            "\"mixed\" beside a null figure means the records for that period "
+            "were in more than one unit and nothing was added up; report it "
+            "as a refusal, never as a unit."
         ),
         parameters={
             "type": "object",

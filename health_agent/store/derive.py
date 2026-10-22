@@ -55,6 +55,14 @@ def _finite(value) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def finite(value) -> float | None:
+    """`_finite` under a public name, for the layers that compose over this
+    module: a caller filtering its own values should use the same guard the
+    derivations use rather than reaching into a private name or writing a
+    second one that disagrees with it."""
+    return _finite(value)
+
+
 def _missing(name: str) -> Derived:
     return Derived(name, None, None, "a value this needs is missing")
 

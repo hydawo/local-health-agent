@@ -1129,6 +1129,45 @@ def test_get_workouts_without_detail_keeps_its_old_shape(workoutbox):
     assert ignored == result
 
 
+def test_outdoor_only_without_detail_is_a_dropped_filter_not_an_unset_one(
+        workoutbox):
+    """`indoor: False` means outdoor only. Read as unset, it returned every
+    workout, indoor ones included, with nothing saying the filter was
+    dropped, which is an answer that reads as filtered."""
+    outdoor = tools.dispatch(workoutbox, "get_workouts", {"indoor": False})
+    assert outdoor["ignored_arguments"] == ["indoor"]
+    assert "detail" in outdoor["ignored_note"]
+    indoor = tools.dispatch(workoutbox, "get_workouts", {"indoor": True})
+    assert indoor["ignored_arguments"] == ["indoor"]
+
+
+def test_samples_with_a_period_is_refused_with_a_reason(workoutbox):
+    """The depth is per workout and a period is a group of them, so there is
+    nothing to attach it to. Read and then dropped, the answer carried no
+    depth and no reason against a schema that promises the count."""
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "period": "week", "measures": [f"{_HR}:average"],
+        "samples": True})
+    assert result["error"] == "invalid_request"
+    assert "period" in result["note"] and "samples" in result["note"]
+    assert "sample_depth" not in result
+
+
+def test_a_metric_window_with_an_indoor_flag_comes_back_as_a_refusal(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows",
+                            {**_RANGES, "indoor": True})
+    assert result["error"] == "invalid_request"
+    assert "workout figure" in result["note"]
+
+
+def test_the_tool_descriptions_say_what_a_mixed_unit_means(workoutbox):
+    """The sentinel reaches the model as a unit string with a null figure and
+    no reason beside it, so the word is defined where the model reads it."""
+    for name in ("get_workouts", "compare_windows"):
+        tool = next(t for t in tools.TOOLS if t.name == name)
+        assert "never as a unit" in tool.description
+
+
 def test_get_workouts_names_the_measures_it_holds_when_one_is_missing(workoutbox):
     result = tools.dispatch(workoutbox, "get_workouts", {
         "detail": True,

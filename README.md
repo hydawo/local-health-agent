@@ -782,7 +782,7 @@ system prompt now says to search both in the same turn and report what each
 source holds. Full history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
 
-The unit suite (more than 900 tests, `pytest`) and the eval set measure different things,
+The unit suite (more than 1,100 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
 two defects that the 239 unit tests passing at the time had missed. Both were
 failures of the *tool contract* rather than of any function in it. Seven of the

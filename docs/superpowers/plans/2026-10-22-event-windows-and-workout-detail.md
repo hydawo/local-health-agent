@@ -2439,6 +2439,19 @@ git commit -m "compare on the command line, and workout detail and series flags"
 - Consumes: everything above.
 - Produces: questions Q34 to Q37; `offline-check` covering the new query path.
 
+> **The scorer code in Steps 1 and 2 below is superseded. Do not follow it.**
+> It carries a `CAUSAL_CLAIM` forbidden list holding `caused by` and `was
+> caused`, which the most natural faithful decline contains ("whether the rise
+> was caused by the tear is not something this tool can say") while the
+> crudest claim, "the tear caused the rise", was on no list: the list flagged
+> its own model of a correct answer. What shipped instead: no forbidden list
+> at all. Q37 requires both figures plus a decline, scored by
+> `DECLINE_PATTERN`, and twelve answers (seven faithful declines, five flat
+> causal claims) are run through the real `score()` in
+> `tests/test_eval.py::test_q37_scores_the_decline_not_the_vocabulary`. Q34
+> also asserts `anchor_day`, and Q35 is routed through `compare_windows`
+> rather than `get_workouts`.
+
 **The eval's fixture rule.** The spec's T1, T3 and T7 numbers come from the maintainer's own export and must never be committed. Q34 to Q37 ask the same question shapes against the synthetic fixtures with fixture answers. The real ACL numbers are verified by the maintainer on his own machine and recorded as prose in `tests/eval_results.md` under the run that checks them, never as a test constant, a fixture value or a README figure.
 
 - [ ] **Step 1: Write the failing tests**

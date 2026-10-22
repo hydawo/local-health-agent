@@ -21,16 +21,21 @@ does not hold, and from a side a source exclusion emptied.
 from __future__ import annotations
 
 import datetime as _dt
-import statistics
 from dataclasses import dataclass, field
 
 from health_agent import metrics
-from health_agent.store import queries
+from health_agent.store import derive, queries
 
 # "mixed" is `workout_series`'s sentinel for a figure whose period held more
 # than one unit: the value is None and the unit is this word. It is not a
 # unit, so it never takes part in the unit equality test.
 MIXED = "mixed"
+
+# An absent unit is a unit of its own, and the same word `queries` uses for it
+# (`_UNLABELLED`). Folding it into a named unit relabels the values it came
+# with, and leaving it out of the set lets a side with no unit past the
+# cross-side unit test with "the same unit" as its stated reason.
+UNLABELLED = "unlabelled"
 
 VERDICTS = ("ok", "no_overlap", "thin_on_one_side",
             "missing_measure_on_one_side", "unit_mismatch",
@@ -233,6 +238,16 @@ def _shift(date: str, days: int) -> str:
     return (_dt.date.fromisoformat(date) + _dt.timedelta(days=days)).isoformat()
 
 
+def _unit_phrase(side: SideSummary) -> str:
+    """A side's unit, in words. An absent unit is named as absent rather
+    than printed as though "unlabelled" were a unit somebody measured in."""
+    if side.unit is None:
+        return "no unit at all"
+    if side.unit == UNLABELLED:
+        return "no unit named"
+    return side.unit
+
+
 def _count(n: int, plural: str) -> str:
     """"1 record", "62 records": a count never names its noun in the plural
     when there is one of it."""
@@ -241,7 +256,11 @@ def _count(n: int, plural: str) -> str:
 
 
 def _series(conn, spec: SeriesSpec, start: str, end: str, period: str):
-    if spec.metric and (spec.activity or spec.measure or spec.derive_name):
+    if spec.metric and (spec.activity or spec.measure or spec.derive_name
+                        or spec.indoor is not None):
+        # `indoor` belongs to this list: without it, a metric comparison
+        # asked for indoor-only came back byte-identical to the unfiltered
+        # one, which reads as a filtered answer and is not.
         _refuse("a spec names a metric or a workout figure, not both")
     if spec.derive_name in _UNSPECIFIABLE_DERIVATIONS:
         _refuse(f"{spec.derive_name} needs more than a SeriesSpec can carry: "
@@ -333,16 +352,33 @@ def _held(conn, spec: SeriesSpec, series) -> dict:
     if spec.metric:
         return held
     if spec.measure:
-        rows = [r for r in queries.workout_measures(conn)
-                if r.get("kind") == "statistic"]
-        mine = next((r for r in rows if r["key"] == spec.measure), None)
+        # Every row, whatever its kind. `workout_measures` groups by (kind,
+        # key) and a workout measure can be held as metadata rather than as a
+        # statistic, so filtering to statistics made the absence machinery
+        # blind to a key the index holds and printed "no workout carries it"
+        # beside that key's own median. The table's unique index is on
+        # (workout_id, kind, key), so one key can appear under both kinds:
+        # the rows for the key asked for are therefore added up rather than
+        # the first one being taken as the whole answer.
+        rows = queries.workout_measures(conn)
+        mine = [r for r in rows if r["key"] == spec.measure]
         held["measure_asked"] = (
-            None if mine is None
-            else {"key": mine["key"], "workouts": mine["n"],
-                  "first": mine["first"], "last": mine["last"]})
+            {"key": spec.measure,
+             "workouts": sum(r["n"] for r in mine),
+             "kinds": sorted({r["kind"] for r in mine if r.get("kind")}),
+             "first": min((r["first"] for r in mine if r["first"]),
+                          default=None),
+             "last": max((r["last"] for r in mine if r["last"]),
+                         default=None)}
+            if mine else None)
+        others: dict = {}
+        for row in rows:
+            if row["key"] == spec.measure:
+                continue
+            others[row["key"]] = others.get(row["key"], 0) + row["n"]
         held["measures_held"] = [
-            {"key": r["key"], "workouts": r["n"]}
-            for r in rows[:_HELD_LISTED] if r["key"] != spec.measure]
+            {"key": key, "workouts": n}
+            for key, n in list(others.items())[:_HELD_LISTED]]
     if spec.activity or spec.indoor is not None:
         rows = queries.workout_summary(conn, limit=50)
         needle = (spec.activity or "").lower()
@@ -371,18 +407,28 @@ def _activity_name(activity_type: str | None) -> str:
 def _summarize(conn, series, spec: SeriesSpec, start: str, end: str,
                period: str) -> SideSummary:
     entries = _entries(series, spec)
-    values = [float(e["value"]) for e in entries if e["value"] is not None]
+    # `derive.finite` and not `float()`: a non-finite column value reaches
+    # here through the raw sums in `queries`, and NaN propagates into every
+    # figure on the side rather than being reported as a missing value.
+    values = [v for v in (derive.finite(e["value"]) for e in entries)
+              if v is not None]
     seen: set[str] = set()
     mixed = False
     for entry in entries:
         unit = entry.get("unit")
+        others = tuple(u for u in (entry.get("units") or ())
+                       if u and u != MIXED)
         if unit == MIXED:
             mixed = True
-        elif unit:
-            seen.add(unit)
-        for other in entry.get("units") or ():
-            if other and other != MIXED:
-                seen.add(other)
+        elif derive.finite(entry["value"]) is not None and not others:
+            # An entry that carries a value and names no unit is unlabelled,
+            # which is a unit of its own: folding it into the side's other
+            # unit would relabel the values it came with. An entry whose
+            # `units` list is populated has already said what it saw, and a
+            # None `unit` beside it means those units differ, not that the
+            # values are unlabelled.
+            seen.add(unit or UNLABELLED)
+        seen.update(others)
     mixed = mixed or len(seen) > 1
     unit = None if mixed else (sorted(seen)[0] if len(seen) == 1 else None)
     # Distinct period labels, not points: a series that ever emits more than
@@ -401,8 +447,8 @@ def _summarize(conn, series, spec: SeriesSpec, start: str, end: str,
         empty_periods=max(0, _expected_periods(start, end, period) - periods),
         min=min(values) if values else None,
         max=max(values) if values else None,
-        median=statistics.median(values) if values else None,
-        mean=statistics.fmean(values) if values else None,
+        median=derive.median(values, unit).value,
+        mean=(sum(values) / len(values)) if values else None,
         unit=unit,
         first=span[0], last=span[1],
         value_periods=len(values),
@@ -641,20 +687,17 @@ def _verdict(left: SideSummary, right: SideSummary, *,
             # no evidence that this one mixes, and `workout_series` leaves
             # `units` off some derived entries, so an empty set says so
             # rather than borrowing a unit from the side that is not mixed.
-            parts.append(
-                f"the {name} side reports this figure in more than one unit "
-                + (f"({', '.join(side.units_seen)})" if side.units_seen
-                   else ", which the layer below did not name"))
+            named = (f" ({', '.join(side.units_seen)})" if side.units_seen
+                     else ", which the layer below did not name")
+            parts.append(f"the {name} side reports this figure in more than "
+                         f"one unit{named}")
         return {**block, "verdict": "unit_mixed_on_one_side",
                 "because": ("; ".join(parts) + ", and this tool never "
                             "converts a unit, so there is no one figure to "
                             "compare")}
 
-    if left.unit and right.unit and left.unit != right.unit:
-        return {**block, "verdict": "unit_mismatch",
-                "because": f"units differ: {left.unit} and {right.unit}, and "
-                           "this tool never converts a unit"}
-
+    # Before the unit test: a side with no value has no unit either, and
+    # "units differ" would be a worse answer than naming the dead side.
     if left.value_periods == 0 or right.value_periods == 0:
         parts = [f"the {name} side has " + _count(side.n, "periods")
                  + " but no value for this figure in any of them"
@@ -664,13 +707,25 @@ def _verdict(left: SideSummary, right: SideSummary, *,
                 "because": "; ".join(parts + _spec_clauses((left, right),
                                                            spec))}
 
-    if left.n < THIN_ROWS or right.n < THIN_ROWS:
+    # Both sides carry values by now, so any difference between their units
+    # is a real difference, the absence of a unit on one side included.
+    if left.unit != right.unit:
+        return {**block, "verdict": "unit_mismatch",
+                "because": (f"units differ: {_unit_phrase(left)} and "
+                            f"{_unit_phrase(right)}, and this tool never "
+                            "converts a unit")}
+
+    # On the periods carrying a value, not on the periods: padding the count
+    # with periods that hold no figure is how a range claim over a single
+    # value got past the gate this constant exists to close.
+    if left.value_periods < THIN_ROWS or right.value_periods < THIN_ROWS:
         thin = [(name, side) for name, side in zip(names, (left, right))
-                if side.n < THIN_ROWS]
+                if side.value_periods < THIN_ROWS]
         return {**block, "verdict": "thin_on_one_side",
                 "because": ("; ".join(
-                    f"the {name} side carries " + _count(side.n, "periods")
-                    for name, side in thin)
+                    f"the {name} side has "
+                    + _count(side.value_periods, "periods")
+                    + " carrying a value" for name, side in thin)
                     + f", fewer than the {THIN_ROWS} this tool compares over")}
 
     if left.max < right.min or right.max < left.min:
@@ -696,17 +751,29 @@ def _side_line(name: str, side: SideSummary, spec: SeriesSpec | None) -> str:
     span = f"{_count(side.n, 'periods')}, {side.first} to {side.last}"
     if side.unit_mixed:
         units = ", ".join(side.units_seen)
-        return (f"{name}: {span}, reported in more than one unit "
-                + (f"({units})" if units
+        return (f"{name}: {span}, reported in more than one unit"
+                + (f" ({units})" if units
                    else ", which the layer below did not name")
                 + ", so no one figure is given for them.")
     if side.value_periods == 0:
         return f"{name}: {span}, none of which carries this figure."
-    unit = f" {side.unit}" if side.unit else ""
+    # A median resting on one of five periods must not read as resting on
+    # five. The partial case had no representation in this text at all,
+    # which is the text the model is handed and the reader is shown.
+    basis = ""
+    if 0 < side.value_periods < side.n:
+        carry = "carries" if side.value_periods == 1 else "carry"
+        basis = (f", of which {_count(side.value_periods, 'periods')} "
+                 f"{carry} this figure")
+    unit = ("" if side.unit in (None, UNLABELLED) else f" {side.unit}")
+    # An absent unit is said in words, next to the figure it qualifies.
+    # "median 120 unlabelled" prints a sentinel as though somebody had
+    # measured in it.
+    named = " with no unit named" if side.unit == UNLABELLED else ""
     tail = (f", {_count(side.empty_periods, 'periods')} with no data."
             if side.empty_periods else ".")
-    return (f"{name}: {span}, median {side.median:g}{unit}, range "
-            f"{side.min:g} to {side.max:g}{unit}" + tail)
+    return (f"{name}: {span}{basis}, median {side.median:g}{unit}{named}, "
+            f"range {side.min:g} to {side.max:g}{unit}" + tail)
 
 
 def render(comparison: Comparison) -> str:

@@ -800,7 +800,12 @@ def metric_series(
 
     rows = conn.execute(sql, params).fetchall()
 
-    units = {r["unit"] for r in rows if r["unit"]}
+    # An absent unit is a unit of its own, as in `_median_in_one_unit`:
+    # dropping the NULLs made a type whose rows are partly unitless look
+    # like one unit, and the layers above then printed the unlabelled values
+    # under the name of the labelled ones. A duration aggregate is in
+    # seconds by construction and says so below, whatever the rows carry.
+    units = {r["unit"] or _UNLABELLED for r in rows}
     sources = sorted({r["source_name"] for r in rows if r["source_name"]})
 
     if combine == "auto":

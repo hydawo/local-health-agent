@@ -1269,7 +1269,7 @@ def _compare_holdings(conn, spec: windows.SeriesSpec, comparison) -> list[str]:
     # filter. What it does not say is which measures the index holds.
     held = _workout_holdings(conn)
     lines = []
-    if held["measures"]:
+    if held["measures"] and spec.measure is None:
         top = ", ".join(f"{_short(m['key'])} ({m['n']:,})"
                         for m in held["measures"][:6])
         rest = len(held["measures"]) - 6
@@ -1307,7 +1307,7 @@ def _print_points(name: str, points, spec, side) -> None:
         rows = rows[:_POINTS_EDGE] + [["...", "...", "..."]] \
             + rows[-_POINTS_EDGE:]
     print(f"\n{name}, by period:")
-    print(_table(["period", "value", "n"], rows, indent="  "))
+    print(_table(["period", "value", side.counted], rows, indent="  "))
     if hidden:
         print(_wrap(f"{len(points)} periods in all; the middle {hidden} are "
                     "not shown. --json carries them whole.", indent="  "))
@@ -1411,14 +1411,16 @@ def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
                 "rendered": windows.render(comparison),
                 "note": comparison.note,
             }
-            held = _compare_holdings(conn, spec, comparison)
-            if held:
+            if _compare_holdings(conn, spec, comparison):
                 payload["workouts_held"] = _workout_holdings(conn)
             print(json.dumps(payload, indent=2, default=str))
             return 0
         if anchor:
+            # The date is in the layer's own label line, its anchor-day line
+            # and its note. A fourth voice saying it is three too many; what
+            # this line alone carries is the sizes asked for and the period.
             print(f"Windows of {before} day(s) before and {after} day(s) "
-                  f"after {anchor.date}, in periods of a {args.period}.")
+                  f"after the anchor, in periods of a {args.period}.")
             if anchor.citation:
                 print(f"Anchor from: {anchor.citation}")
         for line in windows.render(comparison).splitlines():

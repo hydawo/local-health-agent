@@ -415,6 +415,12 @@ def test_an_empty_side_reports_what_the_index_holds(box):
     assert out_of_range.comparable["right_coverage"]["total_records"] == 1
     assert nothing_at_all.comparable["right_coverage"]["total_records"] == 0
     assert "2023-01-01" not in nothing_at_all.comparable["because"]
+    # The wording itself, not just the absence of dates: with this branch
+    # gone the sentence reads "holds 0 records of this figure from None to
+    # None", which is the two-absences-in-one-representation output.
+    assert ("holds no records of this figure at all"
+            in nothing_at_all.comparable["because"])
+    assert "None" not in windows.render(nothing_at_all)
 
 
 def test_an_empty_workout_side_counts_workouts_and_says_so(box):
@@ -778,3 +784,205 @@ def test_a_metric_figures_facts_are_also_stated_once(box):
     assert because.count("in that range") == 1
     assert "neither side" in because
     assert len(because) < 220, len(because)
+
+
+def _metadata(conn, *, workout_id, key, value, unit=None):
+    conn.execute(
+        "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+        "VALUES(?, 'metadata', ?, ?, ?)", (workout_id, key, value, unit))
+    conn.commit()
+
+
+def test_a_measure_held_as_metadata_is_not_reported_as_held_by_nothing(box):
+    """The worst form of the absence defect: not a silence read as emptiness
+    but a false absence, printed beside the number that disproves it. A
+    workout measure can be held with kind 'metadata' (HKElevationAscended,
+    HKAverageMETs, HKWeatherTemperature in real exports), and the CLI's own
+    measure table advertises those keys, so this is reachable by following
+    the tool's own guidance."""
+    _ride(box, date="2023-01-01", key=b"\x01")
+    _metadata(box, workout_id=1, key="HKElevationAscended", value=120.0)
+    _ride(box, date="2024-01-01", key=b"\x02")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling",
+                                     measure="HKElevationAscended"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.median == 120.0
+    because = comparison.comparable["because"]
+    rendered = windows.render(comparison)
+    assert "no workout carries" not in because
+    assert "no workout carries" not in rendered
+    assert "HKElevationAscended is carried by 1 workout" in because
+    assert comparison.comparable["verdict"] == "missing_measure_on_one_side"
+
+
+def test_the_same_key_under_both_kinds_is_counted_once_across_both(box):
+    """`workout_measures` groups by (kind, key) and the table's unique index
+    is on (workout_id, kind, key), so one key can be held under both kinds.
+    Taking the first row as the whole answer would under-count it."""
+    _ride(box, date="2023-01-01", key=b"\x01")
+    _metadata(box, workout_id=1, key="HKAverageMETs", value=8.0)
+    _ride(box, date="2023-01-02", key=b"\x02")
+    box.execute(
+        "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+        "VALUES(2, 'statistic', 'HKAverageMETs', 9.0, NULL)")
+    box.commit()
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling",
+                                     measure="HKAverageMETs"),
+        left=("2024-01-01", "2024-01-31"), right=("2024-02-01", "2024-02-28"))
+    assert "HKAverageMETs is carried by 2 workouts" in \
+        comparison.comparable["because"]
+
+
+def test_an_unlabelled_value_is_not_adopted_into_the_other_periods_unit(box):
+    """Two periods with no unit and two in minutes are not four periods in
+    minutes. An absent unit is a unit of its own, which is what `queries`
+    decided one layer below."""
+    _ride(box, date="2023-01-02", key=b"\x01", duration=45.0,
+          duration_unit=None)
+    _ride(box, date="2023-01-04", key=b"\x02", duration=45.0,
+          duration_unit=None)
+    _ride(box, date="2023-01-08", key=b"\x03", duration=45.0)
+    _ride(box, date="2023-01-10", key=b"\x04", duration=45.0)
+    _ride(box, date="2024-01-01", key=b"\x05", duration=45.0)
+    _ride(box, date="2024-01-02", key=b"\x06", duration=45.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.unit_mixed
+    assert comparison.left.units_seen == ("min", "unlabelled")
+    assert comparison.comparable["verdict"] == "unit_mixed_on_one_side"
+    earlier = windows.render(comparison).splitlines()[1]
+    assert "median 45 min" not in earlier     # it was relabelled as minutes
+    assert "more than one unit (min, unlabelled)" in earlier
+
+
+def test_a_side_with_no_unit_against_a_side_with_one_is_a_mismatch(box):
+    """The false ok this module can produce: "both sides carry values in the
+    same unit" where one side has no unit at all."""
+    for day, key in (("2023-01-01", b"\x01"), ("2023-01-02", b"\x02")):
+        _ride(box, date=day, key=key, duration=45.0, duration_unit=None)
+    for day, key in (("2024-01-01", b"\x03"), ("2024-01-02", b"\x04")):
+        _ride(box, date=day, key=key, duration=45.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.comparable["verdict"] == "unit_mismatch"
+    because = comparison.comparable["because"]
+    assert "no unit named" in because and "min" in because
+    assert "the same unit" not in because
+    # And the side line does not print "unlabelled" as though it were a unit
+    # somebody measured in.
+    earlier = windows.render(comparison).splitlines()[1]
+    assert "median 45 unlabelled" not in earlier
+    assert "with no unit named" in earlier
+
+
+def test_an_unlabelled_metric_row_is_a_unit_of_its_own_too(box):
+    """`metric_series` dropped NULL units from its set, so a type whose rows
+    are partly unitless looked like one unit and the unlabelled values were
+    printed under the labelled ones' name."""
+    _daily(box, date="2023-01-01", value=60.0, unit="count/min")
+    _daily(box, date="2023-01-02", value=61.0, unit=None)
+    _daily(box, date="2024-01-01", value=62.0, unit="count/min")
+    _daily(box, date="2024-01-02", value=63.0, unit="count/min")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.units_seen == ("count/min", "unlabelled")
+    assert comparison.comparable["verdict"] == "unit_mixed_on_one_side"
+
+
+def test_the_word_for_an_absent_unit_is_the_one_the_layer_below_uses(box):
+    """Three layers disagreeing about what an absent unit means is how this
+    class of defect came back twice. The word is pinned here."""
+    assert windows.UNLABELLED == queries._UNLABELLED
+
+
+def test_the_thin_gate_counts_the_periods_that_carry_a_value(box):
+    """Five periods a side with one measured value each is not a range
+    against a range. Empty periods padded the count past the gate the
+    constant exists to close, and `no_overlap` was printed over two points."""
+    for i, day in enumerate(("2023-01-01", "2023-01-02", "2023-01-03",
+                             "2023-01-04", "2023-01-05")):
+        _ride(box, date=day, key=bytes([i + 1]),
+              hr_avg=140.0 if day == "2023-01-01" else None)
+    for i, day in enumerate(("2023-02-01", "2023-02-02", "2023-02-03",
+                             "2023-02-04", "2023-02-05")):
+        _ride(box, date=day, key=bytes([i + 11]),
+              hr_avg=90.0 if day == "2023-02-01" else None)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=HR_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2023-02-01", "2023-02-28"))
+    assert comparison.comparable["verdict"] == "thin_on_one_side"
+    assert comparison.comparable["left_n"] == 5
+    assert comparison.comparable["left_value_periods"] == 1
+    assert "carrying a value" in comparison.comparable["because"]
+    assert "no_overlap" not in windows.render(comparison)
+
+
+def test_a_median_says_how_many_periods_it_rests_on(box):
+    """A median resting on one of five periods read as resting on five. The
+    partial absence had no representation in the rendered text, which is
+    what the model is handed and what the reader is shown."""
+    for i, day in enumerate(("2023-01-01", "2023-01-02", "2023-01-03")):
+        _ride(box, date=day, key=bytes([i + 1]),
+              hr_avg=140.0 if i < 2 else None)
+    for i, day in enumerate(("2023-02-01", "2023-02-02", "2023-02-03")):
+        _ride(box, date=day, key=bytes([i + 11]), hr_avg=141.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=HR_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2023-02-01", "2023-02-28"))
+    earlier, later = windows.render(comparison).splitlines()[1:3]
+    assert "of which 2 periods carry this figure" in earlier
+    assert "3 periods" in later and "of which" not in later
+
+
+def test_a_metric_window_with_an_indoor_flag_is_refused_not_quietly_dropped(box):
+    """An argument that cannot apply must not come back as an answer that
+    reads as filtered."""
+    _daily(box, date="2023-01-01", value=60.0)
+    with pytest.raises(ValueError) as caught:
+        windows.compare(
+            box, spec=windows.SeriesSpec(metric="resting-hr", indoor=True),
+            left=("2023-01-01", "2023-01-31"),
+            right=("2024-01-01", "2024-01-31"))
+    assert "workout figure" in str(caught.value)
+
+
+def test_the_category_refusal_names_a_tool_the_model_can_call(box):
+    _sleep(box, date="2023-01-01", category="Core", seconds=900.0)
+    with pytest.raises(ValueError) as caught:
+        windows.compare(box, spec=windows.SeriesSpec(metric="sleep"),
+                        left=("2023-01-01", "2023-01-31"),
+                        right=("2024-01-01", "2024-01-31"))
+    assert "query_healthkit" in str(caught.value)
+    assert "queries." not in str(caught.value)
+
+
+def test_a_side_that_carries_values_always_carries_a_unit_name(box):
+    """The invariant the cross-side unit test rests on. `unit` is None only
+    when the side has no values or when its units are mixed, both of which
+    are answered before that test, so by then any difference between the two
+    units is a real one. A change that lets a valued side come back with no
+    unit at all would put the false ok back, so the invariant is pinned
+    rather than left to be re-derived."""
+    _daily(box, date="2023-01-01", value=60.0, unit="count/min")
+    _daily(box, date="2023-01-02", value=61.0, unit=None)
+    _ride(box, date="2023-03-01", key=b"\x01", duration_unit=None)
+    _ride(box, date="2023-03-02", key=b"\x02", hr_avg=None)
+    _ride(box, date="2023-03-03", key=b"\x03")
+    specs = (windows.SeriesSpec(metric="resting-hr"),
+             windows.SeriesSpec(activity="Cycling"),
+             windows.SeriesSpec(activity="Cycling", measure=HR_AVG),
+             windows.SeriesSpec(activity="Cycling", derive_name="pace"))
+    for spec in specs:
+        for start, end in (("2023-01-01", "2023-01-31"),
+                           ("2023-03-01", "2023-03-31"),
+                           ("2025-01-01", "2025-01-31")):
+            comparison = windows.compare(box, spec=spec, left=(start, end),
+                                         right=(start, end))
+            for side in (comparison.left, comparison.right):
+                if side.value_periods and not side.unit_mixed:
+                    assert side.unit is not None, (spec, start, side)
