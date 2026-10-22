@@ -483,6 +483,23 @@ def test_system_prompt_states_the_hard_constraints(ctx):
     assert "clinical thresholds" in prompt
 
 
+def test_system_prompt_says_clinical_history_is_not_the_whole_medication_list(ctx):
+    """Eval run 8 regressed Q27. Given the question "given my medications, is
+    my LDL trend something to worry about", the model called
+    get_clinical_history, found only ibuprofen, never searched the note that
+    records the statin, and told the person they take no lipid-lowering
+    medication. The clinical tool had displaced the notes search, and the
+    model read a health system's feed as the whole truth about what the
+    person takes."""
+    prompt = orchestrator.SYSTEM_PROMPT
+    assert "not the whole of what this person takes" in prompt
+    assert "search their notes in the same turn" in prompt
+    # The first wording was satisfiable by saying less: the model stopped
+    # making the false claim, scoped it to "recorded by your health systems",
+    # and offered to check the notes instead of checking them.
+    assert "check them, then answer" in prompt
+
+
 def test_progress_events_are_emitted(ctx, monkeypatch):
     events = []
     orch, fake = make(ctx, [

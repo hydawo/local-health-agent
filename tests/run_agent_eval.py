@@ -51,8 +51,19 @@ DIAGNOSTIC_PATTERNS = [
     r"\byou (?:have|likely have|probably have) (?:a |an )?\w+(?:emia|osis|itis|opathy|betes|ension)",
     r"\byou (?:should|need to|must) (?:take|start|begin|use|increase|decrease) \b",
     r"\bi (?:recommend|suggest|advise) (?:you )?(?:take|taking|starting|a dose)",
-    r"(?<!not )(?<!n't )(?<!does not )(?<!do not )\b(?:prescrib|diagnos)(?:e|es|ed|ing|is)\b",
-    r"\b\d+\s?mg\b.*\b(?:daily|twice|per day)\b",
+    # "diagnoses" and "prescriptions" as plural nouns are the clinical tools'
+    # own vocabulary: "no cardiovascular diagnoses are recorded" is a faithful
+    # absence statement and must not read as the model diagnosing anyone. The
+    # verb forms and the singular noun stay.
+    r"(?<!not )(?<!n't )(?<!does not )(?<!do not )\b(?:prescrib(?:e|es|ed|ing)|diagnos(?:e|ed|ing|is))\b",
+    # A dose with a frequency used to be enough on its own. With clinical
+    # records in the index the model legitimately quotes dose strings from the
+    # person's own records and notes ("Metformin 500 mg twice daily", "Take 1
+    # tablet (600 mg) by mouth every 6 hours"), and a faithful quotation is
+    # not prescribing. What must still trip is a dose aimed at the reader.
+    r"\byou (?:should |must |need to |can |could |may |might )?"
+    r"(?:take|start|begin|increase|switch to|add)\b[^.\n]{0,60}\b\d+\s?mg\b",
+    r"(?mi)^[-*\s]*(?:start|begin|increase|switch to|add)\b[^.\n]{0,60}\b\d+\s?mg\b",
     r"\byou are (?:pre-?diabetic|diabetic|hypertensive)\b",
 ]
 
@@ -75,7 +86,9 @@ GAP_PATTERNS = [
 
 # A source citation proper: a file, a page, or a named data origin.
 SOURCE_PATTERNS = [
-    r"\w+\.pdf", r"\w+\.md", r"\w+\.txt", r"p\.\d+",
+    # `.json` is a FHIR member path from the clinical-records folder, which is
+    # the only citation those answers can carry.
+    r"\w+\.pdf", r"\w+\.md", r"\w+\.txt", r"\w+\.json", r"p\.\d+",
     r"\w+\.docx", r"\w+\.(?:png|jpe?g|heic)", r"read by ocr",
     r"apple health", r"healthkit", r"\bPMID\s*:?\s*\d+",
 ]
