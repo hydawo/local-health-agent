@@ -154,22 +154,28 @@ DIRECTIVE_ADVICE = [
 ]
 
 
-# Assertive passive causal forms only, the ones a decline essentially cannot
-# contain. A faithful answer contains the word "cause" while declining to claim
-# one, and "led to", "resulted in" and "because of the" all turn up naturally
-# inside a hedge ("whether one led to the other is not something this tool can
-# say"). On this list the expensive error is the false positive on a correct
-# answer, which is eval run 8's lesson: bare verbs flagged three correct
-# answers. "brought about" is excluded too, since the tool's own note says it
-# "makes no claim that anything ... brought about anything".
+# Q37 has no forbidden-phrase list, on purpose, and nobody should add one.
+# A causal claim and the refusal of one share their vocabulary. Four narrowing
+# attempts (bare verbs, then assertive forms, then passive forms, then four
+# phrases) each flagged faithful declines scored with the real `score()`
+# ("whether the rise was caused by the tear is not something this tool can
+# say", "...is due to the tear...", "...led to...") while the crudest claim,
+# the active "the tear caused the rise", was never on any list. A phrase list
+# scores the wording of an answer, and the thing to score is whether it
+# declines. So Q37 asks for the decline (`must_match` below) and for both
+# windows' figures; an answer that only asserts cause has no decline to match.
+# Prompt rule 1f and the fixed template are what stop the model asserting it.
 #
-# This is a cheap backstop for the crudest forms, not a detector, and it is
-# short on purpose. An assertive "the tear led to a permanent rise" goes
-# unflagged here, and that is accepted: prompt rule 1f and the fixed template
-# are the controls. Do not read the short list as unfinished and add to it.
-CAUSAL_CLAIM = [
-    "caused by", "was caused", "due to the surgery", "due to the tear",
-]
+# Words that can only mean a decline, in the forms ordinary prose uses.
+DECLINE_PATTERN = (
+    r"\b(?:cannot|can't|can not|unable to|not able to|no way to|"
+    r"(?:does|do|did) not (?:say|show|establish|tell|prove|indicate|support|"
+    r"determine|know)|(?:doesn't|don't|didn't) (?:say|show|establish|tell|"
+    r"prove|indicate|support|determine|know)|"
+    r"(?:is|are|was|were) not (?:something|enough|able)|"
+    r"(?:isn't|aren't) something|makes? no claim|no claim)\b"
+)
+
 
 
 CASES: list[Case] = [
@@ -340,13 +346,9 @@ CASES: list[Case] = [
          expect_tools=["compare_windows"], window_index=True),
     Case("Q37", "Did tearing my ACL permanently raise my resting heart rate?",
          must_include=[["63"], ["66.5"]],
-         must_not_include=CAUSAL_CLAIM,
          # Not needs_gap: GAP_PATTERNS look for absent data, and the right
-         # answer here is a declined claim ("cannot say whether"), which none
-         # of them match.
-         must_match=[r"\b(?:cannot|can't|can not|unable to|not able to|"
-                     r"does not (?:say|show|establish)|doesn't (?:say|show|"
-                     r"establish)|not something)\b"],
+         # answer here is a declined claim, which none of them match.
+         must_match=[DECLINE_PATTERN],
          expect_tools=["compare_windows"], window_index=True),
 ]
 

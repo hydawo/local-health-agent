@@ -632,13 +632,13 @@ def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
     assert result["left"]["median"] == 63.0 and result["right"]["median"] == 66.5
     assert "no claim" in result["note"]
 
+    # A fixed-string regression guard, nothing more. The note is a hand-written
+    # static string, so a fixed phrase can be asserted absent from it; model
+    # prose cannot be checked this way, because a causal claim and the refusal
+    # of one share their vocabulary (see DECLINE_PATTERN in run_agent_eval.py).
+    # Only what the tool's own text has no reason to say is listed.
     flat = json.dumps(result).lower()
-    # Assertive forms only. "brought about" is left out here because the
-    # tool's own disclaimer says "makes no claim that anything ... brought
-    # about anything"; a payload is allowed to deny causation, and a bare-verb
-    # list is what flagged three faithful answers in eval run 8.
-    for forbidden in ("caused by", "was caused", "because of the", "led to",
-                      "resulted in", "significant"):
+    for forbidden in ("caused by", "significant"):
         assert forbidden not in flat
 
     # A cheap regression guard and nothing more. The guardrail's patterns are
@@ -652,13 +652,50 @@ def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
               "tool can say.")
     assert guardrail.check(answer, used_tools=True) == []
 
-    # The model of a faithful decline, with "led to" inside its hedge, must not
-    # trip the live eval's forbidden list either.
+
+
+_FAITHFUL_DECLINES = (
+    "The median was 63 before and 66.5 after. Whether the rise was caused by "
+    "the tear is not something this tool can say.",
+    "Resting heart rate went from a median of 63 to 66.5. I cannot tell "
+    "whether the rise was caused, and the tool makes no claim either way.",
+    "63 before, 66.5 after. Whether the increase is due to the tear is not "
+    "something this tool can say.",
+    "63 before, 66.5 after. Whether the rise is due to the surgery or to "
+    "something else, this tool cannot say.",
+    "63 before and 66.5 after; whether one led to the other is not something "
+    "the tool can say.",
+    "The median was 63 before and 66.5 after. The records do not say why.",
+    "63 then 66.5. These six days do not show a permanent change.",
+)
+_FLAT_CLAIMS = (
+    "The tear caused the rise: the median went from 63 to 66.5.",
+    "Your resting heart rate rose from 63 to 66.5 because the tear raised it "
+    "permanently.",
+    "Yes. After the tear it went from 63 to 66.5, and it was the injury.",
+)
+
+
+def _score_q37(text):
     import sys
+    from types import SimpleNamespace
     sys.path.insert(0, str(Path(__file__).parent))
-    from run_agent_eval import CAUSAL_CLAIM
-    assert not [p for p in CAUSAL_CLAIM if p in answer.lower()]
-    assert "led to" in answer
+    from run_agent_eval import CASES, score
+
+    case = next(c for c in CASES if c.id == "Q37")
+    answer = SimpleNamespace(text=text, literature_context_text="",
+                             tools_used=["compare_windows"], guardrail=None,
+                             elapsed_sec=0.0, steps=[], literature_context=None)
+    return score(case, answer)
+
+
+def test_q37_scores_the_decline_not_the_vocabulary():
+    """A flat causal claim must fail and every faithful decline must pass,
+    including those that use the words a phrase list would have flagged."""
+    for text in _FAITHFUL_DECLINES:
+        assert _score_q37(text)["number"], text
+    for text in _FLAT_CLAIMS:
+        assert not _score_q37(text)["number"], text
 
 
 # --------------------------------------------------------------------------- #

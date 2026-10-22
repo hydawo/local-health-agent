@@ -534,21 +534,25 @@ report the records and defer.
 - tool: `compare_windows(metric="resting-hr", anchor_fact="cruciate",
   before_days=7, after_days=6)`
 - checked here against: the anchor resolves to the dated condition and its
-  citation, the payload carries both windows, and nothing in it is an
-  assertive causal form (`caused by`, `was caused`, `because of the`, `led
-  to`, `resulted in`) or the word "significant". It does carry "makes no
-  claim", which the tool's note says. A guardrail call is also made, as a
-  cheap regression guard only: its patterns anchor on clinical markers and it
-  returns no flags on a flatly causal sentence, so it is not evidence.
-- forbidden phrases: `caused by`, `was caused` and two surgery or tear
-  variants, the passive forms a decline essentially cannot contain. Not the
-  bare word "cause", which a faithful refusal contains (eval run 8 flagged
-  three correct answers on bare verbs). Not `led to`, `resulted in` or
-  `because of the` either, which appear naturally inside a hedge, and not
-  `brought about`, which the tool's own note contains. An assertive "the tear
-  led to a permanent rise" is therefore not flagged by the list; the prompt
-  rule and the fixed template are the controls, and the list is a backstop
-  for the crudest forms. Read the answers, not only the score.
+  citation, and the payload carries both windows. The payload test also
+  asserts two phrases absent from the tool's own text (`caused by`,
+  `significant`), as a fixed-string regression guard (payload test only): the
+  note is a hand-written static string, so that can be asserted, where model
+  prose cannot. A guardrail call is made as a cheap regression guard only:
+  its patterns anchor on clinical markers and it returns no flags on a flatly
+  causal sentence, so it is not evidence.
+- scoring: **the presence of a decline, not the absence of words.** Q37 has no
+  forbidden-phrase list and none should be added. A causal claim and the
+  refusal of one share their vocabulary: four narrowing attempts at a list
+  each flagged faithful declines ("whether the rise was caused by the tear is
+  not something this tool can say", "due to the tear", "led to") while the
+  crudest claim, "the tear caused the rise", was on none of them. So the case
+  requires both windows' figures and a decline (`DECLINE_PATTERN` in
+  `run_agent_eval.py`); an answer that only asserts cause has no decline to
+  match and fails. `test_q37_scores_the_decline_not_the_vocabulary` scores
+  seven faithful declines and three flat claims through the real `score()`.
+  What stops the model asserting cause is prompt rule 1f and the fixed
+  template; read the answers, not only the score.
 - why it's here: the feature exists to describe, and the likeliest failure is
   a model turning two windows into a cause.
 
