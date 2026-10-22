@@ -280,8 +280,12 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
     return Sheet(
         prepared=(today or date.today()).isoformat(),
         window_days=window_days,
-        labs={"reports": docs["documents"], "first": docs["doc_first"],
-              "last": docs["doc_last"], "analytes": docs["analytes"]},
+        # The date span comes from the lab values themselves, not from the
+        # PDFs' document dates: a value that came from the clinical-records
+        # folder has no PDF, and the questions below are drawn from it.
+        labs={"reports": docs["documents"], "first": docs["lab_first"],
+              "last": docs["lab_last"], "analytes": docs["analytes"],
+              "clinical": queries.clinical_holdings(conn)["labs"]},
         healthkit=window,
         signals=sorted(lab + shifts, key=lambda s: _KIND_ORDER[s.kind]),
         gaps=gaps,
@@ -389,11 +393,23 @@ def render(sheet: Sheet) -> str:
     lines = ["# Questions for your next visit", "",
              INTRO.format(date=sheet.prepared), "", "## Looked at"]
     labs = sheet.labs
+    span = (f", {labs['first']} to {labs['last']}"
+            if labs.get("first") and labs.get("last") else "")
+    clinical_labs = labs.get("clinical") or 0
     if labs["reports"]:
-        lines.append(f"- {labs['reports']} lab reports, {labs['first']} to "
-                     f"{labs['last']}, {labs['analytes']} analytes")
+        lines.append(f"- {labs['reports']} lab reports{span}, "
+                     f"{labs['analytes']} analytes")
+    elif clinical_labs:
+        # Saying "no lab reports" above a question drawn from these values
+        # would tell the reader their own labs are not in the index.
+        lines.append(f"- No lab report PDFs in the index; "
+                     f"{clinical_labs} lab value(s) from your clinical "
+                     f"records{span}, {labs['analytes']} analytes")
     else:
-        lines.append("- No lab reports in the index")
+        lines.append("- No lab values in the index")
+    if labs["reports"] and clinical_labs:
+        lines.append(f"- Of those analytes, {clinical_labs} lab value(s) came "
+                     f"from your clinical records rather than a PDF")
     hk = sheet.healthkit
     if hk:
         # Each metric anchors its own pair of windows at its own last day,

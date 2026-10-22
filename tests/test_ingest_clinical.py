@@ -1,6 +1,7 @@
 """Reading clinical-records out of an export, from a zip or a folder."""
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import zipfile
@@ -82,6 +83,10 @@ def test_reingest_adds_nothing(conn, tmp_path):
     ("vitals", "clinical_vital", None),
     ("conditions", "clinical_fact", "condition"),
     ("medications", "clinical_fact", "medication"),
+    ("allergies", "clinical_fact", "allergy"),
+    ("immunizations", "clinical_fact", "immunization"),
+    ("procedures", "clinical_fact", "procedure"),
+    ("notes", "note_reference", None),
 ])
 def test_each_switch_skips_exactly_its_kind(conn, tmp_path, kind, table, column):
     path = _zip_with_clinical(tmp_path)
@@ -92,6 +97,12 @@ def test_each_switch_skips_exactly_its_kind(conn, tmp_path, kind, table, column)
     if column:
         n = conn.execute("SELECT COUNT(*) FROM clinical_fact WHERE kind = ?",
                          (column,)).fetchone()[0]
+    elif table == "note_reference":
+        # Notes have no table of their own: the record is the document row.
+        n = conn.execute(
+            "SELECT COUNT(*) FROM document WHERE kind = 'fhir' AND "
+            "fhir_resource_type IN ('DocumentReference', 'DiagnosticReport')"
+        ).fetchone()[0]
     else:
         n = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     assert n == 0
@@ -99,6 +110,40 @@ def test_each_switch_skips_exactly_its_kind(conn, tmp_path, kind, table, column)
     # the other kinds still landed
     assert conn.execute("SELECT COUNT(*) FROM clinical_fact").fetchone()[0] + \
         conn.execute("SELECT COUNT(*) FROM lab_result").fetchone()[0] > 0
+
+
+def test_a_newer_export_updates_a_facts_status(conn, tmp_path):
+    """A prescription the health system has stopped must stop reporting as
+    active. Everything else about the row is identical, so the dedup key is
+    the same and the first write used to win forever."""
+    first = _folder_with_clinical(tmp_path / "first")
+    sid = _source(conn, first)
+    fhir.ingest_clinical(conn, first, source_file_id=sid)
+    conn.commit()
+    assert conn.execute(
+        "SELECT status FROM clinical_fact WHERE kind = 'medication'"
+    ).fetchone()[0] == "completed"
+
+    later = _folder_with_clinical(tmp_path / "later")
+    member = later / "clinical-records" / "MedicationRequest-ibuprofen.json"
+    resource = json.loads(member.read_text())
+    resource["id"] = "med-ibu-2"          # a new resource id, as Epic sends
+    resource["status"] = "stopped"
+    member.write_text(json.dumps(resource))
+    stats = fhir.ingest_clinical(conn, later,
+                                 source_file_id=_source(conn, later))
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT f.status, d.path FROM clinical_fact f "
+        "JOIN document d ON d.id = f.document_id "
+        "WHERE f.kind = 'medication'").fetchone()
+    assert row["status"] == "stopped"
+    assert row["path"].endswith("MedicationRequest-ibuprofen.json")
+    assert stats.medications == 1          # the change is reported, not silent
+    assert conn.execute(
+        "SELECT COUNT(*) FROM clinical_fact WHERE kind = 'medication'"
+    ).fetchone()[0] == 1
 
 
 def test_parse_skip_list_accepts_kinds_and_rejects_anything_else():

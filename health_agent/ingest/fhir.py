@@ -437,10 +437,19 @@ def store_clinical(conn, parsed, *, source_file_id: int,
 
     if isinstance(parsed, ParsedFact):
         before = conn.total_changes
+        # `status` is the one column whose staleness changes what the row
+        # means: a prescription the health system has stopped kept reporting
+        # as active, because the dedup key omits status and the write ignored
+        # the conflict. Newest write wins, and the citation moves with it to
+        # the file the new status came from. The WHERE keeps a re-ingest of an
+        # unchanged export reporting zeros, as every other store here does.
         conn.execute(
-            "INSERT OR IGNORE INTO clinical_fact(document_id, kind, name, "
+            "INSERT INTO clinical_fact(document_id, kind, name, "
             "code, code_system, status, onset_date, detail_text, category, "
-            "dedup_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            "dedup_key) VALUES(?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(dedup_key) DO UPDATE SET "
+            "status = excluded.status, document_id = excluded.document_id "
+            "WHERE clinical_fact.status IS NOT excluded.status",
             (document_id, _FACT_ROW_KIND[parsed.kind], parsed.name,
              parsed.code, parsed.code_system, parsed.status, parsed.onset_date,
              parsed.detail_text, parsed.category,

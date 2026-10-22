@@ -262,6 +262,41 @@ def test_gather_assembles_the_sheet(fixture_index):
     assert sheet.literature is None
 
 
+def test_fhir_labs_without_a_pdf_are_named_in_looked_at(tmp_path):
+    """The state I1 was reproduced on: labs from the clinical-records folder
+    and no report PDFs. The sheet said "No lab reports in the index" directly
+    above a question drawn from those labs."""
+    from health_agent.ingest import healthkit
+    from health_agent.store import sqlite_schema
+
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    marker = tmp_path / "marker.txt"
+    marker.write_text("x")
+    sid, _ = healthkit.register_source_file(conn, marker, "healthkit",
+                                            healthkit.sha256_file(marker))
+    doc = conn.execute(
+        "INSERT INTO document(source_file_id, path, kind, fhir_resource_type, "
+        "page_count, extraction, ingested_at) "
+        "VALUES(?,'clinical-records/Observation-c0.json','fhir','Observation',"
+        "0,'none','2026-10-21')", (sid,)).lastrowid
+    for day, value in (("2024-02-11", 250.0), ("2025-02-11", 232.0)):
+        conn.execute(
+            "INSERT INTO lab_result(document_id, page_no, analyte, "
+            "analyte_key, value_num, unit, ref_low, ref_high, ref_text, "
+            "collected_date, raw_line, extracted_by, via_ocr, dedup_key) "
+            "VALUES(?,0,'Cholesterol','total_cholesterol',?,'mg/dL',0,200,"
+            "'0-200',?,'x','fhir',0,?)", (doc, value, day, f"{day}".encode()))
+    conn.commit()
+
+    sheet = visit_prep.gather(conn, window_days=30, today=date(2026, 9, 20))
+    text = visit_prep.render(sheet)
+    assert "No lab reports in the index" not in text
+    assert "2 lab value(s) from your clinical records" in text
+    assert "2024-02-11 to 2025-02-11" in text
+    conn.close()
+
+
 def test_signals_are_ordered_out_of_range_then_near_limit_then_returned_then_shift(fixture_index):
     sheet = visit_prep.gather(fixture_index, window_days=30, today=date(2026, 9, 20))
     kinds = [s.kind for s in sheet.signals]
