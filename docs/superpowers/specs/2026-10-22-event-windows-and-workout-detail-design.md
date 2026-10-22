@@ -213,8 +213,11 @@ named checks:
   ranges. This is T7's refusal, and it is a rule rather than a judgment.
 
 The verdict is one of `ok`, `no_overlap`, `thin_on_one_side`,
-`missing_measure_on_one_side`, or `insufficient_data`, with the numbers that
-produced it. It is rendered from a fixed template, the way the visit-prep
+`missing_measure_on_one_side`, `unit_mismatch`, or `insufficient_data`, with
+the numbers that produced it. `unit_mismatch` exists because the other five
+would let two sides measured in different units past as `ok` whenever their
+numbers happened to overlap, and since units are never converted, differing
+units mean the two sides are not the same measurement. It is rendered from a fixed template, the way the visit-prep
 sheet and the literature block are, so the guardrail can be run over the
 rendered text as a test oracle.
 
