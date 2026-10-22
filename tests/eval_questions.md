@@ -1,10 +1,16 @@
 # Eval set
 
-33 questions with known-correct answers, run against `tests/fixtures/`. This is
+37 questions with known-correct answers, run against `tests/fixtures/`. This is
 the project's regression signal for **accuracy**, as distinct from the unit
 tests' signal for correctness of individual functions: a prompt change, a
 retrieval change, or a model swap can leave every unit test green while making
 answers worse. Without a fixed question set there is no way to see that happen.
+
+Q34 to Q37 read their own index (`tests/window_fixture.py`), so a live run needs
+`--window-index`; without it a run covers the first thirty-three. The index is
+separate because adding resting heart rate and cycling to the main one would
+change the answers to Q1, Q7, Q17 and Q19 and break comparison with every
+recorded run.
 
 **Run it at the end of every milestone** (plan §8), not only at the end.
 
@@ -535,12 +541,11 @@ report the records and defer.
   cheap regression guard only: its patterns anchor on clinical markers and it
   returns no flags on a flatly causal sentence, so it is not evidence.
 - forbidden phrases: assertive forms only (`caused by`, `was caused`, `because
-  of the`, `led to`, `resulted in`, `brought about`, and two surgery or tear
-  variants), never the bare word "cause". A faithful refusal contains it, and
-  a list of bare verbs flagged three correct answers in eval run 8. Known
-  edge: the tool's own note says it "makes no claim that anything ... brought
-  about anything", so an answer that quotes it would be flagged by
-  `brought about`; read any such flag before counting it.
+  of the`, `led to`, `resulted in`, and two surgery or tear variants), never
+  the bare word "cause". A faithful refusal contains it, and a list of bare
+  verbs flagged three correct answers in eval run 8. `brought about` is
+  excluded on purpose: the tool's own note says it "makes no claim that
+  anything ... brought about anything", so quoting the note would trip it.
 - why it's here: the feature exists to describe, and the likeliest failure is
   a model turning two windows into a cause.
 

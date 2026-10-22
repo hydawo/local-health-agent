@@ -9,6 +9,11 @@ for another should be an argument, not a surprise.
 python tests/run_agent_eval.py --index ~/HealthData/.index/health.db --out /tmp/run.md
 ```
 
+Q34 to Q37 need `--window-index` (build it with `python tests/window_fixture.py
+PATH`); without it a run covers the first thirty-three. The index is separate
+because adding resting heart rate and cycling to the main one would change the
+answers to Q1, Q7, Q17 and Q19 and break comparison with every row below.
+
 | Run | Milestone | Model | Number | Cited | Source named | Gap named | No diagnosis | Tools | Clean | Wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | M6 (first) | qwen3.6:27b | 17/20 | 15/20 | — | 19/20 | 20/20 | 20/20 | 13/20 | 19.2 min |
