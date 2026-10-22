@@ -108,6 +108,12 @@ def test_every_derivation_returns_a_reason_for_non_numbers_and_never_raises():
         "not a number: nan")
     assert derive.ratio("x", "1", "lb", 2.0, "lb").reason == "not a number: '1'"
     assert derive.percentile(None, 50, "u").reason == "no values in scope"
+    # repr() on an integer past CPython's 4300-digit limit raises, so the
+    # reason has to be built without calling repr on the raw value.
+    assert derive.pace(10 ** 5000, "mi", 5.0, "min").value is None
+    assert derive.percentile([1.0], 10 ** 5000, "u").value is None
+    # A reason is read by a local model, so it stays short enough to scan.
+    assert len(derive.pace(10 ** 400, "mi", 5.0, "min").reason) <= 80
     assert derive.percentile([1.0], float("nan"), "u").reason == (
         "not a number: nan")
 

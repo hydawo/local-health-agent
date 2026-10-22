@@ -47,13 +47,37 @@ def _missing(name: str) -> Derived:
     return Derived(name, None, None, "a value this needs is missing")
 
 
+def _bound(text: str) -> str:
+    return text if len(text) <= 40 else text[:37] + "..."
+
+
+def _short(value) -> str:
+    """A bounded repr of a rejected value. repr() on a very large integer
+    raises ValueError past CPython's 4300-digit limit, and an unbounded echo
+    would put hundreds of characters into a reason a language model reads."""
+    try:
+        text = repr(value)
+    except (ValueError, OverflowError):
+        text = f"<{type(value).__name__}>"
+    return _bound(text)
+
+
+def _label(value) -> str:
+    """A bounded str() of a unit label, for the same reasons as _short."""
+    try:
+        text = str(value)
+    except (ValueError, OverflowError):
+        text = f"<{type(value).__name__}>"
+    return _bound(text)
+
+
 def _reject(name: str, *values) -> Derived | None:
     """A Derived saying why the values cannot be used, or None if they can."""
     for value in values:
         if value is None:
             return _missing(name)
         if _finite(value) is None:
-            return Derived(name, None, None, f"not a number: {value!r}")
+            return Derived(name, None, None, f"not a number: {_short(value)}")
     return None
 
 
@@ -83,7 +107,7 @@ def speed(distance: float | None, distance_unit: str | None,
               if isinstance(duration_unit, str) else None)
     if factor is None:
         return Derived("speed", None, None,
-                       f"unknown duration unit: {duration_unit}")
+                       f"unknown duration unit: {_label(duration_unit)}")
     hours = t / factor
     return Derived("speed", d / hours, f"{distance_unit or '?'}/hr")
 
@@ -114,7 +138,7 @@ def ratio(name: str, a: float | None, unit_a: str | None,
     x, y = _finite(a), _finite(b)
     if (unit_a or None) != (unit_b or None):
         return Derived(name, None, None,
-                       f"incompatible units: {unit_a} and {unit_b}")
+                       f"incompatible units: {_label(unit_a)} and {_label(unit_b)}")
     if y == 0:
         return Derived(name, None, None, "denominator is zero")
     return Derived(name, x / y, None)
@@ -128,7 +152,7 @@ def percentile(values, p: int, unit: str | None) -> Derived:
     """
     pf = _finite(p)
     if pf is None:
-        return Derived("percentile", None, None, f"not a number: {p!r}")
+        return Derived("percentile", None, None, f"not a number: {_short(p)}")
     try:
         items = list(values)
     except TypeError:
