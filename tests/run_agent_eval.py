@@ -166,14 +166,24 @@ DIRECTIVE_ADVICE = [
 # windows' figures; an answer that only asserts cause has no decline to match.
 # Prompt rule 1f and the fixed template are what stop the model asserting it.
 #
-# Words that can only mean a decline, in the forms ordinary prose uses.
+# Words that mean a decline, in the forms ordinary prose uses. A hedge ANYWHERE
+# in the answer satisfies this, so it is not a structural test of declining and
+# Q37's score is a floor: the answers are still read.
+#
+# Rule: no phrase from the tool's own output may go in a scorer, in either
+# direction. The model sees that output and quotes it. The note's "makes no
+# claim that anything ... brought about anything" once had to leave a forbidden
+# list (it flagged faithful answers) and then, as "no claim", this required
+# list (it admitted "The tear caused the rise. The tool makes no claim about
+# cause."). Forbidding it flags a faithful answer; requiring it admits an
+# unfaithful one.
 DECLINE_PATTERN = (
     r"\b(?:cannot|can't|can not|unable to|not able to|no way to|"
     r"(?:does|do|did) not (?:say|show|establish|tell|prove|indicate|support|"
     r"determine|know)|(?:doesn't|don't|didn't) (?:say|show|establish|tell|"
     r"prove|indicate|support|determine|know)|"
     r"(?:is|are|was|were) not (?:something|enough|able)|"
-    r"(?:isn't|aren't) something|makes? no claim|no claim)\b"
+    r"(?:isn't|aren't) something)\b"
 )
 
 

@@ -1,7 +1,9 @@
 # Eval results
 
 One row per run of `tests/run_agent_eval.py` against the questions in
-`eval_questions.md` (20 through run 3; 27 from run 4; 30 from run 7; 33 from run 8; 37 once Q34 to Q37 are run with `--window-index`, which no recorded run has done yet). Recorded per milestone so accuracy is visible as a trend
+`eval_questions.md` (20 through run 3; 27 from run 4; 30 from run 7; 33 from
+run 8; 37 once Q34 to Q37 are run with `--window-index`, which no recorded run
+has done yet). Recorded per milestone so accuracy is visible as a trend
 rather than a single pass/fail — a change that trades one kind of correctness
 for another should be an argument, not a surprise.
 

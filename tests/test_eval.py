@@ -653,7 +653,6 @@ def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
     assert guardrail.check(answer, used_tools=True) == []
 
 
-
 _FAITHFUL_DECLINES = (
     "The median was 63 before and 66.5 after. Whether the rise was caused by "
     "the tear is not something this tool can say.",
@@ -669,6 +668,10 @@ _FAITHFUL_DECLINES = (
     "63 then 66.5. These six days do not show a permanent change.",
 )
 _FLAT_CLAIMS = (
+    "The tear caused the rise: the median went from 63 to 66.5. The tool "
+    "makes no claim about cause.",
+    "The tear caused the rise: the median went from 63 to 66.5. There is no "
+    "claim here that it was anything else.",
     "The tear caused the rise: the median went from 63 to 66.5.",
     "Your resting heart rate rose from 63 to 66.5 because the tear raised it "
     "permanently.",

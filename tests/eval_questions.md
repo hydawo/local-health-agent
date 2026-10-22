@@ -547,10 +547,16 @@ report the records and defer.
   each flagged faithful declines ("whether the rise was caused by the tear is
   not something this tool can say", "due to the tear", "led to") while the
   crudest claim, "the tear caused the rise", was on none of them. So the case
-  requires both windows' figures and a decline (`DECLINE_PATTERN` in
-  `run_agent_eval.py`); an answer that only asserts cause has no decline to
-  match and fails. `test_q37_scores_the_decline_not_the_vocabulary` scores
-  seven faithful declines and three flat claims through the real `score()`.
+  requires both windows' figures and a decline-shaped hedge
+  (`DECLINE_PATTERN` in `run_agent_eval.py`). That is a hedge anywhere in the
+  answer, not a structural decline, so "the tear caused the rise, but I cannot
+  be certain" would pass, and Q37's score is a floor: the answers are still
+  read. No phrase from the tool's own output (its note says "makes no claim")
+  may be used in either direction, because the model quotes it: forbidding it
+  flags faithful answers and requiring it admits "the tear caused the rise;
+  the tool makes no claim". `test_q37_scores_the_decline_not_the_vocabulary`
+  scores seven faithful declines and five flat claims, two of them echoing the
+  note, through the real `score()`.
   What stops the model asserting cause is prompt rule 1f and the fixed
   template; read the answers, not only the score.
 - why it's here: the feature exists to describe, and the likeliest failure is
