@@ -20,9 +20,11 @@ one contributing source, so a suspicious total is visible rather than silent.
 from __future__ import annotations
 
 import sqlite3
+import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
+from typing import Sequence
 
 from ..labs import slug as _labs_slug
 from .. import metrics
@@ -502,6 +504,179 @@ def workout_measures(conn) -> list[dict]:
     return out
 
 
+@dataclass(frozen=True)
+class WorkoutSeriesPoint:
+    period: str
+    period_start: str
+    period_end: str
+    n: int
+    # Summed over the period. None when no workout in it reported the figure,
+    # or when the workouts that did reported it in different units, because
+    # units are never converted and a sum across two of them is no figure.
+    duration: float | None
+    distance: float | None
+    energy: float | None
+    measures: dict
+    derived: dict
+    duration_unit: str | None = None
+    distance_unit: str | None = None
+    energy_unit: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkoutSeries:
+    """Mirrors SeriesResult's field names (points, unit, is_empty,
+    total_records, available_from, available_to) so a caller can read either
+    without asking which it has. Separate because SeriesResult carries a
+    Metric and a workout series has none."""
+    label: str
+    period: str
+    unit: str | None
+    points: list[WorkoutSeriesPoint] = field(default_factory=list)
+    total_records: int = 0
+    available_from: str | None = None
+    available_to: str | None = None
+
+    @property
+    def is_empty(self) -> bool:
+        return not self.points
+
+
+def _summed(rows, value_attr: str, unit_attr: str):
+    """(sum, unit) over the rows that carry the figure; (None, None) when none
+    do or when their units differ."""
+    pairs = [(getattr(r, value_attr), getattr(r, unit_attr)) for r in rows
+             if getattr(r, value_attr) is not None]
+    if not pairs:
+        return None, None
+    units = {u for _, u in pairs}
+    if len(units) != 1:
+        return None, None
+    return sum(v for v, _ in pairs), units.pop()
+
+
+def _entry(d) -> dict:
+    return {"value": d.value, "unit": d.unit, "reason": d.reason}
+
+
+def workout_series(conn, *, period="week", activity=None, start=None, end=None,
+                   indoor=None, source_include=(), source_exclude=(),
+                   measures=(), derive_names=(), ratio_of=None,
+                   percentile_of=None) -> WorkoutSeries:
+    """Workouts grouped by period, with each measure summarized by median.
+
+    Median rather than mean, so one 4-hour ride cannot carry a week.
+
+    `ratio` and `percentile` are named, not positional. `ratio_of` is a
+    (numerator, denominator) pair and `percentile_of` one measure, each of
+    which must be among `measures`. Without them, `percentile` is taken only
+    when exactly one measure was asked for, and `ratio` is refused with a
+    reason, so reordering `measures` can never change what is divided.
+    """
+    if period not in PERIODS:
+        raise ValueError(f"period must be one of {PERIODS}")
+    for name in derive_names:
+        if name not in derive.DERIVATIONS:
+            raise ValueError(f"unknown derivation: {name}")
+    if ratio_of is not None:
+        if len(ratio_of) != 2:
+            raise ValueError("ratio_of is a (numerator, denominator) pair")
+        for m in ratio_of:
+            if m not in measures:
+                raise ValueError(f"ratio_of names a measure not requested: {m}")
+    if percentile_of is not None and percentile_of not in measures:
+        raise ValueError(
+            f"percentile_of names a measure not requested: {percentile_of}")
+
+    rows = workout_detail(
+        conn, activity=activity, start=start, end=end, indoor=indoor,
+        source_include=source_include, source_exclude=source_exclude,
+        measures=measures,
+        derive_names=tuple(n for n in derive_names
+                           if n not in _SERIES_ONLY_DERIVATIONS),
+        limit=1_000_000)
+    total, first, last = workout_coverage(conn)
+    label = activity or "all workouts"
+    if not rows:
+        return WorkoutSeries(label=label, period=period, unit=None,
+                             total_records=total, available_from=first,
+                             available_to=last)
+
+    buckets: dict[str, list[WorkoutRow]] = {}
+    spans: dict[str, tuple[str, str]] = {}
+    for row in rows:
+        key, first_day, last_day = bucket(row.local_date, period)
+        buckets.setdefault(key, []).append(row)
+        spans[key] = (first_day, last_day)
+
+    measure_units = {m["unit"] for row in rows for m in row.measures.values()
+                     if m.get("unit")}
+    unit = next(iter(measure_units)) if len(measure_units) == 1 else None
+
+    pct_measure = percentile_of or (measures[0] if len(measures) == 1 else None)
+    points = []
+    for key in sorted(buckets):
+        group = buckets[key]
+        summarized = {}
+        for measure in measures:
+            values = [r.measures[measure]["value"] for r in group
+                      if r.measures.get(measure, {}).get("value") is not None]
+            summarized[measure] = {
+                "median": statistics.median(values) if values else None,
+                "n": len(values),
+                "missing": len(group) - len(values),
+                "unit": next((r.measures[measure]["unit"] for r in group
+                              if r.measures.get(measure, {}).get("unit")), None),
+            }
+        derived = {}
+        for name in derive_names:
+            if name == "percentile":
+                if pct_measure is None:
+                    for p in (50, 90):
+                        derived[f"p{p}"] = {
+                            "value": None, "unit": None,
+                            "reason": "percentile needs percentile_of when "
+                                      "more than one measure is requested"}
+                    continue
+                values = [r.measures[pct_measure]["value"] for r in group
+                          if r.measures.get(pct_measure, {}).get("value")
+                          is not None]
+                for p in (50, 90):
+                    derived[f"p{p}"] = _entry(derive.percentile(
+                        values, p, summarized[pct_measure]["unit"]))
+            elif name == "ratio":
+                if ratio_of is None:
+                    derived["ratio"] = {
+                        "value": None, "unit": None,
+                        "reason": "ratio needs ratio_of, a (numerator, "
+                                  "denominator) pair of requested measures"}
+                else:
+                    a, b = summarized[ratio_of[0]], summarized[ratio_of[1]]
+                    derived["ratio"] = _entry(derive.ratio(
+                        "ratio", a["median"], a["unit"],
+                        b["median"], b["unit"]))
+            else:
+                values = [r.derived[name]["value"] for r in group
+                          if r.derived.get(name, {}).get("value") is not None]
+                derived[name] = {
+                    "value": statistics.median(values) if values else None,
+                    "unit": next((r.derived[name]["unit"] for r in group
+                                  if r.derived.get(name, {}).get("unit")), None),
+                    "reason": None if values else "no value in this period",
+                }
+        dur, dur_u = _summed(group, "duration", "duration_unit")
+        dist, dist_u = _summed(group, "total_distance", "total_distance_unit")
+        en, en_u = _summed(group, "total_energy", "total_energy_unit")
+        points.append(WorkoutSeriesPoint(
+            period=key, period_start=spans[key][0], period_end=spans[key][1],
+            n=len(group), duration=dur, distance=dist, energy=en,
+            measures=summarized, derived=derived, duration_unit=dur_u,
+            distance_unit=dist_u, energy_unit=en_u))
+    return WorkoutSeries(label=label, period=period, unit=unit, points=points,
+                         total_records=total, available_from=first,
+                         available_to=last)
+
+
 # --------------------------------------------------------------------------- #
 # Metric series
 # --------------------------------------------------------------------------- #
@@ -515,6 +690,7 @@ def metric_series(
     start: str | None = None,
     end: str | None = None,
     source: str | None = None,
+    source_exclude: Sequence[str] = (),
     combine: str = "auto",
 ) -> SeriesResult:
     """Aggregate one metric over time, from the materialized daily rollup.
@@ -541,9 +717,9 @@ def metric_series(
     if end:
         sql += "AND local_date <= ? "
         params.append(end)
-    if source:
-        sql += "AND source_name = ? "
-        params.append(source)
+    clause, extra = _source_clauses((source,) if source else (), source_exclude)
+    sql += clause + " "
+    params += extra
     sql += "ORDER BY local_date"
 
     rows = conn.execute(sql, params).fetchall()
