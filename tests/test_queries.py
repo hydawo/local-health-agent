@@ -482,3 +482,11 @@ def test_a_source_named_in_both_include_and_exclude_is_an_error(ingested):
     conn, _ = ingested
     with pytest.raises(ValueError):
         series(conn, "resting-hr", source="Watch", source_exclude=("Watch",))
+
+
+def test_a_single_named_source_still_selects_only_that_source(ingested):
+    conn, _ = ingested
+    sources = series(conn, "resting-hr").sources_seen
+    only = series(conn, "resting-hr", source=sources[0])
+    assert only.sources_seen == (sources[0],)
+    assert series(conn, "resting-hr", source="No Such Device").is_empty

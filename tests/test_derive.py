@@ -129,3 +129,10 @@ def test_seconds_converts_known_units_and_refuses_unknown_ones():
     assert derive.seconds(5.0, "sec") == 5.0
     assert derive.seconds(5.0, "fortnight") is None
     assert derive.seconds(None, "min") is None
+
+
+def test_median_is_the_middle_value_and_averages_the_two_middle_of_an_even_count():
+    assert derive.median([3, 1, 2], "u").value == 2
+    assert derive.median([1, 2, 3, 4], "u").value == 2.5
+    assert derive.median([], "u").value is None
+    assert derive.median([None, float("nan")], "u").reason

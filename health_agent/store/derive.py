@@ -156,6 +156,25 @@ def ratio(name: str, a: float | None, unit_a: str | None,
     return Derived(name, x / y, None)
 
 
+def median(values, unit: str | None) -> Derived:
+    """The middle value, or the mean of the two middle values for an even count.
+
+    A central tendency, not an extreme, so the two-middle average is allowed
+    here where percentile is nearest rank.
+    """
+    try:
+        items = list(values)
+    except TypeError:
+        items = []
+    ordered = sorted(x for x in map(_finite, items) if x is not None)
+    if not ordered:
+        return Derived("median", None, unit, "no values in scope")
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return Derived("median", ordered[mid], unit)
+    return Derived("median", (ordered[mid - 1] + ordered[mid]) / 2, unit)
+
+
 def percentile(values, p: int, unit: str | None) -> Derived:
     """Nearest rank, no interpolation.
 

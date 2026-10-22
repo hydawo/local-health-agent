@@ -20,7 +20,6 @@ one contributing source, so a suspicious total is visible rather than silent.
 from __future__ import annotations
 
 import sqlite3
-import statistics
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -515,9 +514,10 @@ class WorkoutSeriesPoint:
     period_start: str
     period_end: str
     n: int
-    # Summed over the period. None when no workout in it reported the figure,
-    # or when the workouts that did reported it in different units, because
-    # units are never converted and a sum across two of them is no figure.
+    # Summed over the period. value None with unit None: no workout reported
+    # the figure. value None with unit "mixed": workouts reported it in
+    # different units, and units are never converted, so the tool refused to
+    # add them.
     duration: float | None
     distance: float | None
     energy: float | None
@@ -549,15 +549,34 @@ class WorkoutSeries:
 
 def _summed(rows, value_attr: str, unit_attr: str):
     """(sum, unit) over the rows that carry the figure; (None, None) when none
-    do or when their units differ."""
+    do, (None, "mixed") when their units differ."""
     pairs = [(getattr(r, value_attr), getattr(r, unit_attr)) for r in rows
              if getattr(r, value_attr) is not None]
     if not pairs:
         return None, None
     units = {u for _, u in pairs}
     if len(units) != 1:
-        return None, None
+        return None, _MIXED
     return sum(v for v, _ in pairs), units.pop()
+
+
+_MIXED = "mixed"
+
+
+def _median_in_one_unit(pairs, name: str) -> dict:
+    """Median of (value, unit) pairs, refused when the units differ.
+
+    The reason names the units seen, and `units` lists them, rather than
+    picking one to label a figure that mixes them."""
+    units = sorted({u for _, u in pairs if u}, key=str)
+    if len(units) > 1:
+        return {"value": None, "unit": _MIXED, "units": units,
+                "reason": f"{name} reported in more than one unit: "
+                          f"{', '.join(units)}"}
+    unit = units[0] if units else None
+    d = derive.median([v for v, _ in pairs], unit)
+    return {"value": d.value, "unit": d.unit, "units": units,
+            "reason": None if d.value is not None else "no value in this period"}
 
 
 def _entry(d) -> dict:
@@ -584,14 +603,23 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         if name not in derive.DERIVATIONS:
             raise ValueError(f"unknown derivation: {name}")
     if ratio_of is not None:
+        if "ratio" not in derive_names:
+            raise ValueError("ratio_of was given but ratio is not in "
+                             "derive_names")
         if len(ratio_of) != 2:
             raise ValueError("ratio_of is a (numerator, denominator) pair")
+        if ratio_of[0] == ratio_of[1]:
+            raise ValueError("ratio_of names the same measure twice")
         for m in ratio_of:
             if m not in measures:
                 raise ValueError(f"ratio_of names a measure not requested: {m}")
-    if percentile_of is not None and percentile_of not in measures:
-        raise ValueError(
-            f"percentile_of names a measure not requested: {percentile_of}")
+    if percentile_of is not None:
+        if "percentile" not in derive_names:
+            raise ValueError("percentile_of was given but percentile is not "
+                             "in derive_names")
+        if percentile_of not in measures:
+            raise ValueError(
+                f"percentile_of names a measure not requested: {percentile_of}")
 
     rows = workout_detail(
         conn, activity=activity, start=start, end=end, indoor=indoor,
@@ -624,14 +652,14 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         group = buckets[key]
         summarized = {}
         for measure in measures:
-            values = [r.measures[measure]["value"] for r in group
-                      if r.measures.get(measure, {}).get("value") is not None]
+            pairs = [(r.measures[measure]["value"], r.measures[measure].get("unit"))
+                     for r in group
+                     if r.measures.get(measure, {}).get("value") is not None]
+            m = _median_in_one_unit(pairs, measure)
             summarized[measure] = {
-                "median": statistics.median(values) if values else None,
-                "n": len(values),
-                "missing": len(group) - len(values),
-                "unit": next((r.measures[measure]["unit"] for r in group
-                              if r.measures.get(measure, {}).get("unit")), None),
+                "median": m["value"], "n": len(pairs),
+                "missing": len(group) - len(pairs),
+                "unit": m["unit"], "units": m["units"], "reason": m["reason"],
             }
         derived = {}
         for name in derive_names:
@@ -646,9 +674,15 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                 values = [r.measures[pct_measure]["value"] for r in group
                           if r.measures.get(pct_measure, {}).get("value")
                           is not None]
+                pct_unit = summarized[pct_measure]["unit"]
                 for p in (50, 90):
-                    derived[f"p{p}"] = _entry(derive.percentile(
-                        values, p, summarized[pct_measure]["unit"]))
+                    if pct_unit == _MIXED:
+                        derived[f"p{p}"] = {
+                            "value": None, "unit": _MIXED,
+                            "reason": summarized[pct_measure]["reason"]}
+                    else:
+                        derived[f"p{p}"] = _entry(
+                            derive.percentile(values, p, pct_unit))
             elif name == "ratio":
                 if ratio_of is None:
                     derived["ratio"] = {
@@ -657,18 +691,22 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                                   "denominator) pair of requested measures"}
                 else:
                     a, b = summarized[ratio_of[0]], summarized[ratio_of[1]]
+                    refused = next((x for x in (a, b) if x["unit"] == _MIXED),
+                                   None)
+                    if refused:
+                        derived["ratio"] = {"value": None, "unit": _MIXED,
+                                            "reason": refused["reason"]}
+                        continue
                     derived["ratio"] = _entry(derive.ratio(
                         "ratio", a["median"], a["unit"],
                         b["median"], b["unit"]))
             else:
-                values = [r.derived[name]["value"] for r in group
-                          if r.derived.get(name, {}).get("value") is not None]
-                derived[name] = {
-                    "value": statistics.median(values) if values else None,
-                    "unit": next((r.derived[name]["unit"] for r in group
-                                  if r.derived.get(name, {}).get("unit")), None),
-                    "reason": None if values else "no value in this period",
-                }
+                pairs = [(r.derived[name]["value"], r.derived[name].get("unit"))
+                         for r in group
+                         if r.derived.get(name, {}).get("value") is not None]
+                m = _median_in_one_unit(pairs, name)
+                derived[name] = {"value": m["value"], "unit": m["unit"],
+                                 "reason": m["reason"]}
         dur, dur_u = _summed(group, "duration", "duration_unit")
         dist, dist_u = _summed(group, "total_distance", "total_distance_unit")
         en, en_u = _summed(group, "total_energy", "total_energy_unit")
