@@ -11,6 +11,7 @@ nothing here reads an export.
 from __future__ import annotations
 
 import json
+import math
 
 # The aggregates the export records on a WorkoutStatistics element. Order is
 # the order rows come back in, so a reader sees average before maximum.
@@ -27,16 +28,21 @@ def _loads(blob: str | None, want: type):
         return None
     try:
         parsed = json.loads(blob)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, RecursionError):
         return None
     return parsed if isinstance(parsed, want) else None
 
 
 def _num(value) -> float | None:
+    """A finite number, or None. Booleans and NaN or infinity take the text
+    branch rather than becoming numbers."""
+    if isinstance(value, bool):
+        return None
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if math.isfinite(number) else None
 
 
 def stat_rows(statistics_json: str | None, metadata_json: str | None
@@ -53,7 +59,7 @@ def stat_rows(statistics_json: str | None, metadata_json: str | None
         if not isinstance(entry, dict):
             continue
         type_name = entry.get("type")
-        if not type_name:
+        if not isinstance(type_name, str) or not type_name:
             continue
         unit = entry.get("unit")
         for agg in STAT_AGGS:
@@ -62,16 +68,14 @@ def stat_rows(statistics_json: str | None, metadata_json: str | None
             raw = entry[agg]
             value = _num(raw)
             rows.append(("statistic", f"{type_name}:{agg}", value,
-                         None if value is not None else _text(raw), unit))
+                         None if value is not None or raw is None else str(raw),
+                         unit))
     for key, raw in sorted((_loads(metadata_json, dict) or {}).items()):
         value = _num(raw)
         rows.append(("metadata", key, value,
-                     None if value is not None else _text(raw), None))
+                     None if value is not None or raw is None else str(raw),
+                     None))
     return rows
-
-
-def _text(raw) -> str | None:
-    return None if raw is None else str(raw)
 
 
 def indoor_flag(metadata_json: str | None) -> int | None:

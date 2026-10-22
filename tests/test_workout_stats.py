@@ -54,3 +54,43 @@ def test_the_indoor_flag_reads_true_false_and_absent():
     assert workout_stats.indoor_flag('{"HKAlgorithmVersion": "2"}') is None
     assert workout_stats.indoor_flag(None) is None
     assert workout_stats.indoor_flag('{"HKIndoorWorkout": "maybe"}') is None
+
+
+def test_a_deeply_nested_blob_yields_no_rows_rather_than_raising():
+    """The migration runs over every blob already in the index, so a blob
+    nested past the parser's recursion limit must cost only itself."""
+    deep = "[" * 100_000 + "]" * 100_000
+    assert workout_stats.stat_rows(deep, None) == []
+    assert workout_stats.indoor_flag('{"HKIndoorWorkout": ' + "[" * 100_000) is None
+
+
+def test_booleans_and_non_finite_values_take_the_text_branch():
+    rows = workout_stats.stat_rows(
+        '[{"type": "T", "average": true, "minimum": "nan", '
+        '"maximum": "1e999", "unit": "u"}]', None)
+    assert rows == [
+        ("statistic", "T:average", None, "True", "u"),
+        ("statistic", "T:minimum", None, "nan", "u"),
+        ("statistic", "T:maximum", None, "1e999", "u"),
+    ]
+
+
+def test_the_sum_aggregate_is_recorded_like_the_others():
+    rows = workout_stats.stat_rows(
+        '[{"type": "T", "sum": "42", "unit": "u"}]', None)
+    assert rows == [("statistic", "T:sum", 42.0, None, "u")]
+
+
+def test_a_non_dict_entry_is_skipped_among_valid_ones():
+    rows = workout_stats.stat_rows(
+        '[{"type": "T", "average": "1", "unit": "u"}, 7, '
+        '{"type": "U", "average": "2", "unit": "u"}]', None)
+    assert [(r[1], r[2]) for r in rows] == [("T:average", 1.0),
+                                            ("U:average", 2.0)]
+
+
+def test_a_non_string_type_yields_no_rows():
+    assert workout_stats.stat_rows(
+        '[{"type": 5, "average": "1", "unit": "u"}]', None) == []
+    assert workout_stats.stat_rows(
+        '[{"type": ["a"], "average": "1", "unit": "u"}]', None) == []
