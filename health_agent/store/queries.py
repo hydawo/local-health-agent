@@ -432,8 +432,11 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
                              "reason": d.reason}
         depth = None
         if sample_counts:
-            bases = sorted({k.split(":")[0] for k, v in found.items()
-                            if v["kind"] == "statistic"})
+            # Keyed off the requested keys, not the held ones: the records
+            # are counted in the time window whether or not the workout
+            # carries a statistic for the type. A statistic key has a colon;
+            # Apple's metadata keys carry none.
+            bases = sorted({k.split(":")[0] for k in wanted if ":" in k})
             depth = {b: _sample_depth(conn, r, b) for b in bases}
         activity_name = r["activity_type"] or "workout"
         out.append(WorkoutRow(
@@ -462,6 +465,8 @@ def _sample_depth(conn, row, base_type: str) -> dict:
     if window is None:
         if row["duration"] is None:
             reason = "workout has no duration"
+        elif derive._finite(row["duration"]) is None:
+            reason = "workout duration is not a finite number"
         else:
             reason = (f"duration unit not recognized: "
                       f"{derive._label(row['duration_unit'])}")

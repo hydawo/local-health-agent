@@ -213,3 +213,39 @@ def test_workout_measures_names_what_the_index_holds_with_counts_and_spans(box):
     assert measure["first"] == "2026-03-01"
     assert measure["last"] == "2026-03-05"
     assert measure["unit"] == "count/min"
+
+
+def test_a_requested_statistic_the_workout_lacks_still_gets_a_real_count(box):
+    epoch = 1772830800.0
+    _workout(box, date="2026-03-06", epoch=epoch, hr_avg=None)
+    box.execute(
+        "INSERT INTO record(type, value_num, unit, start_date, start_epoch, "
+        "local_date, dedup_key) VALUES(?, 60, 'count/min', "
+        "'2026-03-06T09:00:00-05:00', ?, '2026-03-06', ?)",
+        (HR, epoch + 60.0, b"\x20"))
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    assert row.sample_depth[HR]["count"] == 1
+    assert row.sample_depth[HR]["reason"] is None
+
+
+def test_a_null_duration_is_reported_as_missing_not_as_a_bad_unit(box):
+    _workout(box, date="2026-03-06", hr_avg=150.0)
+    box.execute("UPDATE workout SET duration = NULL")
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    assert row.sample_depth[HR]["count"] is None
+    assert row.sample_depth[HR]["reason"] == "workout has no duration"
+
+
+@pytest.mark.parametrize("bad", ["inf", "abc"])
+def test_a_non_finite_duration_is_not_blamed_on_the_unit(box, bad):
+    _workout(box, date="2026-03-06", hr_avg=150.0)
+    box.execute("UPDATE workout SET duration = ?", (bad,))
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    reason = row.sample_depth[HR]["reason"]
+    assert "unit" not in reason and "duration" in reason
