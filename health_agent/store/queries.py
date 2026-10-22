@@ -310,6 +310,9 @@ class WorkoutRow:
     measures: dict
     derived: dict
     # {base_type: {"count": int, "window_seconds": float, "bounds": "inclusive"}}
+    # None only when sample_counts was not requested. When requested it is a
+    # dict: {} if no statistic measure was among those asked for, and an entry
+    # with count None and a reason where the window cannot be computed.
     # One entry per distinct statistic base type requested. The window is
     # start_epoch <= sample <= start_epoch + duration, so a sample on the
     # boundary of two back-to-back workouts counts for both, and one that
@@ -429,10 +432,7 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
         if sample_counts:
             bases = sorted({k.split(":")[0] for k, v in found.items()
                             if v["kind"] == "statistic"})
-            if bases:
-                depth = {b: _sample_depth(conn, r, b) for b in bases}
-                depth = {b: v for b, v in depth.items() if v is not None}
-                depth = depth or None
+            depth = {b: _sample_depth(conn, r, b) for b in bases}
         activity_name = r["activity_type"] or "workout"
         out.append(WorkoutRow(
             local_date=r["local_date"], activity_type=activity_name,
@@ -447,9 +447,10 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
     return out
 
 
-def _sample_depth(conn, row, base_type: str) -> dict | None:
+def _sample_depth(conn, row, base_type: str) -> dict:
     """How many raw records of one type fall inside the workout, with the
-    window that was counted. None when the duration or its unit is unusable.
+    window that was counted. When the duration or its unit is unusable the
+    count and window are None and `reason` says why.
 
     The interval end comes from the stored duration rather than `end_date`,
     because duration and its unit are both columns and need no parsing. The
@@ -457,13 +458,20 @@ def _sample_depth(conn, row, base_type: str) -> dict | None:
     """
     window = derive.seconds(row["duration"], row["duration_unit"])
     if window is None:
-        return None
+        if row["duration"] is None:
+            reason = "workout has no duration"
+        else:
+            reason = (f"duration unit not recognized: "
+                      f"{derive._label(row['duration_unit'])}")
+        return {"count": None, "window_seconds": None,
+                "bounds": "inclusive", "reason": reason}
     count = conn.execute(
         "SELECT COUNT(*) AS n FROM record WHERE type = ? "
         "AND start_epoch >= ? AND start_epoch <= ?",
         (base_type, row["start_epoch"], row["start_epoch"] + window),
     ).fetchone()["n"]
-    return {"count": count, "window_seconds": window, "bounds": "inclusive"}
+    return {"count": count, "window_seconds": window,
+            "bounds": "inclusive", "reason": None}
 
 
 def workout_measures(conn) -> list[dict]:

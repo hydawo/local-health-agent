@@ -112,9 +112,10 @@ def test_sample_depth_counts_the_records_inside_the_workout_interval(box):
     (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
                                     sample_counts=True)
     assert row.sample_depth == {
-        HR: {"count": 3, "window_seconds": 1800.0, "bounds": "inclusive"}}
+        HR: {"count": 3, "window_seconds": 1800.0, "bounds": "inclusive",
+             "reason": None}}
     (plain,) = queries.workout_detail(box, measures=(f"{HR}:average",))
-    assert plain.sample_depth is None
+    assert plain.sample_depth is None     # not asked is the only None
 
 
 def test_sample_counts_without_measures_is_refused(box):
@@ -131,7 +132,27 @@ def test_a_metadata_only_request_has_no_sample_depth(box):
     box.commit()
     (row,) = queries.workout_detail(box, measures=("HKIndoorWorkout",),
                                     sample_counts=True)
-    assert row.sample_depth is None
+    assert row.sample_depth == {}         # asked, nothing applicable
+
+
+def test_an_unknown_duration_unit_gives_a_reasoned_null_entry(box):
+    _workout(box, date="2026-03-06", hr_avg=150.0)
+    box.execute("UPDATE workout SET duration_unit = 'furlong'")
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    assert row.sample_depth == {HR: {
+        "count": None, "window_seconds": None, "bounds": "inclusive",
+        "reason": "duration unit not recognized: furlong"}}
+
+
+def test_a_real_zero_keeps_its_window_and_has_no_reason(box):
+    _workout(box, date="2026-03-06", hr_avg=150.0)
+    (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    assert row.sample_depth == {HR: {
+        "count": 0, "window_seconds": 1800.0, "bounds": "inclusive",
+        "reason": None}}
 
 
 def test_sample_depth_has_one_entry_per_base_type_whatever_the_order(box):
