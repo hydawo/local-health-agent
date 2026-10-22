@@ -1917,3 +1917,397 @@ def test_clinical_records_ingest_when_the_export_is_unchanged(tmp_path, capsys):
         assert conn.execute("SELECT COUNT(*) FROM lab_result").fetchone()[0] == 3
     finally:
         conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# compare, and workouts --detail / --period
+# --------------------------------------------------------------------------- #
+
+import datetime as _dt
+import re as _re
+
+from health_agent.store import sqlite_schema
+
+_RHR = "HKQuantityTypeIdentifierRestingHeartRate"
+_HR = "HKQuantityTypeIdentifierHeartRate"
+
+
+def _make_index(path, *, facts=True, workouts=True, mixed_units=False):
+    """An index built by direct inserts; export.xml is not touched."""
+    conn = sqlite_schema.connect(path, create=True)
+    sqlite_schema.initialize(conn)
+    conn.execute("INSERT INTO source_file(id, path, kind, sha256, size_bytes, "
+                 "ingested_at) VALUES(1, 'x', 'healthkit', 'h', 1, 'now')")
+    n = 0
+    for year, base in ((2023, 60), (2024, 55)):
+        for day in range(1, 32):
+            n += 1
+            d = _dt.date(year, 1, day).isoformat()
+            conn.execute(
+                "INSERT INTO record(type, value_num, unit, source_name, "
+                "start_date, start_epoch, local_date, dedup_key) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (_RHR, base + day % 4, "count/min", "Watch",
+                 f"{d}T08:00:00+00:00",
+                 _dt.datetime(year, 1, day, 8,
+                              tzinfo=_dt.timezone.utc).timestamp(),
+                 d, n.to_bytes(4, "big")))
+    sqlite_schema.rebuild_daily_metrics(conn)
+    if facts:
+        for i, (name, onset) in enumerate((("Knee sprain", "2023-06-01"),
+                                           ("Knee surgery", "2023-09-15"),
+                                           ("Asthma", None))):
+            cur = conn.execute(
+                "INSERT INTO document(source_file_id, path, kind, extraction, "
+                "ingested_at) VALUES(1, ?, 'fhir', 'text', 'now')",
+                (f"clinical-records/f{i}.json",))
+            conn.execute(
+                "INSERT INTO clinical_fact(document_id, kind, name, onset_date,"
+                " dedup_key) VALUES(?, 'condition', ?, ?, ?)",
+                (cur.lastrowid, name, onset, bytes([i + 1])))
+    if workouts:
+        for i, d in enumerate(("2023-02-06", "2023-02-08", "2023-02-10")):
+            cur = conn.execute(
+                "INSERT INTO workout(activity_type, duration, duration_unit, "
+                "total_distance, total_distance_unit, source_name, start_date, "
+                "start_epoch, local_date, indoor, dedup_key) "
+                "VALUES('HKWorkoutActivityTypeCycling', 60, 'min', 20, 'km', "
+                "'Watch', ?, ?, ?, 0, ?)",
+                (f"{d}T09:00:00+00:00",
+                 _dt.datetime.fromisoformat(f"{d}T09:00:00+00:00").timestamp(),
+                 d, bytes([10 + i])))
+            unit = "bpm" if (mixed_units and i == 1) else "count/min"
+            conn.execute(
+                "INSERT INTO workout_stat(workout_id, kind, key, value_num, "
+                "unit) VALUES(?, 'statistic', ?, ?, ?)",
+                (cur.lastrowid, f"{_HR}:average", 140.0 + i, unit))
+            conn.execute(
+                "INSERT INTO record(type, value_num, unit, source_name, "
+                "start_date, start_epoch, local_date, dedup_key) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (_HR, 150, "count/min", "Watch", f"{d}T09:10:00+00:00",
+                 _dt.datetime.fromisoformat(
+                     f"{d}T09:10:00+00:00").timestamp(), d,
+                 bytes([50 + i])))
+    conn.commit()
+    conn.close()
+    return path
+
+
+@pytest.fixture
+def workout_index(tmp_path):
+    return _make_index(tmp_path / "health.db")
+
+
+def _run(index, capsys, *args):
+    code = main(["--index", str(index), *args])
+    cap = capsys.readouterr()
+    return code, cap.out, cap.err
+
+
+_LEFT = ("--left", "2023-01-01..2023-01-31")
+_RIGHT = ("--right", "2024-01-01..2024-01-31")
+
+
+def test_compare_prints_both_sides_and_the_verdict(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        *_LEFT, *_RIGHT)
+    assert code == 0
+    assert "Earlier" in out and "Later" in out
+    assert "Not comparable" in out or "Comparable" in out
+    assert "no claim" in out                      # the standing no-cause line
+
+
+def test_compare_prints_no_gap_between_the_sides(workout_index, capsys):
+    """Medians here are 61.5 and 56.5; their gap is the reader's business."""
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        *_LEFT, *_RIGHT)
+    assert code == 0
+    for banned in ("significant", "likely", "suggests", "difference", "%",
+                   "ratio", "caused", "because of"):
+        assert banned not in out.lower().replace("because:", "")
+    assert not _re.search(r"[-+]\s?\d+(\.\d+)?\s?(bpm|count/min)", out)
+
+
+def test_compare_around_an_anchor_date_names_the_anchor(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        "--anchor", "2023-02-18", "--before", "7",
+                        "--after", "6")
+    assert code == 0
+    assert "2023-02-18" in out
+    assert "7 day(s) before" in out and "6 day(s) after" in out
+
+
+def test_compare_on_an_ambiguous_fact_lists_the_candidates_and_exits_two(
+        workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        "--anchor-fact", "knee")
+    assert code == 2
+    assert "2023-06-01" in out and "2023-09-15" in out
+    assert "Knee sprain" in out and "Knee surgery" in out
+    assert "median" not in out                    # nothing was chosen or run
+
+
+def test_compare_on_a_unique_fact_prints_its_citation(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        "--anchor-fact", "surgery", "--before", "7",
+                        "--after", "7")
+    assert code == 0
+    assert "2023-09-15" in out and "clinical-records/f1.json" in out
+
+
+def test_compare_names_three_different_anchor_absences(tmp_path, capsys):
+    plain = _make_index(tmp_path / "a.db", facts=False)
+    code, out, _ = _run(plain, capsys, "compare", "resting-hr",
+                        "--anchor-fact", "knee")
+    assert code == 2 and "no clinical facts at all" in out
+
+    held = _make_index(tmp_path / "b.db")
+    code, out2, _ = _run(held, capsys, "compare", "resting-hr",
+                         "--anchor-fact", "migraine")
+    assert code == 2 and "No clinical fact is named like" in out2
+    assert "3 condition" in out2 and "2023-06-01" in out2
+
+    code, out3, _ = _run(held, capsys, "compare", "resting-hr",
+                         "--anchor-fact", "asthma")
+    assert code == 2 and "none carries a date" in out3
+    assert len({out, out2, out3}) == 3
+
+
+def test_compare_json_carries_the_whole_structure(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        *_LEFT, *_RIGHT, "--json")
+    payload = json.loads(out)
+    assert code == 0
+    assert payload["comparable"]["verdict"]
+    assert payload["left"]["n"] == 31 and payload["right"]["n"] == 31
+    assert len(payload["left_points"]) == 31
+    assert payload["left"]["coverage"]["total_records"] == 62
+    assert "no claim" in payload["note"]
+    text = json.dumps(payload).lower()
+    for banned in ("difference", "delta", "percent", "ratio", "change"):
+        assert banned not in text
+
+
+def test_compare_json_for_an_anchor_carries_the_anchor(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        "--anchor-fact", "surgery", "--json")
+    payload = json.loads(out)
+    assert payload["anchor"]["date"] == "2023-09-15"
+    assert payload["anchor"]["citation"] == "clinical-records/f1.json"
+    assert payload["left_label"] == "before"
+
+
+def test_compare_an_empty_side_reports_what_the_index_holds(workout_index,
+                                                            capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                        "--left", "2020-01-01..2020-01-31", *_RIGHT)
+    assert code == 0
+    assert "insufficient_data" in out
+    assert "62 records" in out and "2023-01-01" in out
+
+
+def test_compare_a_workout_figure_names_the_workouts_held_when_a_side_is_empty(
+        workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "--activity",
+                        "swim", "--left", "2023-01-01..2023-03-01",
+                        "--right", "2023-04-01..2023-05-01")
+    assert code == 0
+    assert "Cycling 3" in out and "whatever activity" in out
+
+
+def test_compare_a_measure_nothing_carries_lists_what_is_held(workout_index,
+                                                              capsys):
+    code, out, _ = _run(workout_index, capsys, "compare", "--measure",
+                        f"{_HR}:maximum", *_LEFT, *_RIGHT)
+    assert code == 1
+    assert f"No workout carries {_HR}:maximum." in out
+    assert f"{_HR}:average" in out
+
+
+def test_compare_refuses_mixed_units_and_prints_the_refusal(tmp_path, capsys):
+    index = _make_index(tmp_path / "m.db", mixed_units=True)
+    code, out, _ = _run(index, capsys, "compare", "--measure", f"{_HR}:average",
+                        "--period", "month",
+                        "--left", "2023-02-01..2023-02-28",
+                        "--right", "2023-02-01..2023-02-28")
+    assert code == 0
+    assert "more than one unit" in out
+    assert "unit_mixed_on_one_side" in out
+
+
+@pytest.mark.parametrize("argv, fragment", [
+    (["compare", "resting-hr"], "--left and"),
+    (["compare", *_LEFT, *_RIGHT], "name a metric"),
+    (["compare", "resting-hr", "--anchor", "2023-02-18", *_LEFT, *_RIGHT],
+     "not both"),
+    (["compare", "resting-hr", *_LEFT, *_RIGHT, "--before", "7"],
+     "around an anchor"),
+    (["compare", "nonsense-metric", *_LEFT, *_RIGHT], "unknown metric"),
+    (["compare", "resting-hr", "--anchor", "last tuesday"], "error"),
+])
+def test_compare_usage_errors_exit_two_on_stderr(workout_index, capsys, argv,
+                                                 fragment):
+    code, out, err = _run(workout_index, capsys, *argv)
+    assert code == 2
+    assert fragment in err and not out
+
+
+def test_compare_rejects_a_backwards_range(workout_index, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["--index", str(workout_index), "compare", "resting-hr",
+              "--left", "2023-02-01..2023-01-01", *_RIGHT])
+    assert exc.value.code == 2
+
+
+def test_workouts_default_output_is_unchanged(workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts")
+    assert code == 0
+    lines = out.splitlines()
+    assert lines[0].split() == ["activity", "n", "duration", "distance",
+                                "energy", "first", "last"]
+    assert "Cycling" in lines[2] and "180" in lines[2]
+    assert len(lines) == 3
+
+
+def test_workouts_with_a_period_prints_one_row_per_period(workout_index,
+                                                          capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts", "--period", "week",
+                        "--measure", f"{_HR}:average")
+    assert code == 0
+    assert out.splitlines()[0].startswith("week")
+    assert "2023-02-06" in out and "HeartRate:average" in out
+    assert "median over the workouts" in out
+
+
+def test_workouts_detail_prints_one_row_per_workout_with_citations(
+        workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts", "--detail",
+                        "--measure", f"{_HR}:average", "--derive", "pace",
+                        "--samples")
+    assert code == 0
+    assert out.count("Cycling on 2023-02-0") + out.count(
+        "Cycling on 2023-02-10") >= 6
+    assert "142.0 count/min" in out and "outdoor" in out
+    assert "min/km" in out
+    assert "both ends included" in out
+
+
+def test_workouts_detail_with_a_missing_measure_names_what_is_held(
+        workout_index, capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts", "--detail",
+                        "--measure", "HKQuantityTypeIdentifierVO2Max:average")
+    assert code == 1
+    assert "No workout carries" in out
+    assert "HKQuantityTypeIdentifierHeartRate:average" in out
+
+
+def test_workouts_with_no_workouts_in_the_index_says_so_and_nothing_more(
+        tmp_path, capsys):
+    index = _make_index(tmp_path / "n.db", workouts=False)
+    code, out, _ = _run(index, capsys, "workouts", "--detail")
+    assert code == 1 and "holds no workouts at all" in out
+
+
+def test_workouts_filtered_to_nothing_says_which_filter_did_it(workout_index,
+                                                               capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts", "--detail",
+                        "--activity", "swim")
+    assert code == 1
+    assert "Taking off --activity alone would leave some" in out
+    assert "Cycling 3" in out
+
+    code, out2, _ = _run(workout_index, capsys, "workouts", "--period", "week",
+                         "--indoor")
+    assert code == 1 and "--indoor/--outdoor" in out2
+    assert out != out2
+
+
+def test_workouts_flags_without_a_listing_are_refused(workout_index, capsys):
+    code, out, err = _run(workout_index, capsys, "workouts", "--measure",
+                          f"{_HR}:average")
+    assert code == 2 and "need --detail or --period" in err
+    code, out, err = _run(workout_index, capsys, "workouts", "--detail",
+                          "--samples")
+    assert code == 2 and "statistic" in err
+    code, out, err = _run(workout_index, capsys, "workouts", "--detail",
+                          "--period", "week")
+    assert code == 2
+
+
+def test_workouts_series_with_mixed_units_prints_the_refusal(tmp_path, capsys):
+    index = _make_index(tmp_path / "m.db", mixed_units=True)
+    code, out, _ = _run(index, capsys, "workouts", "--period", "month",
+                        "--measure", f"{_HR}:average")
+    assert code == 0
+    assert "mixed units" in out and "bpm" in out
+
+
+def test_workouts_json_carries_the_citation_and_sample_depth(workout_index,
+                                                             capsys):
+    code, out, _ = _run(workout_index, capsys, "workouts", "--detail",
+                        "--measure", f"{_HR}:average", "--samples", "--json")
+    payload = json.loads(out)
+    row = payload["workouts"][0]
+    assert row["citation"] == "HKWorkoutActivityTypeCycling on 2023-02-10"
+    assert row["sample_depth"][_HR]["count"] == 1
+
+
+def test_workouts_tables_stay_within_118_columns(tmp_path, capsys):
+    """A long activity, source and measure key must clip, not widen the row."""
+    index = _make_index(tmp_path / "w.db")
+    conn = sqlite_schema.connect(index)
+    long_key = "HKQuantityTypeIdentifierAppleSleepingWristTemperature:average"
+    conn.execute("UPDATE workout SET activity_type = "
+                 "'HKWorkoutActivityTypeFunctionalStrengthTrainingExtra', "
+                 "source_name = ?", ("A Very Long Source Name " * 3,))
+    conn.execute("UPDATE workout_stat SET key = ?", (long_key,))
+    conn.commit()
+    conn.close()
+    widest = 0
+    for argv in (["workouts", "--detail", "--measure", long_key, "--derive",
+                  "pace", "--samples"],
+                 ["workouts", "--period", "week", "--measure", long_key],
+                 ["workouts", "--detail", "--measure", "Missing:average"]):
+        _, out, _ = _run(index, capsys, *argv)
+        widest = max([widest, *(len(l) for l in out.splitlines())])
+    assert widest <= 118, widest
+
+
+def test_stats_reports_how_many_workouts_carry_statistics(workout_index,
+                                                          capsys):
+    _, out, _ = _run(workout_index, capsys, "stats")
+    assert "3 of 3 carry statistics, 0 carry metadata" in out
+    _, out, _ = _run(workout_index, capsys, "stats", "--json")
+    assert json.loads(out)["workout_detail"]["with_statistics"] == 3
+
+
+def test_check_reports_workout_measure_coverage(workout_index, capsys,
+                                                monkeypatch):
+    monkeypatch.setattr("health_agent.embeddings.OllamaEmbedder.health_check",
+                        lambda self: "ok", raising=False)
+    _, out, _ = _run(workout_index, capsys, "check")
+    line = " ".join(out.split("workout measures", 1)[1].split("\n\n")[0]
+                    .split("literature packs")[0].split())
+    assert "1 distinct" in line and "HeartRate:average (3)" in line
+
+
+def test_check_says_a_schema_5_index_was_migrated_by_the_check(workout_index,
+                                                               capsys,
+                                                               monkeypatch):
+    monkeypatch.setattr("health_agent.embeddings.OllamaEmbedder.health_check",
+                        lambda self: "ok", raising=False)
+    conn = sqlite_schema.connect(workout_index)
+    conn.execute("UPDATE schema_meta SET value = '5' WHERE key = "
+                 "'schema_version'")
+    conn.commit()
+    conn.close()
+    _, out, _ = _run(workout_index, capsys, "check")
+    assert "written at schema 5" in out and "migrated" in out
+
+
+def test_compare_prose_stays_within_118_columns(workout_index, capsys):
+    _, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                     "--anchor-fact", "surgery", "--before", "7",
+                     "--after", "7")
+    assert max(len(l) for l in out.splitlines()) <= 118

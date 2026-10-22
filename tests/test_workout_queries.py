@@ -249,3 +249,13 @@ def test_a_non_finite_duration_is_not_blamed_on_the_unit(box, bad):
                                     sample_counts=True)
     reason = row.sample_depth[HR]["reason"]
     assert "unit" not in reason and "duration" in reason
+
+
+def test_workout_stat_coverage_counts_workouts_not_rows(box):
+    _workout(box, date="2023-02-06", hr_avg=140.0, key=b"\x01")
+    _workout(box, date="2023-02-07", key=b"\x02")
+    box.execute("INSERT INTO workout_stat(workout_id, kind, key, value_text) "
+                "VALUES(1, 'metadata', 'HKIndoorWorkout', '1')")
+    box.commit()
+    assert queries.workout_stat_coverage(box) == {
+        "workouts": 2, "with_statistics": 1, "with_metadata": 1}

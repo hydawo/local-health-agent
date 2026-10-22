@@ -20,6 +20,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import textwrap
 from dataclasses import asdict
 from datetime import date, datetime
 from pathlib import Path
@@ -31,7 +32,7 @@ from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
 from .literature import store as literature_store
-from .store import queries, sqlite_schema, vector_store
+from .store import queries, sqlite_schema, vector_store, windows
 
 log = get_logger("cli")
 
@@ -492,8 +493,9 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
         summary = queries.index_summary(conn)
+        coverage = queries.workout_stat_coverage(conn)
         if args.json:
-            print(json.dumps(summary, indent=2))
+            print(json.dumps({**summary, "workout_detail": coverage}, indent=2))
             return 0
 
         print(f"Index: {cfg.index_path}")
@@ -502,6 +504,10 @@ def cmd_stats(args: argparse.Namespace, cfg: config.Config) -> int:
         if summary["first_date"]:
             print(f"  date range         {summary['first_date']} to {summary['last_date']}")
         print(f"  workouts           {summary['workouts']:,}")
+        if coverage["workouts"]:
+            print(f"  workout detail     {coverage['with_statistics']:,} of "
+                  f"{coverage['workouts']:,} carry statistics, "
+                  f"{coverage['with_metadata']:,} carry metadata")
         print(f"  activity summaries {summary['activity_summaries']:,}")
         if summary["sources"]:
             print(f"  sources            {', '.join(summary['sources'][:8])}"
@@ -848,8 +854,16 @@ def cmd_sleep(args: argparse.Namespace, cfg: config.Config) -> int:
 
 
 def cmd_workouts(args: argparse.Namespace, cfg: config.Config) -> int:
+    problem = _workouts_validate(args)
+    if problem:
+        print(f"error: {problem}", file=sys.stderr)
+        return 2
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
+        if args.detail:
+            return _workouts_detail(conn, args)
+        if args.period:
+            return _workouts_series(conn, args)
         found = queries.workout_summary(
             conn, start=getattr(args, "from"), end=args.to, limit=args.limit
         )
@@ -873,6 +887,481 @@ def cmd_workouts(args: argparse.Namespace, cfg: config.Config) -> int:
         ] for w in found]
         print(_table(["activity", "n", "duration", "distance", "energy",
                       "first", "last"], rows))
+        return 0
+    finally:
+        conn.close()
+
+
+# --------------------------------------------------------------------------- #
+# Workout detail, workout series and compare
+# --------------------------------------------------------------------------- #
+
+# Held to the same budget as the clinical table: a row fits about 118 columns.
+_LINE_W = 118
+_MEASURE_KEY_W = 62
+_CITE_W = 38
+_FIGURE_W = 36
+_VALUE_W = 18
+
+
+def _short(name: str | None) -> str:
+    """HealthKit's long prefixes, off, for display only."""
+    for prefix in ("HKQuantityTypeIdentifier", "HKCategoryTypeIdentifier",
+                   "HKWorkoutActivityType"):
+        name = (name or "").replace(prefix, "")
+    return name
+
+
+def _wrap(text: str, indent: str = "") -> str:
+    return textwrap.fill(text, width=_LINE_W, initial_indent=indent,
+                         subsequent_indent=indent)
+
+
+def _value_cell(value, unit, text=None, width: int = _VALUE_W) -> str:
+    """A figure and its unit. A unit of "mixed" is a refusal, never a unit."""
+    if unit == windows.MIXED:
+        return "mixed units"
+    if value is None:
+        return _clip(text, width) if text else "-"
+    suffix = f" {unit}" if unit else ""
+    return _clip(f"{_fmt_number(value, unit)}{suffix}", width)
+
+
+def _workout_holdings(conn) -> dict:
+    total, first, last = queries.workout_coverage(conn)
+    by_activity: dict[str, int] = {}
+    for row in queries.workout_summary(conn, limit=10_000):
+        name = _short(row["activity_type"]) or "workout"
+        by_activity[name] = by_activity.get(name, 0) + row["n"]
+    return {
+        "workouts": total, "first": first, "last": last,
+        "activities": sorted(by_activity.items(), key=lambda kv: (-kv[1], kv[0])),
+        "measures": [{"key": m["key"], "kind": m["kind"], "n": m["n"]}
+                     for m in queries.workout_measures(conn)],
+    }
+
+
+def _holdings_sentence(held: dict) -> str:
+    if not held["workouts"]:
+        return "The index holds no workouts at all."
+    acts = ", ".join(f"{name} {n:,}" for name, n in held["activities"][:8])
+    more = len(held["activities"]) - 8
+    text = (f"The index holds {held['workouts']:,} workouts, {held['first']} "
+            f"to {held['last']}: {acts}"
+            + (f", and {more} more kinds" if more > 0 else "") + ".")
+    measures = held["measures"]
+    if not measures:
+        return text + (" No workout carries a statistic or a metadata "
+                       "value.")
+    top = ", ".join(f"{_short(m['key'])} ({m['n']:,})" for m in measures[:6])
+    rest = len(measures) - 6
+    return (text + f" Workout measures held: {top}"
+            + (f", and {rest} more" if rest > 0 else "") + ".")
+
+
+def _print_measure_table(conn, missing: list[str]) -> None:
+    held = queries.workout_measures(conn)
+    print(f"No workout carries {', '.join(missing)}.")
+    if not held:
+        print(_wrap(_holdings_sentence(_workout_holdings(conn))))
+        return
+    print("The index holds these workout measures:")
+    rows = [[_clip(m["key"], _MEASURE_KEY_W), m["kind"], f"{m['n']:,}",
+             m["first"] or "-", m["last"] or "-", _clip(m["unit"] or "-", 8)]
+            for m in held[:25]]
+    print(_table(["measure", "kind", "n", "first", "last", "unit"], rows,
+                 indent="  "))
+    if len(held) > 25:
+        print(f"  and {len(held) - 25} more.")
+
+
+def _measures_not_held(conn, measures) -> list[str]:
+    if not measures:
+        return []
+    held = {m["key"] for m in queries.workout_measures(conn)}
+    return [m for m in measures if m not in held]
+
+
+def _why_no_workouts(conn, *, activity, start, end, indoor, exclude) -> str:
+    """Two absences, kept apart: an index with no workouts, and workouts that
+    the filters between them leave nothing of. In the second case, say which
+    single filter, taken off, would bring workouts back."""
+    held = _workout_holdings(conn)
+    if not held["workouts"]:
+        return _holdings_sentence(held)
+    probes = []
+    if activity:
+        probes.append(("--activity", dict(activity=None)))
+    if start or end:
+        probes.append(("--from/--to", dict(start=None, end=None)))
+    if indoor is not None:
+        probes.append(("--indoor/--outdoor", dict(indoor=None)))
+    if exclude:
+        probes.append(("--exclude-source", dict(source_exclude=())))
+    base = dict(activity=activity, start=start, end=end, indoor=indoor,
+                source_exclude=tuple(exclude))
+    freed = [name for name, change in probes
+             if queries.workout_detail(conn, **{**base, **change}, limit=1)]
+    if not probes:
+        lead = "No workout matched."
+    elif freed:
+        lead = (f"No workout matches those filters. Taking off "
+                f"{' or '.join(freed)} alone would leave some.")
+    else:
+        lead = ("No workout matches those filters together, and taking off "
+                "any one of them alone would still leave none.")
+    return f"{lead} {_holdings_sentence(held)}"
+
+
+def _print_notes(notes_: list[str]) -> None:
+    for note in notes_[:10]:
+        print(_wrap(note, indent="  "))
+    if len(notes_) > 10:
+        print(f"  and {len(notes_) - 10} more.")
+
+
+def _workouts_validate(args: argparse.Namespace) -> str | None:
+    deep = bool(args.detail or args.period)
+    if args.detail and args.period:
+        return "--detail and --period are two different listings; pass one"
+    if not deep:
+        used = [flag for flag, on in (
+            ("--activity", args.activity), ("--measure", args.measure),
+            ("--derive", args.derive), ("--indoor/--outdoor",
+                                        args.indoor is not None),
+            ("--exclude-source", args.exclude_source),
+            ("--samples", args.samples)) if on]
+        if used:
+            return (f"{', '.join(used)} need --detail or --period; without "
+                    "either, `workouts` lists totals by activity type")
+    if args.samples and not (args.detail and any(
+            ":" in m for m in (args.measure or ()))):
+        return ("--samples counts the records inside each workout, so it "
+                "needs --detail and a statistic named with --measure, such "
+                "as HKQuantityTypeIdentifierHeartRate:average")
+    return None
+
+
+def _workouts_detail(conn, args: argparse.Namespace) -> int:
+    start, end = getattr(args, "from"), args.to
+    measures = tuple(args.measure or ())
+    exclude = tuple(args.exclude_source or ())
+    missing = _measures_not_held(conn, measures)
+    if missing:
+        if args.json:
+            print(json.dumps({"error": "measure_not_held", "missing": missing,
+                              "held": queries.workout_measures(conn)},
+                             indent=2, default=str))
+        else:
+            _print_measure_table(conn, missing)
+        return 1
+    rows = queries.workout_detail(
+        conn, activity=args.activity, start=start, end=end, indoor=args.indoor,
+        source_exclude=exclude, measures=measures,
+        derive_names=tuple(args.derive or ()), sample_counts=args.samples,
+        limit=args.limit + 1)
+    cut = len(rows) > args.limit
+    rows = rows[:args.limit]
+    if args.json:
+        payload = {"workouts": [asdict(r) for r in rows],
+                   "more_than_limit": cut}
+        if not rows:
+            payload["holdings"] = _workout_holdings(conn)
+        print(json.dumps(payload, indent=2, default=str))
+        return 0 if rows else 1
+    if not rows:
+        print(_wrap(_why_no_workouts(conn, activity=args.activity, start=start,
+                                     end=end, indoor=args.indoor,
+                                     exclude=exclude)))
+        return 1
+
+    def cite(r) -> str:
+        return f"{_clip(_short(r.activity_type), 24)} on {r.local_date}"
+
+    def where(r) -> str:
+        return {1: "indoor", 0: "outdoor"}.get(r.indoor, "-")
+
+    print(_table(
+        ["workout", "duration", "distance", "energy", "source", "where"],
+        [[cite(r), _value_cell(r.duration, r.duration_unit, width=14),
+          _value_cell(r.total_distance, r.total_distance_unit, width=14),
+          _value_cell(r.total_energy, r.total_energy_unit, width=16),
+          _clip(r.source_name or "-", 16), where(r)] for r in rows]))
+    footnotes: list[str] = []
+    if measures or args.derive:
+        print()
+        figure_rows = []
+        for r in rows:
+            for key in measures:
+                m = r.measures[key]
+                figure_rows.append([
+                    cite(r), _clip(_short(key), _FIGURE_W),
+                    _value_cell(m["value"], m["unit"], m["text"])]
+                    + ([_sample_cell(r, key, footnotes)] if args.samples
+                       else []))
+            for name in args.derive or ():
+                d = r.derived[name]
+                figure_rows.append([
+                    cite(r), name, _value_cell(d["value"], d["unit"])]
+                    + (["-"] if args.samples else []))
+                if d["value"] is None and d.get("reason"):
+                    footnotes.append(f"{cite(r)}, {name}: {d['reason']}")
+        headers = ["workout", "figure", "value"] + (["samples"]
+                                                    if args.samples else [])
+        print(_table(headers, figure_rows))
+        print("A dash means the workout does not carry that figure.")
+        if args.samples:
+            print(_wrap("Samples are the records of that type from the "
+                        "workout's start to start plus duration, both ends "
+                        "included."))
+    _print_notes(footnotes)
+    print(f"\n{len(rows):,} workout(s)"
+          + (f"; more exist, --limit raises it" if cut else "")
+          + ". Each is cited as its activity on its date.")
+    return 0
+
+
+def _sample_cell(row, key: str, footnotes: list[str]) -> str:
+    base = key.split(":")[0]
+    depth = (row.sample_depth or {}).get(base)
+    if depth is None:
+        return "-"        # a metadata key has no records behind it
+    if depth.get("count") is None:
+        footnotes.append(f"{_short(row.activity_type)} on {row.local_date}, "
+                         f"samples of {_short(base)}: {depth.get('reason')}")
+        return "-"
+    return f"{depth['count']:,}"
+
+
+def _workouts_series(conn, args: argparse.Namespace) -> int:
+    start, end = getattr(args, "from"), args.to
+    measures = tuple(args.measure or ())
+    exclude = tuple(args.exclude_source or ())
+    missing = _measures_not_held(conn, measures)
+    if missing:
+        if args.json:
+            print(json.dumps({"error": "measure_not_held", "missing": missing,
+                              "held": queries.workout_measures(conn)},
+                             indent=2, default=str))
+        else:
+            _print_measure_table(conn, missing)
+        return 1
+    series = queries.workout_series(
+        conn, period=args.period, activity=args.activity, start=start, end=end,
+        indoor=args.indoor, source_exclude=exclude, measures=measures,
+        derive_names=tuple(args.derive or ()))
+    points = series.points
+    cut = max(0, len(points) - args.limit)
+    shown = points[-args.limit:] if cut else points
+    if args.json:
+        payload = {"series": asdict(series), "periods_not_shown": cut}
+        payload["series"]["points"] = [asdict(p) for p in shown]
+        if series.is_empty:
+            payload["holdings"] = _workout_holdings(conn)
+        print(json.dumps(payload, indent=2, default=str))
+        return 0 if shown else 1
+    if not shown:
+        print(_wrap(_why_no_workouts(conn, activity=args.activity, start=start,
+                                     end=end, indoor=args.indoor,
+                                     exclude=exclude)))
+        return 1
+    print(_table(
+        [args.period, "n", "duration", "distance", "energy"],
+        [[p.period, f"{p.n:,}",
+          _value_cell(p.duration, p.duration_unit, width=14),
+          _value_cell(p.distance, p.distance_unit, width=14),
+          _value_cell(p.energy, p.energy_unit, width=16)] for p in shown]))
+    footnotes: list[str] = []
+    if measures or args.derive:
+        print()
+        figure_rows = []
+        for p in shown:
+            for key in measures:
+                m = p.measures[key]
+                figure_rows.append([p.period, _clip(_short(key), _FIGURE_W),
+                                    _value_cell(m["median"], m["unit"]),
+                                    f"{m['n']:,}"])
+                if m["median"] is None and m.get("reason"):
+                    footnotes.append(f"{p.period}, {_short(key)}: "
+                                     f"{m['reason']}")
+            for name in args.derive or ():
+                d = p.derived[name]
+                figure_rows.append([p.period, f"{name} (median)",
+                                    _value_cell(d["value"], d["unit"]), "-"])
+                if d["value"] is None and d.get("reason"):
+                    footnotes.append(f"{p.period}, {name}: {d['reason']}")
+        print(_table([args.period, "figure", "value", "n"], figure_rows))
+        print("Values are the median over the workouts that carry the figure; "
+              "n is how many did. A dash means none did.")
+    _print_notes(footnotes)
+    print(f"\n{len(shown):,} {args.period}(s)"
+          + (f"; the {cut:,} earlier ones are not shown, --limit raises it"
+             if cut else "") + ".")
+    return 0
+
+
+def _range(text: str) -> tuple[str, str]:
+    """Parse 'YYYY-MM-DD..YYYY-MM-DD'."""
+    start, _, end = text.partition("..")
+    try:
+        first, last = date.fromisoformat(start), date.fromisoformat(end)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "ranges look like 2023-01-01..2023-01-31") from None
+    if last < first:
+        raise argparse.ArgumentTypeError(
+            f"{text} ends before it starts")
+    return start, end
+
+
+def _anchor_not_found(conn, name: str) -> str:
+    """Three absences, kept apart: no clinical facts at all, facts that name
+    nothing like it, and rows that name it but carry no date."""
+    held = queries.clinical_fact_coverage(conn)
+    if not held:
+        return ("The index holds no clinical facts at all, so there is "
+                "nothing to anchor on by name. Pass --anchor YYYY-MM-DD "
+                "instead.")
+    needle = (name or "").strip().lower()
+    undated = [r for r in queries.clinical_facts(conn)
+               if needle in (r.get("name") or "").lower()
+               and not r.get("onset_date")]
+    kinds = ", ".join(
+        f"{v['count']:,} {k}" + (f" ({v['first']} to {v['last']})"
+                                 if v["first"] else " (none dated)")
+        for k, v in sorted(held.items()))
+    if undated:
+        return (f"{len(undated)} clinical row(s) name '{name}' but none "
+                f"carries a date, so none can anchor a window. Pass --anchor "
+                f"YYYY-MM-DD. The index holds {kinds}.")
+    return (f"No clinical fact is named like '{name}'. The index holds "
+            f"{kinds}. `health-agent clinical` lists them.")
+
+
+def _side_json(side) -> dict:
+    return asdict(side)
+
+
+def _compare_holdings(conn, spec: windows.SeriesSpec, comparison) -> list[str]:
+    """For a workout figure, what workouts the index holds, whenever a side
+    is empty or carries no value. The record counts `render` quotes are of
+    all workouts, so a narrowed spec says so."""
+    if spec.metric:
+        return []
+    sides = (comparison.left, comparison.right)
+    if all(s.n and s.value_periods for s in sides):
+        return []
+    held = _workout_holdings(conn)
+    lines = [_holdings_sentence(held)]
+    if spec.activity or spec.indoor is not None or spec.source_exclude:
+        lines.append("The record counts above are of all workouts, whatever "
+                     "activity, indoor flag or source was asked for.")
+    return lines
+
+
+def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
+    ranges = bool(args.left or args.right)
+    anchored = bool(args.anchor or args.anchor_fact)
+    workout_figure = bool(args.workouts or args.activity or args.measure
+                          or args.derive)
+    if anchored and ranges:
+        print("error: name the windows by an anchor or by --left and "
+              "--right, not both", file=sys.stderr)
+        return 2
+    if not anchored and not (args.left and args.right):
+        print("error: pass --anchor or --anchor-fact with --before and "
+              "--after, or both --left and --right as "
+              "YYYY-MM-DD..YYYY-MM-DD", file=sys.stderr)
+        return 2
+    if not anchored and (args.before is not None or args.after is not None):
+        print("error: --before and --after size the windows around an "
+              "anchor; with --left and --right the ranges are the windows",
+              file=sys.stderr)
+        return 2
+    if not (args.metric or workout_figure):
+        print("error: name a metric (health-agent compare resting-hr ...) or "
+              "a workout figure (--workouts, --activity, --measure, "
+              "--derive)", file=sys.stderr)
+        return 2
+
+    conn = sqlite_schema.open_for_read(cfg.index_path)
+    try:
+        spec = windows.SeriesSpec(
+            metric=args.metric, activity=args.activity, measure=args.measure,
+            derive_name=args.derive,
+            source_exclude=tuple(args.exclude_source or ()),
+            indoor=args.indoor)
+        if args.measure and _measures_not_held(conn, (args.measure,)):
+            if args.json:
+                print(json.dumps({"error": "measure_not_held",
+                                  "missing": [args.measure],
+                                  "held": queries.workout_measures(conn)},
+                                 indent=2, default=str))
+            else:
+                _print_measure_table(conn, [args.measure])
+            return 1
+        anchor = None
+        try:
+            if anchored:
+                resolved = windows.resolve_anchor(
+                    conn, date=args.anchor, fact=args.anchor_fact)
+                if resolved is None:
+                    print(_wrap(_anchor_not_found(conn, args.anchor_fact)))
+                    return 2
+                if isinstance(resolved, windows.AnchorAmbiguous):
+                    print(f"More than one dated row matches "
+                          f"'{args.anchor_fact}', on different dates. None "
+                          "was chosen:")
+                    for c in resolved.candidates:
+                        print(f"  {c['date']}  {_clip(c['name'], 50)} "
+                              f"({c['kind']})"
+                              + (f"  {_clip(c['citation'], 30)}"
+                                 if c.get("citation") else ""))
+                    print("Pass --anchor YYYY-MM-DD with the date you mean.")
+                    return 2
+                anchor = resolved
+                before = 30 if args.before is None else args.before
+                after = 30 if args.after is None else args.after
+                comparison = windows.as_comparison(windows.window(
+                    conn, spec=spec, anchor=anchor, before_days=before,
+                    after_days=after, period=args.period))
+            else:
+                comparison = windows.compare(
+                    conn, spec=spec, left=args.left, right=args.right,
+                    period=args.period)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+        if args.json:
+            payload = {
+                "series": spec.label, "period": args.period,
+                "anchor": asdict(anchor) if anchor else None,
+                "left_label": comparison.left_label,
+                "right_label": comparison.right_label,
+                "left": _side_json(comparison.left),
+                "right": _side_json(comparison.right),
+                "left_points": [asdict(p) for p in comparison.left_points],
+                "right_points": [asdict(p) for p in comparison.right_points],
+                "comparable": comparison.comparable,
+                "rendered": windows.render(comparison),
+                "note": comparison.note,
+            }
+            held = _compare_holdings(conn, spec, comparison)
+            if held:
+                payload["workouts_held"] = _workout_holdings(conn)
+            print(json.dumps(payload, indent=2, default=str))
+            return 0
+        if anchor:
+            print(f"Windows of {before} day(s) before and {after} day(s) "
+                  f"after {anchor.date}, in periods of a {args.period}; the "
+                  "anchor's own day is in neither.")
+            if anchor.citation:
+                print(f"Anchor from: {anchor.citation}")
+        for line in windows.render(comparison).splitlines():
+            print(_wrap(line))
+        for line in _compare_holdings(conn, spec, comparison):
+            print(_wrap(line))
         return 0
     finally:
         conn.close()
@@ -2278,6 +2767,28 @@ def _check_clinical_line(conn: sqlite3.Connection) -> str:
             "be read from it; see the log.")
 
 
+def _check_workout_measures_line(conn, on_disk: int | None) -> str:
+    """Workout measures held, in the three states that read differently: no
+    workouts, workouts that carry nothing, and workouts that carry some."""
+    cov = queries.workout_stat_coverage(conn)
+    held = queries.workout_measures(conn)
+    if on_disk == 5:
+        lead = ("this index was written at schema 5 and this check migrated "
+                "it in place to 6, from the statistics each workout already "
+                "stored. ")
+    else:
+        lead = ""
+    if not cov["workouts"]:
+        return lead + "no workouts in the index."
+    if not held:
+        return (lead + f"none of the {cov['workouts']:,} workouts carries a "
+                "statistic or a metadata value.")
+    top = ", ".join(f"{_short(m['key'])} ({m['n']:,})" for m in held[:3])
+    return (lead + f"{len(held):,} distinct, on {cov['with_statistics']:,} "
+            f"workouts with statistics and {cov['with_metadata']:,} with "
+            f"metadata, of {cov['workouts']:,}. Most common: {top}.")
+
+
 def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
     """Environment check (plan §5a): report what works and what doesn't."""
     ok = True
@@ -2289,6 +2800,14 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
           f"{'' if cfg.index_path.exists() else '   (not created yet)'}")
 
     if cfg.index_path.exists():
+        # open_for_read migrates a v5 index in place, so the version has to
+        # be read before it, or the migration would go unreported.
+        try:
+            peek = sqlite_schema.connect(cfg.index_path, create=False)
+            on_disk = sqlite_schema.read_version(peek)
+            peek.close()
+        except sqlite3.DatabaseError:
+            on_disk = None
         try:
             conn = sqlite_schema.open_for_read(cfg.index_path)
             summary = queries.index_summary(conn)
@@ -2299,6 +2818,9 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
                   f"{docs['chunks_embedded']}/{docs['chunks']} chunks embedded")
             print("               clinical records: "
                   + _check_clinical_line(conn))
+            print(_wrap("workout measures: "
+                        + _check_workout_measures_line(conn, on_disk),
+                        indent="               "))
             conn.close()
         except (sqlite_schema.SchemaVersionMismatch,
                 sqlite_schema.AggregatesMissing) as exc:
@@ -2538,7 +3060,58 @@ def build_parser() -> argparse.ArgumentParser:
     p_workouts.add_argument("--to", metavar="YYYY-MM-DD")
     p_workouts.add_argument("--limit", type=int, default=20)
     p_workouts.add_argument("--json", action="store_true")
+    p_workouts.add_argument("--detail", action="store_true",
+                            help="one row per workout instead of totals")
+    p_workouts.add_argument("--period", choices=list(queries.PERIODS),
+                            help="one row per day, week or month instead of "
+                                 "totals")
+    p_workouts.add_argument("--activity", help="activity type, a substring")
+    p_workouts.add_argument("--measure", action="append", metavar="KEY",
+                            help="a workout measure key, e.g. "
+                                 "HKQuantityTypeIdentifierHeartRate:average "
+                                 "(repeatable)")
+    p_workouts.add_argument("--derive", action="append",
+                            choices=["pace", "speed", "efficiency"])
+    p_workouts.add_argument("--indoor", dest="indoor", action="store_true",
+                            default=None)
+    p_workouts.add_argument("--outdoor", dest="indoor", action="store_false")
+    p_workouts.add_argument("--exclude-source", dest="exclude_source",
+                            action="append", metavar="NAME")
+    p_workouts.add_argument("--samples", action="store_true",
+                            help="with --detail: count the records inside "
+                                 "each workout for each statistic named")
     p_workouts.set_defaults(func=cmd_workouts)
+
+    p_cmp = sub.add_parser(
+        "compare", help="two spans of time, side by side",
+        description="Two spans of time, reported side by side with whether "
+                    "they can be compared at all. Both figures are printed; "
+                    "no difference or ratio between them is, and nothing is "
+                    "said about cause.")
+    p_cmp.add_argument("metric", nargs="?", help="metric name, e.g. resting-hr")
+    p_cmp.add_argument("--workouts", action="store_true",
+                       help="a workout figure (duration unless --measure or "
+                            "--derive says otherwise)")
+    p_cmp.add_argument("--activity", help="workout activity, a substring")
+    p_cmp.add_argument("--measure", metavar="KEY", help="a workout measure key")
+    p_cmp.add_argument("--derive", choices=["pace", "speed", "efficiency"])
+    p_cmp.add_argument("--anchor", metavar="YYYY-MM-DD")
+    p_cmp.add_argument("--anchor-fact", dest="anchor_fact", metavar="NAME",
+                       help="a dated clinical row, by name")
+    p_cmp.add_argument("--before", type=_positive_int, metavar="DAYS",
+                       help="days before the anchor (default 30)")
+    p_cmp.add_argument("--after", type=_positive_int, metavar="DAYS",
+                       help="days after the anchor (default 30)")
+    p_cmp.add_argument("--left", type=_range, metavar="A..B")
+    p_cmp.add_argument("--right", type=_range, metavar="A..B")
+    p_cmp.add_argument("--period", choices=list(queries.PERIODS), default="day")
+    p_cmp.add_argument("--exclude-source", dest="exclude_source",
+                       action="append", metavar="NAME")
+    p_cmp.add_argument("--indoor", dest="indoor", action="store_true",
+                       default=None)
+    p_cmp.add_argument("--outdoor", dest="indoor", action="store_false")
+    p_cmp.add_argument("--json", action="store_true")
+    p_cmp.set_defaults(func=cmd_compare)
 
     p_docs = sub.add_parser("documents", help="list ingested record documents",
                             description="Record documents: the PDFs and notes "

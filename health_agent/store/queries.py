@@ -508,6 +508,23 @@ def workout_measures(conn) -> list[dict]:
     return out
 
 
+def workout_stat_coverage(conn) -> dict:
+    """How many workouts carry any statistic, and any metadata entry.
+
+    `workout_measures` counts rows per key, so it cannot say how many
+    workouts there are behind them: one workout carries many keys.
+    """
+    row = conn.execute(
+        "SELECT (SELECT COUNT(*) FROM workout) AS workouts, "
+        "(SELECT COUNT(DISTINCT workout_id) FROM workout_stat "
+        " WHERE kind = 'statistic') AS with_statistics, "
+        "(SELECT COUNT(DISTINCT workout_id) FROM workout_stat "
+        " WHERE kind = 'metadata') AS with_metadata").fetchone()
+    return {"workouts": row["workouts"] or 0,
+            "with_statistics": row["with_statistics"] or 0,
+            "with_metadata": row["with_metadata"] or 0}
+
+
 @dataclass(frozen=True)
 class WorkoutSeriesPoint:
     period: str
