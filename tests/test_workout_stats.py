@@ -75,6 +75,14 @@ def test_booleans_and_non_finite_values_take_the_text_branch():
     ]
 
 
+def test_a_four_hundred_digit_integer_takes_the_text_branch():
+    # A 400-digit JSON integer takes the text branch instead of aborting a
+    # migration that runs over every blob in the index.
+    rows = workout_stats.stat_rows(
+        '[{"type": "T", "average": ' + "9" * 400 + '}]', None)
+    assert rows[0][2] is None and rows[0][3] is not None
+
+
 def test_the_sum_aggregate_is_recorded_like_the_others():
     rows = workout_stats.stat_rows(
         '[{"type": "T", "sum": "42", "unit": "u"}]', None)

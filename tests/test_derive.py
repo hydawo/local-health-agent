@@ -93,6 +93,12 @@ def test_every_derivation_handles_missing_and_zero_inputs_without_raising():
     assert derive.efficiency(3.0, "mi", 30.0, "min", 0.0, "count/min").reason == (
         "heart rate is zero")
     assert derive.percentile([], 50, "mph").value is None
+    # float() and math.isfinite() both raise OverflowError on an int this
+    # large, so the guard has to catch it rather than assume a number is
+    # convertible.
+    huge = 10 ** 400
+    assert derive.pace(huge, "mi", 5.0, "min").value is None
+    assert derive.percentile([huge], 50, "u").value is None
 
 
 def test_every_derivation_returns_a_reason_for_non_numbers_and_never_raises():
