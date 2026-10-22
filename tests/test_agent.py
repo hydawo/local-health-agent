@@ -1124,6 +1124,8 @@ def test_get_workouts_without_detail_keeps_its_old_shape(workoutbox):
         "distance_unit", "energy", "energy_unit", "source"}
     ignored = tools.dispatch(workoutbox, "get_workouts",
                              {"measures": [f"{_HR}:average"], "period": "week"})
+    assert ignored.pop("ignored_arguments") == ["period", "measures"]
+    assert "unfiltered" in ignored.pop("ignored_note")
     assert ignored == result
 
 
@@ -1171,3 +1173,68 @@ def test_the_tool_count_is_eight():
     assert len(tools.TOOLS) == 8
     assert {t.name for t in tools.TOOLS} >= {
         "compare_windows", "get_workouts", "get_clinical_history"}
+
+
+def test_compare_windows_unheld_measure_names_the_measures_held(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
+        "before_days": 7, "after_days": 7})
+    because = result["comparable"]["because"]
+    assert result["comparable"]["verdict"] == "missing_measure_on_one_side"
+    assert "no workout carries nope" in because
+    assert f"{_HR}:average" in because
+    assert f"{_HR}:average" in result["rendered"]
+    assert "records of this figure" not in because
+
+
+def test_compare_windows_surfaces_a_category_metric_refusal_readably(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {**_RANGES,
+                                                            "metric": "sleep"})
+    assert result["error"] == "invalid_request"
+    assert "query_healthkit" in result["note"]
+
+
+def test_no_bare_samples_key_survives_in_a_comparison(workoutbox):
+    flat = json.dumps(tools.dispatch(workoutbox, "compare_windows",
+                                     {**_RANGES, "sample_counts": True}))
+    assert '"samples"' not in flat and '"records": 31' in flat
+
+
+def test_an_empty_filtered_answer_names_the_activities_and_the_exclusion(workoutbox):
+    swim = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "activity": "Swimming"})
+    assert swim["asked"] == {"activity": "Swimming"}
+    assert swim["activities_in_range"] == [{"activity": "Cycling", "workouts": 3}]
+    assert "3 Cycling" in swim["note"] and "matched none" in swim["note"]
+
+    excluded = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "exclude_source": ["Watch"]})
+    assert excluded["excluded_by_source"] == {"sources": ["Watch"], "workouts": 3}
+    assert "excluded source" in excluded["note"]
+
+
+def test_an_unfiltered_empty_answer_is_unchanged(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "start_date": "2020-01-01", "end_date": "2020-12-31"})
+    assert "asked" not in result and "activities_in_range" not in result
+
+
+def test_an_explicit_zero_is_refused_not_replaced(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_date": "2023-01-16", "before_days": 0})
+    assert result["error"] == "invalid_request"
+    assert "before_days" in result["note"]
+
+
+def test_bad_arguments_get_a_readable_expectation(workoutbox):
+    date = tools.dispatch(workoutbox, "compare_windows", {
+        **_RANGES, "left_start": "nope"})
+    assert "YYYY-MM-DD" in date["note"] and "isoformat" not in date["note"]
+    days = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_date": "2023-01-16",
+        "before_days": "x"})
+    assert "whole number of days" in days["note"]
+    assert "invalid literal" not in days["note"]
+    limit = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "limit": "x"})
+    assert "limit is a whole number" in limit["note"]

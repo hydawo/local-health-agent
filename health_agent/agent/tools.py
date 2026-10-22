@@ -28,6 +28,7 @@ the mechanism behind the missing-data behavior in plan §5a.
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -253,12 +254,38 @@ def _query_sleep(ctx: ToolContext, args: dict) -> dict:
     }
 
 
+_DETAIL_ONLY_ARGS = ("activity", "period", "measures", "derive", "indoor",
+                     "exclude_source", "samples", "ratio_of", "percentile_of")
+
+
 def _get_workouts(ctx: ToolContext, args: dict) -> dict:
     if args.get("detail") in (True, "true", "True"):
         try:
             return _get_workouts_detail(ctx, args)
         except ValueError as exc:
+            log.warning("tool get_workouts refused (ValueError)")
             return {"error": "invalid_request", "note": str(exc)}
+        except (TypeError, OverflowError) as exc:
+            log.warning("tool get_workouts refused (%s)", type(exc).__name__)
+            return {"error": "invalid_request",
+                    "note": "an argument was not the type expected: limit is "
+                            "a whole number, measures and derive are lists, "
+                            "dates are YYYY-MM-DD"}
+    result = _get_workouts_plain(ctx, args)
+    # An argument that only applies with detail, passed without it, must not
+    # come back looking like a filtered answer. Old callers never passed them.
+    ignored = [k for k in _DETAIL_ONLY_ARGS
+               if args.get(k) not in (None, "", [], False)]
+    if ignored:
+        result["ignored_arguments"] = ignored
+        result["ignored_note"] = (
+            f"{', '.join(ignored)} had no effect because detail was not true. "
+            "This list is every workout in the range, unfiltered. Call again "
+            "with detail true to apply them.")
+    return result
+
+
+def _get_workouts_plain(ctx: ToolContext, args: dict) -> dict:
     start, end = args.get("start_date"), args.get("end_date")
     limit = min(int(args.get("limit") or 25), 50)
     sessions = queries.list_workouts(ctx.conn, start=start, end=end, limit=limit)
@@ -360,6 +387,12 @@ def _measure_absence(ctx: ToolContext, requested: list, rows_or_points) -> dict:
 
 
 def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
+    for name in ("start_date", "end_date"):
+        _check_date(name, args.get(name))
+    try:
+        int(args.get("limit") or 25)
+    except (TypeError, ValueError):
+        raise ValueError("limit is a whole number, up to 50") from None
     start, end = args.get("start_date"), args.get("end_date")
     activity = args.get("activity")
     measures = tuple(_as_list(args.get("measures")))
@@ -378,7 +411,7 @@ def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
             derive_names=derive_names, ratio_of=ratio_of,
             percentile_of=percentile_of)
         if series.is_empty:
-            return _no_workouts_payload(ctx)
+            return _no_workouts_payload(ctx, args)
         shown = series.points[-MAX_SERIES_POINTS:]
         payload = {
             "period": period, "series": series.label, "unit": series.unit,
@@ -406,7 +439,7 @@ def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
         source_exclude=exclude, measures=measures, derive_names=derive_names,
         sample_counts=sample_counts, limit=limit)
     if not rows:
-        return _no_workouts_payload(ctx)
+        return _no_workouts_payload(ctx, args)
     payload = {"workouts": [_workout_row(w) for w in rows]}
     payload.update(_measure_absence(
         ctx, list(measures),
@@ -415,9 +448,12 @@ def _get_workouts_detail(ctx: ToolContext, args: dict) -> dict:
     return payload
 
 
-def _no_workouts_payload(ctx: ToolContext) -> dict:
+def _no_workouts_payload(ctx: ToolContext, args: dict | None = None) -> dict:
+    """The empty answer. When filters were given, it echoes them and says what
+    the unfiltered range holds, so a filter that matched nothing is not read as
+    a range that held nothing."""
     total, first, last = queries.workout_coverage(ctx.conn)
-    return {
+    payload = {
         "workouts": [],
         "no_data_in_range": True,
         "total_workouts": total,
@@ -426,6 +462,43 @@ def _no_workouts_payload(ctx: ToolContext) -> dict:
         "note": ("No workouts in that range. Say so rather than inferring "
                  "activity from step counts or energy burned."),
     }
+    args = args or {}
+    start, end = args.get("start_date"), args.get("end_date")
+    activity = args.get("activity")
+    exclude = tuple(_as_list(args.get("exclude_source")))
+    indoor = args.get("indoor")
+    asked = {k: v for k, v in (
+        ("start_date", start), ("end_date", end), ("activity", activity),
+        ("exclude_source", list(exclude) or None), ("indoor", indoor))
+        if v is not None}
+    if not (activity or exclude or indoor is not None):
+        return payload
+    payload["asked"] = asked
+    by_activity: dict = {}
+    for row in queries.workout_summary(ctx.conn, start=start, end=end,
+                                       limit=1000):
+        name = _workout_name(row["activity_type"])
+        by_activity[name] = by_activity.get(name, 0) + row["n"]
+    payload["activities_in_range"] = [
+        {"activity": k, "workouts": v}
+        for k, v in sorted(by_activity.items(), key=lambda kv: (-kv[1], kv[0]))]
+    parts = []
+    if by_activity:
+        held = ", ".join(f"{v} {k}" for k, v in by_activity.items())
+        parts.append(f"The range itself holds workouts: {held}. The filters "
+                     "asked for matched none of them.")
+    else:
+        parts.append("The range holds no workouts of any activity.")
+    if exclude:
+        excluded = queries.workout_detail(
+            ctx.conn, activity=activity, start=start, end=end, indoor=indoor,
+            source_include=exclude, limit=1_000_000)
+        payload["excluded_by_source"] = {"sources": list(exclude),
+                                         "workouts": len(excluded)}
+        parts.append(f"{len(excluded)} matching workouts came from the "
+                     f"excluded source ({', '.join(exclude)}).")
+    payload["note"] += " " + " ".join(parts)
+    return payload
 
 
 def _workout_row(w) -> dict:
@@ -499,10 +572,37 @@ def _points_payload(points) -> tuple[list[dict], bool]:
     return out, len(points) > MAX_COMPARE_POINTS
 
 
+def _whole_days(args: dict, name: str, default: int) -> int:
+    """An absent count takes the default; a present one is used as given, so an
+    explicit 0 reaches the layer, which refuses it, instead of becoming a
+    different question."""
+    value = args.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} is a whole number of days, e.g. 30") from None
+
+
+def _check_date(name: str, value) -> None:
+    if value is None:
+        return
+    try:
+        _dt.date.fromisoformat(str(value))
+    except ValueError:
+        raise ValueError(f"{name} is a date as YYYY-MM-DD, e.g. 2024-01-31; "
+                         f"got {str(value)[:40]!r}") from None
+
+
 def _compare_windows(ctx: ToolContext, args: dict) -> dict:
     try:
+        for name in ("anchor_date", "left_start", "left_end", "right_start",
+                     "right_end"):
+            _check_date(name, args.get(name))
         return _compare_windows_inner(ctx, args)
     except ValueError as exc:
+        log.warning("tool compare_windows refused (ValueError)")
         return {"error": "invalid_request", "note": str(exc)}
 
 
@@ -558,8 +658,8 @@ def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
             }
         result = windows.window(
             ctx.conn, spec=spec, anchor=resolved,
-            before_days=int(args.get("before_days") or 30),
-            after_days=int(args.get("after_days") or 30), period=period)
+            before_days=_whole_days(args, "before_days", 30),
+            after_days=_whole_days(args, "after_days", 30), period=period)
         comparison = windows.as_comparison(result, sample_counts=sample_counts)
         anchor_block = {"date": resolved.date, "label": resolved.label,
                         "citation": resolved.citation}
