@@ -489,9 +489,8 @@ def migrate(conn: sqlite3.Connection) -> int | None:
     return 5
 
 
-def _backfill_workout_stats(conn: sqlite3.Connection) -> int:
+def _backfill_workout_stats(conn: sqlite3.Connection) -> None:
     """Fill `workout_stat` and `workout.indoor` from each row's own JSON."""
-    written = 0
     rows = conn.execute(
         "SELECT id, statistics_json, metadata_json FROM workout"
     ).fetchall()
@@ -504,12 +503,10 @@ def _backfill_workout_stats(conn: sqlite3.Connection) -> int:
                 "value_num, value_text, unit) VALUES(?, ?, ?, ?, ?, ?)",
                 [(row["id"], *entry) for entry in entries],
             )
-            written += len(entries)
         conn.execute(
             "UPDATE workout SET indoor = ? WHERE id = ?",
             (workout_stats.indoor_flag(row["metadata_json"]), row["id"]),
         )
-    return written
 
 
 class AggregatesMissing(RuntimeError):
