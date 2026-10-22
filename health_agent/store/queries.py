@@ -850,8 +850,8 @@ def clinical_holdings(conn: sqlite3.Connection) -> dict:
     """Everything this index holds from an export's clinical-records folder.
 
     The one answer to "what does this index hold clinically". Clinical content
-    lives in three tables — `clinical_fact`, `clinical_vital` and, for FHIR
-    labs and note references, `lab_result` and `document` — and a caller that
+    lives in three tables (`clinical_fact`, `clinical_vital`, and, for FHIR
+    labs and note references, `lab_result` and `document`), and a caller that
     reads one of them and reports emptiness tells the person their own records
     are absent. So no caller assembles that picture itself: the CLI, the two
     clinical tools and `data_inventory` all read this.
