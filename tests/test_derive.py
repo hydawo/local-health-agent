@@ -7,7 +7,7 @@ forbidden since the day it answered 59.6 for an average that was exactly 60.0.
 """
 from __future__ import annotations
 
-import pytest
+from fractions import Fraction
 
 from health_agent.store import derive
 
@@ -66,6 +66,22 @@ def test_a_percentile_returns_a_value_that_was_actually_measured():
     ten = [float(i) for i in range(1, 11)]
     assert derive.percentile(ten, 50, "u").value == 5.0
     assert derive.percentile(ten, 90, "u").value == 9.0
+    # n=25 p=28: 0.28 * 25 is 7.000000000000001 in float, so a ceil on the
+    # float product returned the 8th value. Integer arithmetic is exact.
+    twenty_five = [float(i) for i in range(1, 26)]
+    assert derive.percentile(twenty_five, 28, "u").value == 7.0
+
+
+def test_percentile_is_nearest_rank_at_every_size_and_percentile():
+    """Checked against exact rational arithmetic, because the first two
+    attempts at this were a half-to-even round and then a float
+    multiply, and both passed a handful of hand-picked sizes."""
+    for n in range(1, 60):
+        values = [float(i) for i in range(1, n + 1)]
+        for p in range(0, 101):
+            rank = -(-Fraction(p) * n // 100)
+            expected = values[max(0, min(n - 1, int(rank) - 1))]
+            assert derive.percentile(values, p, "u").value == expected, (n, p)
 
 
 def test_every_derivation_handles_missing_and_zero_inputs_without_raising():
@@ -77,6 +93,17 @@ def test_every_derivation_handles_missing_and_zero_inputs_without_raising():
     assert derive.efficiency(3.0, "mi", 30.0, "min", 0.0, "count/min").reason == (
         "heart rate is zero")
     assert derive.percentile([], 50, "mph").value is None
+
+
+def test_every_derivation_returns_a_reason_for_non_numbers_and_never_raises():
+    assert derive.pace("3", "mi", 30.0, "min").reason == "not a number: '3'"
+    assert derive.speed(3.0, "mi", 30.0, 5).reason == "unknown duration unit: 5"
+    assert derive.speed(float("nan"), "mi", 30.0, "min").reason == (
+        "not a number: nan")
+    assert derive.ratio("x", "1", "lb", 2.0, "lb").reason == "not a number: '1'"
+    assert derive.percentile(None, 50, "u").reason == "no values in scope"
+    assert derive.percentile([1.0], float("nan"), "u").reason == (
+        "not a number: nan")
 
 
 def test_the_vocabulary_is_closed():
