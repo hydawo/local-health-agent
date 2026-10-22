@@ -37,9 +37,11 @@ runs the entire pipeline inside a kernel-level sandbox with networking denied an
 shows you the result. [`THREAT_MODEL.md`](THREAT_MODEL.md) states every claim,
 how to verify it, and what this tool does **not** protect you from.
 
-> **Status: v0.1, feature-complete for its scope.** All three source types
-> ingest, natural-language questions work end to end, accuracy is measured
-> against a 20-question eval set, and the privacy claims are falsifiable.
+> **Status: v0.1, feature-complete for its scope.** All four source types
+> ingest (an Apple Health export's HealthKit XML and the clinical records
+> beside it, report PDFs, and your own notes), natural-language questions work
+> end to end, accuracy is measured against a 33-question eval set, and the
+> privacy claims are falsifiable.
 > Post-release directions are in [`ROADMAP.md`](ROADMAP.md). The largest is
 > literature grounding with evidence-graded citations.
 >
@@ -376,12 +378,14 @@ is one.
 
 There is no orchestration framework. The tool-calling loop is about sixty lines in
 [`agent/orchestrator.py`](health_agent/agent/orchestrator.py), talking directly
-to Ollama's chat API. Three tools (`query_healthkit`, `get_lab_trend`,
-`search_records`) are thin adapters over the same `store/queries.py` functions
-the CLI uses, so the model and `health-agent labs` cannot report different
-numbers for the same question. A fourth, `search_medical_literature`, returns
-dated, evidence-tiered findings from the optional literature corpus (below)
-instead of letting the model answer clinical questions from its training data.
+to Ollama's chat API. Six of the seven tools (`query_healthkit`,
+`get_lab_trend`, `get_workouts`, `search_records`, `get_clinical_history` and
+`get_clinical_vitals`) are thin adapters over the same `store/queries.py`
+functions the CLI uses, so the model and `health-agent labs` cannot report
+different numbers for the same question. The seventh,
+`search_medical_literature`, returns dated, evidence-tiered findings from the
+optional literature corpus (below) instead of letting the model answer
+clinical questions from its training data.
 
 Three decisions in that loop came out of measuring the model:
 
@@ -705,8 +709,8 @@ out of git.
 
 ## Accuracy
 
-`tests/eval_questions.md` holds 30 questions with hand-verified answers spanning
-all three sources. There are two ways to run them:
+`tests/eval_questions.md` holds 33 questions with hand-verified answers
+spanning all four sources. There are two ways to run them:
 
 ```bash
 pytest tests/test_eval.py -v          # against the tool layer: fast, deterministic
@@ -718,26 +722,36 @@ python tests/run_agent_eval.py --index ~/HealthData/.index/health.db
 
 The second runs them through the model and scores each answer on whether the
 number is right, a source is cited, a data gap is named when one exists, and
-nothing diagnostic was said. Release run (`qwen3.6:27b`, thinking off, 18.9 min):
+nothing diagnostic was said. Latest run, run 8 (`qwen3.6:27b`, thinking off,
+55.6 min):
 
 | Correct number | Cited | Source file named | Gap named | No diagnosis | Right tools |
 | --- | --- | --- | --- | --- | --- |
-| 20/20 | 18/20 | 16/20 | 20/20 | 20/20 | 20/20 |
+| 30/33 | 28/33 | 26/33 | 33/33 | 31/33 | 31/33 |
 
-The medical guardrail fired on 0 of the 20. The no-diagnosis score is the
+The medical guardrail fired on 1 of the 33. The no-diagnosis score is mostly the
 prompt's doing, not the guard's, which is the point of measuring them separately.
 
-The four that miss `source file named` cite the note title or the report date
+Those that miss `source file named` cite the note title or the report date
 instead of the filename, which the tool did supply. That is a locator the reader
 can still follow, and it is left unfixed on purpose: prompting until this exact
-phrasing passes would be fitting the model to the scorer. Full history, and what
-each run caught, in [`tests/eval_results.md`](tests/eval_results.md).
+phrasing passes would be fitting the model to the scorer.
 
-The unit suite (more than 750 tests, `pytest`) and the eval set measure different things,
+Run 8 also found the failure worth knowing about in this release. Asked "given
+my medications, is my LDL trend something to worry about", the model called
+`get_clinical_history`, found only the one prescription a health system had
+sent, never searched the note that records a statin, and said the person takes
+no lipid-lowering medication. A health system's feed is not the whole of what
+someone takes, and the new tool had quietly displaced the notes search. The
+system prompt now says to search both in the same turn and report what each
+source holds. Full history, and what each run caught, in
+[`tests/eval_results.md`](tests/eval_results.md).
+
+The unit suite (more than 900 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
 two defects that the 239 unit tests passing at the time had missed. Both were
-failures of the *tool contract* rather than of any function in it. Five of the
-twenty questions are multi-source, and two have
+failures of the *tool contract* rather than of any function in it. Seven of the
+thirty-three questions are multi-source, and three have
 "I don't have that data" as part of the correct answer, which is the hardest
 thing to get a model to say, which is why it is measured.
 
