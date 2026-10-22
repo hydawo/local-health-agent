@@ -309,7 +309,12 @@ class WorkoutRow:
     citation: str
     measures: dict
     derived: dict
-    sample_count: int | None = None
+    # {base_type: {"count": int, "window_seconds": float, "bounds": "inclusive"}}
+    # One entry per distinct statistic base type requested. The window is
+    # start_epoch <= sample <= start_epoch + duration, so a sample on the
+    # boundary of two back-to-back workouts counts for both, and one that
+    # starts before the workout and overlaps it is excluded.
+    sample_depth: dict | None = None
 
 
 # Derivations that need more than one row, or two named measures, and so are
@@ -317,11 +322,6 @@ class WorkoutRow:
 _SERIES_ONLY_DERIVATIONS = ("ratio", "percentile")
 
 _HEART_RATE_AVERAGE = "HKQuantityTypeIdentifierHeartRate:average"
-
-_SECONDS_PER = {"min": 60.0, "minute": 60.0, "minutes": 60.0,
-                "hr": 3600.0, "hour": 3600.0, "hours": 3600.0,
-                "s": 1.0, "sec": 1.0, "second": 1.0, "seconds": 1.0}
-
 
 def _source_clauses(source_include, source_exclude, column="source_name"):
     """Shared include/exclude SQL. Naming a source in both is an error rather
@@ -348,6 +348,10 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
                    derive_names=(), sample_counts=False,
                    limit=200) -> list[WorkoutRow]:
     """One row per workout, with the measures and derivations requested."""
+    if sample_counts and not measures:
+        raise ValueError(
+            "sample_counts needs at least one statistic in measures, "
+            "to say which record type to count")
     for name in derive_names:
         if name in _SERIES_ONLY_DERIVATIONS:
             raise ValueError(
@@ -388,11 +392,12 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
         placeholders = ",".join("?" * len(rows))
         keys = ",".join("?" * len(wanted))
         for stat in conn.execute(
-                f"SELECT workout_id, key, value_num, value_text, unit "
+                f"SELECT workout_id, kind, key, value_num, value_text, unit "
                 f"FROM workout_stat WHERE workout_id IN ({placeholders}) "
                 f"AND key IN ({keys})",
                 [r["id"] for r in rows] + list(wanted)):
             by_workout[stat["workout_id"]][stat["key"]] = {
+                "kind": stat["kind"],
                 "value": stat["value_num"],
                 "text": stat["value_text"],
                 "unit": stat["unit"],
@@ -401,7 +406,8 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
     out: list[WorkoutRow] = []
     for r in rows:
         held = by_workout[r["id"]]
-        found = {key: held.get(key, {"value": None, "text": None, "unit": None})
+        found = {key: held.get(key, {"kind": None, "value": None, "text": None,
+                                      "unit": None})
                  for key in wanted}
         hr = found.get(_HEART_RATE_AVERAGE)
         derived = {}
@@ -419,9 +425,14 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
                     (hr or {}).get("value"), (hr or {}).get("unit"))
             derived[name] = {"value": d.value, "unit": d.unit,
                              "reason": d.reason}
-        count = None
-        if sample_counts and wanted:
-            count = _sample_depth(conn, r, wanted[0])
+        depth = None
+        if sample_counts:
+            bases = sorted({k.split(":")[0] for k, v in found.items()
+                            if v["kind"] == "statistic"})
+            if bases:
+                depth = {b: _sample_depth(conn, r, b) for b in bases}
+                depth = {b: v for b, v in depth.items() if v is not None}
+                depth = depth or None
         activity_name = r["activity_type"] or "workout"
         out.append(WorkoutRow(
             local_date=r["local_date"], activity_type=activity_name,
@@ -432,27 +443,27 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
             total_energy_unit=r["total_energy_unit"],
             source_name=r["source_name"], indoor=r["indoor"],
             citation=f"{activity_name} on {r['local_date']}",
-            measures=found, derived=derived, sample_count=count))
+            measures=found, derived=derived, sample_depth=depth))
     return out
 
 
-def _sample_depth(conn, row, measure_key: str) -> int | None:
-    """How many raw records of the measure's own type fall inside the workout.
+def _sample_depth(conn, row, base_type: str) -> dict | None:
+    """How many raw records of one type fall inside the workout, with the
+    window that was counted. None when the duration or its unit is unusable.
 
     The interval end comes from the stored duration rather than `end_date`,
-    because duration and its unit are both columns and need no parsing. Uses
-    `idx_record_type_epoch`.
+    because duration and its unit are both columns and need no parsing. The
+    bounds are inclusive at both ends. Uses `idx_record_type_epoch`.
     """
-    base_type = measure_key.split(":")[0]
-    seconds = _SECONDS_PER.get((row["duration_unit"] or "").strip().lower())
-    if seconds is None or row["duration"] is None:
+    window = derive.seconds(row["duration"], row["duration_unit"])
+    if window is None:
         return None
-    end_epoch = row["start_epoch"] + row["duration"] * seconds
-    return conn.execute(
+    count = conn.execute(
         "SELECT COUNT(*) AS n FROM record WHERE type = ? "
         "AND start_epoch >= ? AND start_epoch <= ?",
-        (base_type, row["start_epoch"], end_epoch),
+        (base_type, row["start_epoch"], row["start_epoch"] + window),
     ).fetchone()["n"]
+    return {"count": count, "window_seconds": window, "bounds": "inclusive"}
 
 
 def workout_measures(conn) -> list[dict]:
@@ -473,7 +484,12 @@ def workout_measures(conn) -> list[dict]:
         base = row["key"].split(":")[0]
         metric = metrics.lookup(base)          # None for an unregistered type
         item = dict(row)
-        item["label"] = metric.label if metric else row["key"]
+        suffix = row["key"].partition(":")[2]
+        if metric:
+            item["label"] = (f"{metric.label} ({suffix})" if suffix
+                             else metric.label)
+        else:
+            item["label"] = row["key"]
         out.append(item)
     return out
 

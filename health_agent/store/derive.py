@@ -31,6 +31,18 @@ class Derived:
     reason: str | None = None
 
 
+def seconds(duration: float | None, unit: str | None) -> float | None:
+    """A duration in seconds, or None for a unit this module does not
+    know. One table, because queries.py had its own inverted copy and
+    the two could drift."""
+    d = _finite(duration)
+    per_hour = (_PER_HOUR.get(unit.strip().lower())
+                if isinstance(unit, str) else None)
+    if d is None or per_hour is None:
+        return None
+    return d / per_hour * 3600.0
+
+
 def _finite(value) -> float | None:
     """A real number, or None for anything else, NaN and infinity included.
     Callers turn None into a reason rather than raising."""

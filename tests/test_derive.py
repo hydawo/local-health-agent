@@ -121,3 +121,11 @@ def test_every_derivation_returns_a_reason_for_non_numbers_and_never_raises():
 def test_the_vocabulary_is_closed():
     assert derive.DERIVATIONS == ("pace", "speed", "efficiency", "ratio",
                                   "percentile")
+
+
+def test_seconds_converts_known_units_and_refuses_unknown_ones():
+    assert derive.seconds(30.0, "min") == 1800.0
+    assert derive.seconds(1.0, "hr") == 3600.0
+    assert derive.seconds(5.0, "sec") == 5.0
+    assert derive.seconds(5.0, "fortnight") is None
+    assert derive.seconds(None, "min") is None

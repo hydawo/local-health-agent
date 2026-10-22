@@ -111,9 +111,75 @@ def test_sample_depth_counts_the_records_inside_the_workout_interval(box):
     box.commit()
     (row,) = queries.workout_detail(box, measures=(f"{HR}:average",),
                                     sample_counts=True)
-    assert row.sample_count == 3
+    assert row.sample_depth == {
+        HR: {"count": 3, "window_seconds": 1800.0, "bounds": "inclusive"}}
     (plain,) = queries.workout_detail(box, measures=(f"{HR}:average",))
-    assert plain.sample_count is None
+    assert plain.sample_depth is None
+
+
+def test_sample_counts_without_measures_is_refused(box):
+    _workout(box, date="2026-03-06")
+    with pytest.raises(ValueError) as excinfo:
+        queries.workout_detail(box, sample_counts=True)
+    assert "measures" in str(excinfo.value)
+
+
+def test_a_metadata_only_request_has_no_sample_depth(box):
+    wid = _workout(box, date="2026-03-06")
+    box.execute("INSERT INTO workout_stat(workout_id, kind, key, value_text) "
+                "VALUES(?, 'metadata', 'HKIndoorWorkout', '1')", (wid,))
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=("HKIndoorWorkout",),
+                                    sample_counts=True)
+    assert row.sample_depth is None
+
+
+def test_sample_depth_has_one_entry_per_base_type_whatever_the_order(box):
+    epoch = 1772830800.0
+    steps = "HKQuantityTypeIdentifierStepCount"
+    wid = _workout(box, date="2026-03-06", epoch=epoch, hr_avg=150.0)
+    box.execute("INSERT INTO workout_stat(workout_id, kind, key, value_num, "
+                "unit) VALUES(?, 'statistic', ?, 10, 'count')",
+                (wid, f"{steps}:sum"))
+    box.commit()
+    a = queries.workout_detail(box, measures=(f"{HR}:average", f"{steps}:sum",
+                                              f"{HR}:maximum"),
+                               sample_counts=True)[0].sample_depth
+    b = queries.workout_detail(box, measures=(f"{steps}:sum", f"{HR}:average"),
+                               sample_counts=True)[0].sample_depth
+    assert a == b and set(a) == {HR, steps}
+
+
+def test_efficiency_does_not_borrow_a_non_heart_rate_average(box):
+    steps = "HKQuantityTypeIdentifierStepCount"
+    wid = _workout(box, date="2026-03-06")
+    box.execute("INSERT INTO workout_stat(workout_id, kind, key, value_num, "
+                "unit) VALUES(?, 'statistic', ?, 90, 'count')",
+                (wid, f"{steps}:average"))
+    box.commit()
+    (row,) = queries.workout_detail(box, measures=(f"{steps}:average",),
+                                    derive_names=("efficiency",))
+    assert row.derived["efficiency"]["value"] is None
+    assert row.derived["efficiency"]["reason"]
+
+
+def test_a_workout_with_no_source_survives_source_exclude(box):
+    _workout(box, date="2026-03-01", source=None, key=b"\x01")
+    _workout(box, date="2026-03-02", source="Oura", key=b"\x02")
+    rows = queries.workout_detail(box, source_exclude=("Oura",))
+    assert [r.local_date for r in rows] == ["2026-03-01"]
+
+
+def test_measure_labels_carry_the_suffix_and_fall_back_to_the_key(box):
+    wid = _workout(box, date="2026-03-06", hr_avg=150.0)
+    box.execute("INSERT INTO workout_stat(workout_id, kind, key, value_num, "
+                "unit) VALUES(?, 'statistic', 'HKQuantityTypeIdentifierMadeUp"
+                ":average', 1, 'u')", (wid,))
+    box.commit()
+    labels = {m["key"]: m["label"] for m in queries.workout_measures(box)}
+    assert labels[f"{HR}:average"] == "Heart rate (average)"
+    assert labels["HKQuantityTypeIdentifierMadeUp:average"] \
+        == "HKQuantityTypeIdentifierMadeUp:average"
 
 
 def test_workout_measures_names_what_the_index_holds_with_counts_and_spans(box):
