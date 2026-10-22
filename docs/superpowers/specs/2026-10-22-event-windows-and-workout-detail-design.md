@@ -213,8 +213,13 @@ named checks:
   ranges. This is T7's refusal, and it is a rule rather than a judgment.
 
 The verdict is one of `ok`, `no_overlap`, `thin_on_one_side`,
-`missing_measure_on_one_side`, `unit_mismatch`, or `insufficient_data`, with
-the numbers that produced it. `unit_mismatch` exists because the other five
+`missing_measure_on_one_side`, `unit_mismatch`, `unit_mixed_on_one_side`, or
+`insufficient_data`, with the numbers that produced it. `unit_mixed_on_one_side`
+is separate from `unit_mismatch` because it is not two coherent sides
+disagreeing: it is one side the layer below already refused, either a workout
+figure carrying the `"mixed"` sentinel or a metric series whose `units_seen`
+holds more than one. Reporting it as a mismatch would print "units differ:
+mixed and count/min", which is not true of either side. `unit_mismatch` exists because the other five
 would let two sides measured in different units past as `ok` whenever their
 numbers happened to overlap, and since units are never converted, differing
 units mean the two sides are not the same measurement. It is rendered from a fixed template, the way the visit-prep
