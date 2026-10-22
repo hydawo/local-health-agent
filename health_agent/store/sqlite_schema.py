@@ -478,7 +478,7 @@ def migrate(conn: sqlite3.Connection) -> int | None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(workout)")}
     if "indoor" not in columns:
         conn.execute("ALTER TABLE workout ADD COLUMN indoor INTEGER")
-    _backfill_workout_stats(conn)
+    backfill_workout_stats(conn)
     conn.execute(
         "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -489,7 +489,7 @@ def migrate(conn: sqlite3.Connection) -> int | None:
     return 5
 
 
-def _backfill_workout_stats(conn: sqlite3.Connection) -> None:
+def backfill_workout_stats(conn: sqlite3.Connection) -> None:
     """Fill `workout_stat` and `workout.indoor` from each row's own JSON."""
     rows = conn.execute(
         "SELECT id, statistics_json, metadata_json FROM workout"
