@@ -415,3 +415,31 @@ resource ids.
 Fetching the attachments that note references point to is not built. Neither
 is FHIR from sources other than an Apple Health export, and nothing here
 writes back to a health system.
+
+## 16. Event windows and workout detail
+
+**Shipped.** The first of five sub-projects that add sources to one question
+shape: what changed around a date, or between two spans of time
+([design](docs/superpowers/specs/2026-10-22-event-windows-and-workout-detail-design.md)).
+Nothing new is read from disk. The per-workout heart-rate statistics and the
+indoor flag were already in the export, and schema v6 now exposes them. One
+tool, `compare_windows`, is the eighth, and later sub-projects add sources
+without adding tools.
+
+It answers three shapes of question:
+
+- what a metric did either side of a dated event, the date given or named from
+  a dated row in the clinical record;
+- a training block against an earlier one, grouped by day, week or month;
+- two eras that cannot be compared, where the verdict (`no_overlap` and its
+  six siblings) is the answer and no number is produced.
+
+The boundary is descriptive only. The tool reports both spans and a verdict on
+whether they can be read together, and never the gap between them, a
+percentage, or a claim of cause. One check the design called for, comparing
+how densely each span was sampled, is not built and is recorded as a known
+gap. Eval questions 34 to 37 pin the shapes, including an adversarial one
+asking whether an injury caused a change. They run against their own synthetic
+index (`tests/window_fixture.py`), and a model run is recorded separately.
+
+Four of the five sub-projects in the decomposition remain.

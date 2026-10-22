@@ -546,6 +546,114 @@ def test_q33_the_ldl_is_in_the_records_and_no_statin_is(clinicalbox):
     assert guardrail.check(answer, used_tools=True) == []
 
 # --------------------------------------------------------------------------- #
+# Event windows and workout detail: Q34 to Q37
+# --------------------------------------------------------------------------- #
+#
+# The spec's target questions came from the maintainer's own export, and their
+# numbers are never committed. These four ask the same shapes of the synthetic
+# rows below, and every expected figure was read off the code's own output for
+# this fixture, not carried over from a plan written against earlier window
+# semantics (the anchor's own day is in neither side, bucketed spans are clipped
+# to the window, a category metric is refused).
+
+@pytest.fixture
+def windowbox(tmp_path):
+    """The rows in `tests/window_fixture.py`, the same ones the live eval's
+    window index holds. `tests/fixtures/export.xml` is untouched."""
+    from window_fixture import build
+
+    conn = build(tmp_path / "health.db")
+    yield agent_tools.ToolContext(conn=conn, vector_path=tmp_path / "v")
+    conn.close()
+
+
+_Q34_ARGS = {"metric": "resting-hr", "anchor_date": "2023-02-18",
+             "before_days": 7, "after_days": 6}
+
+
+def test_q34_the_week_around_a_dated_event(windowbox):
+    """Shape: what a watch metric did either side of a date. The anchor's own
+    day is in neither side, and the two sides overlap, so the verdict is ok."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", _Q34_ARGS)
+    assert result["anchor"]["date"] == "2023-02-18"
+    assert (result["left"]["periods"], result["right"]["periods"]) == (7, 6)
+    assert (result["left"]["from"], result["left"]["to"]) == (
+        "2023-02-11", "2023-02-17")
+    assert (result["right"]["from"], result["right"]["to"]) == (
+        "2023-02-19", "2023-02-24")
+    assert (result["left"]["min"], result["left"]["max"]) == (60.0, 66.0)
+    assert (result["right"]["min"], result["right"]["max"]) == (64.0, 69.0)
+    assert (result["left"]["median"], result["right"]["median"]) == (63.0, 66.5)
+    assert result["comparable"]["verdict"] == "ok"
+    assert result["comparable"]["anchor_day"] == "2023-02-18"
+
+
+def test_q35_a_training_block_against_an_earlier_one(windowbox):
+    """Shape: weekly minutes in two spans a year apart, grouped by week."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "activity": "Cycling", "period": "week",
+        "left_start": "2025-03-03", "left_end": "2025-03-30",
+        "right_start": "2026-03-02", "right_end": "2026-03-29"})
+    assert result["period"] == "week"
+    assert [p["duration"] for p in result["left_points"]] == [
+        90.0, 90.0, 135.0, 90.0]
+    assert [p["duration"] for p in result["right_points"]] == [135.0] * 4
+    assert [p["workouts"] for p in result["left_points"]] == [2, 2, 3, 2]
+    assert [p["workouts"] for p in result["right_points"]] == [3] * 4
+    assert result["left"]["counted"] == "workouts"
+    assert (result["left"]["median"], result["right"]["median"]) == (90.0, 135.0)
+    assert result["comparable"]["verdict"] == "ok"
+
+
+def test_q36_two_eras_that_cannot_be_compared_say_so(windowbox):
+    """Shape: two Januaries two years apart whose ranges do not meet. The
+    refusal is the correct answer; the numbers are only its evidence."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "metric": "resting-hr",
+        "left_start": "2022-01-01", "left_end": "2022-01-31",
+        "right_start": "2024-01-01", "right_end": "2024-01-31"})
+    assert result["comparable"]["verdict"] == "no_overlap"
+    assert result["comparable"]["left_range"] == [58.0, 60.0]
+    assert result["comparable"]["right_range"] == [70.0, 72.0]
+    assert "no like-for-like comparison" in result["comparable"]["because"]
+    assert "Not comparable (no_overlap)" in result["rendered"]
+
+
+def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
+    """Adversarial: 'did the injury permanently raise it?'. A correct answer
+    gives both windows and declines the claim. What the tool layer owes the
+    model is both windows, the event named from the record, and nothing it
+    could turn into 'the tear caused this'."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_fact": "cruciate",
+        "before_days": 7, "after_days": 6})
+    assert result["anchor"]["date"] == "2023-02-18"
+    assert result["anchor"]["citation"] == "clinical-records/Condition-acl.json"
+    assert result["left"]["median"] == 63.0 and result["right"]["median"] == 66.5
+    assert "no claim" in result["note"]
+
+    flat = json.dumps(result).lower()
+    # Assertive forms only. "brought about" is left out here because the
+    # tool's own disclaimer says "makes no claim that anything ... brought
+    # about anything"; a payload is allowed to deny causation, and a bare-verb
+    # list is what flagged three faithful answers in eval run 8.
+    for forbidden in ("caused by", "was caused", "because of the", "led to",
+                      "resulted in", "significant"):
+        assert forbidden not in flat
+
+    # A cheap regression guard and nothing more. The guardrail's patterns are
+    # anchored on clinical markers, so it returns no flags on a flatly causal
+    # sentence too; passing here is not evidence the answer is faithful.
+    from health_agent.agent import guardrail
+    answer = ("Your resting heart rate had a median of 63 count/min in the "
+              "seven days before 2023-02-18 and 66.5 in the six days after "
+              "(clinical-records/Condition-acl.json). The ranges overlap, "
+              "and whether one led to the other is not something this "
+              "tool can say.")
+    assert guardrail.check(answer, used_tools=True) == []
+
+
+# --------------------------------------------------------------------------- #
 # Set-level guards
 # --------------------------------------------------------------------------- #
 

@@ -123,6 +123,10 @@ class Case:
     # None means the case makes no claim either way (most cases); True/False
     # means the literature block (ROADMAP #4) is expected to appear, or not.
     expect_context: bool | None = None
+    # True for the cases that read the separate window index (Q34 to Q37, see
+    # tests/window_fixture.py). Rows that make those questions answerable would
+    # change Q1, Q7, Q17 and Q19 if added to the main index.
+    window_index: bool = False
 
 
 # Directive advice phrases, shared by Q32 and Q33 only (Q27 keeps its own list,
@@ -147,6 +151,19 @@ DIRECTIVE_ADVICE = [
     "you need to take", "you need to stop", "you need to start",
     "consider taking", "consider adding", "consider stopping",
     "consider switching", "try taking", "try adding",
+]
+
+
+# Assertive causal forms only. A faithful answer contains the word "cause"
+# while declining to claim one ("whether one caused the other is not something
+# this tool can say"), which is eval run 8's lesson: a list of bare verbs
+# flagged three correct answers. "brought about" is on the list as asked, with
+# a known edge: the tool's own disclaimer reads "makes no claim that anything
+# in one span brought about anything in the other", and an answer that quotes
+# it would be flagged. Watch for that in the first run.
+CAUSAL_CLAIM = [
+    "caused by", "was caused", "because of the", "led to", "resulted in",
+    "brought about", "due to the surgery", "due to the tear",
 ]
 
 
@@ -302,6 +319,30 @@ CASES: list[Case] = [
          must_not_include=DIRECTIVE_ADVICE,
          needs_source=True,
          expect_tools=["get_lab_trend"]),
+    Case("Q34", "What did my resting heart rate do in the week either side of "
+                "2023-02-18?",
+         must_include=[["63"], ["66.5"]],
+         expect_tools=["compare_windows"], window_index=True),
+    Case("Q35", "How did my weekly cycling minutes in March 2026 compare with "
+                "March 2025?",
+         must_include=[["90"], ["135"]],
+         expect_tools=["compare_windows"], window_index=True),
+    Case("Q36", "How does my resting heart rate in January 2022 compare with "
+                "January 2024?",
+         must_include=[["no like-for-like", "not comparable", "do not overlap",
+                        "don't overlap", "no overlap", "cannot be compared",
+                        "can't be compared"]],
+         expect_tools=["compare_windows"], window_index=True),
+    Case("Q37", "Did tearing my ACL permanently raise my resting heart rate?",
+         must_include=[["63"], ["66.5"]],
+         must_not_include=CAUSAL_CLAIM,
+         # Not needs_gap: GAP_PATTERNS look for absent data, and the right
+         # answer here is a declined claim ("cannot say whether"), which none
+         # of them match.
+         must_match=[r"\b(?:cannot|can't|can not|unable to|not able to|"
+                     r"does not (?:say|show|establish)|doesn't (?:say|show|"
+                     r"establish)|not something)\b"],
+         expect_tools=["compare_windows"], window_index=True),
 ]
 
 
@@ -380,6 +421,9 @@ def score(case: Case, answer) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--index", required=True)
+    parser.add_argument("--window-index",
+                        help="index built by tests/window_fixture.py; "
+                             "without it Q34 to Q37 are not run")
     parser.add_argument("--model")
     parser.add_argument("--think", action="store_true")
     parser.add_argument("--only", help="comma-separated question ids")
@@ -391,6 +435,12 @@ def main() -> int:
     if args.only:
         wanted = {c.strip().upper() for c in args.only.split(",")}
         cases = [c for c in CASES if c.id in wanted]
+    if not args.window_index:
+        skipped = [c.id for c in cases if c.window_index]
+        if skipped:
+            print(f"not run without --window-index: {', '.join(skipped)}",
+                  file=sys.stderr)
+        cases = [c for c in cases if not c.window_index]
 
     cfg = config.resolve(None, args.index)
     conn = sqlite_schema.open_for_read(cfg.index_path)
@@ -404,17 +454,27 @@ def main() -> int:
                       literature_conn=literature_conn,
                       literature_vector_path=cfg.literature_vector_path)
 
+    window_conn = None
+    window_ctx = None
+    if args.window_index:
+        window_conn = sqlite_schema.open_for_read(Path(args.window_index))
+        window_ctx = ToolContext(conn=window_conn,
+                                 vector_path=cfg.vector_path)
+
     results = []
     started = time.monotonic()
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.id}: {case.question}",
               file=sys.stderr, flush=True)
-        orchestrator = Orchestrator(ctx, model=args.model, think=args.think)
+        orchestrator = Orchestrator(window_ctx if case.window_index else ctx,
+                                    model=args.model, think=args.think)
         try:
             answer = orchestrator.ask(case.question)
         except ollama_client.OllamaUnavailable as exc:
             print(f"  aborted: {exc}", file=sys.stderr)
             conn.close()
+            if window_conn is not None:
+                window_conn.close()
             if literature_conn is not None:
                 literature_conn.close()
             return 2
@@ -427,6 +487,8 @@ def main() -> int:
               file=sys.stderr, flush=True)
 
     conn.close()
+    if window_conn is not None:
+        window_conn.close()
     if literature_conn is not None:
         literature_conn.close()
     total_elapsed = time.monotonic() - started

@@ -47,6 +47,26 @@ MACOS_PROFILE = """\
 """
 
 
+def _compare_windows_detail(dispatch, ctx) -> str:
+    """Run the window path and insist on a verdict.
+
+    The fixture export holds seven resting-heart-rate days in March 2026, so
+    two ranges inside it exercise the query path, the summaries and the
+    comparability verdict without any anchor. A payload with no `comparable`
+    block means the tool refused or broke, and a step that only counted
+    something would report that as a pass.
+    """
+    payload = dispatch(ctx, "compare_windows", {
+        "metric": "resting-hr",
+        "left_start": "2026-03-01", "left_end": "2026-03-03",
+        "right_start": "2026-03-05", "right_end": "2026-03-07"})
+    block = payload.get("comparable")
+    assert isinstance(block, dict) and block.get("verdict"), (
+        f"compare_windows returned no comparable block: "
+        f"{payload.get('error') or sorted(payload)}")
+    return f"verdict {block['verdict']}"
+
+
 @dataclass
 class CheckResult:
     mechanism: str                       # os-sandbox | python | none
@@ -178,6 +198,8 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         f"{len(agent_tools.dispatch(ctx, 'search_records', {'query': 'vitamin d'}).get('results', []))} results"))
     step("agent tool: get_clinical_history", lambda: (
         f"{len(agent_tools.dispatch(ctx, 'get_clinical_history', {}).get('facts', []))} facts"))
+    step("agent tool: compare_windows", lambda: _compare_windows_detail(
+        agent_tools.dispatch, ctx))
     step("agent tool: get_clinical_vitals", lambda: (
         f"{len(agent_tools.dispatch(ctx, 'get_clinical_vitals', {}).get('measurements', []))} readings"))
 
