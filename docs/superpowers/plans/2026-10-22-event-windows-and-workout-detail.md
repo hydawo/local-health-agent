@@ -396,7 +396,7 @@ def migrate(conn: sqlite3.Connection) -> int | None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(workout)")}
     if "indoor" not in columns:
         conn.execute("ALTER TABLE workout ADD COLUMN indoor INTEGER")
-    _backfill_workout_stats(conn)
+    backfill_workout_stats(conn)
     conn.execute(
         "INSERT INTO schema_meta(key, value) VALUES('schema_version', ?) "
         "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -407,7 +407,7 @@ def migrate(conn: sqlite3.Connection) -> int | None:
     return 5
 
 
-def _backfill_workout_stats(conn: sqlite3.Connection) -> int:
+def backfill_workout_stats(conn: sqlite3.Connection) -> None:
     """Fill `workout_stat` and `workout.indoor` from each row's own JSON."""
     written = 0
     rows = conn.execute(
@@ -478,6 +478,15 @@ git commit -m "schema v6: workout_stat and an indoor flag, migrated in place fro
 **Interfaces:**
 - Consumes: `workout_stats.stat_rows`, `workout_stats.indoor_flag`.
 - Produces: a fresh ingest writes `workout_stat` rows and `workout.indoor` without needing the migration.
+
+> **Step 3 below is superseded. Do not follow its code.** It assumed the
+> workout insert was a single `conn.execute` whose `cur.lastrowid` identified
+> the row. `healthkit.py` batches workouts through `conn.executemany`, and the
+> function is `ingest_export`, not `ingest`. What shipped instead: `indoor`
+> joins the `_INSERT_WORKOUT` column list and its row tuple, and the stat rows
+> come from `sqlite_schema.backfill_workout_stats`, made public and called once
+> after the final flush, so there is one implementation of "JSON to stat rows"
+> rather than two that can drift. See commit f3c4fbf.
 
 - [ ] **Step 1: Write the failing test**
 
