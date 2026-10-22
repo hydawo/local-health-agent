@@ -336,6 +336,49 @@ The system prompt gains one rule, after 1e:
   contains it. That is the lesson from run 8, where a list of bare verbs
   flagged three correct answers.
 
+## 10a. What shipped, where it differs from the signatures above
+
+The signatures in sections 3 and 4 are the design's intent and were written
+before any of it existed. They drifted during ten tasks and sixteen fix rounds,
+and the code is the record. The behavioural claims in this document all hold;
+these are the shape differences a reader should not be surprised by.
+
+- `window` and `compare` take `spec`, not `series_spec`, and `resolve_anchor`
+  takes keyword `date` and `fact` rather than one positional anchor. It raises
+  when given neither, returns None when nothing matched, and returns every
+  candidate when several matched on different dates.
+- `workout_series` gained `ratio_of=(numerator, denominator)` and
+  `percentile_of=<measure>`, both validated, because reading `measures[0]` and
+  `measures[1]` by position let a caller silently change what a ratio divides.
+- `SideSummary` carries much more than the sketch: `value_periods`,
+  `units_seen`, `unit_mixed`, `counted` and `counted_n` (the noun travels with
+  the count, so a workout side says workouts and a metric side says records),
+  `window_start`, `window_end`, `samples` and a `coverage` dict.
+- `Window` and `Comparison` carry their `SeriesSpec`, so `render` and
+  `as_comparison` kept their signatures when the anchor had to reach the note.
+- `as_comparison(window)` is public, because two callers needed a verdict
+  without reaching into a private name.
+- A figure refused for mixed units reports its value as None and its unit as
+  the literal `"mixed"`, with the units seen. A missing unit counts as the
+  distinct unit `"unlabelled"` rather than being folded into a neighbour's.
+- The verdict order is `insufficient_data`, `unit_mixed_on_one_side`,
+  `missing_measure_on_one_side`, `unit_mismatch`, `thin_on_one_side`,
+  `no_overlap`, `ok`. `missing_measure_on_one_side` precedes `unit_mismatch`
+  because a dead side has no unit and "units differ" would be the worse answer,
+  and `thin_on_one_side` precedes `no_overlap` because a range claim over one
+  measured value reads as more than it knows. The thin gate counts periods
+  that carry a value, not periods that exist.
+- A category metric such as sleep is refused with a reason naming
+  `query_healthkit`, rather than compared. Counting its points per period would
+  still require choosing how to combine the stages, and that is a claim about
+  what sleep is.
+- `workout_detail`'s per-workout `sample_depth` is a dict keyed by record base
+  type, each entry carrying `count`, `window_seconds`, `bounds` and `reason`.
+  It is None only when not asked for, `{}` when asked with no statistic
+  measure among those requested, and carries a reason when a window is not
+  computable. The section 6 `sample_depth` comparability check remains the
+  unimplemented gap recorded above.
+
 ## 11. Not in scope
 
 New readers of any kind, Strong, Slopes and Oura among them. Clinical measures
