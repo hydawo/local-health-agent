@@ -52,6 +52,27 @@ def test_a_lab_with_no_quantity_keeps_its_text():
     assert lab.value_text == "see comment"
 
 
+def test_an_invalid_quantity_becomes_no_number_and_keeps_its_unit():
+    """Both shapes are invalid FHIR. A boolean must not become a plausible
+    measurement, and a unit without a number is still the one thing the
+    resource said."""
+    base = load("Observation-lab-chol.json")
+
+    boolean = dict(base, valueQuantity={"value": True, "unit": "mg/dL"})
+    lab = fhir.parse_resource(boolean, "clinical-records/b.json")
+    assert lab.value_num is None
+    assert lab.value_text is None
+    assert lab.unit == "mg/dL"
+
+    unitless_value = dict(base, valueQuantity={"unit": "mg/dL"})
+    lab = fhir.parse_resource(unitless_value, "clinical-records/u.json")
+    assert lab.value_num is None and lab.unit == "mg/dL"
+
+    empty = dict(base, valueQuantity={})
+    lab = fhir.parse_resource(empty, "clinical-records/e.json")
+    assert lab.value_num is None and lab.unit is None
+
+
 def test_vital_signs_observation_becomes_a_vital():
     vital = parse("Observation-vital-pulse.json")
     assert isinstance(vital, fhir.ParsedVital)

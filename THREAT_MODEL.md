@@ -270,7 +270,9 @@ as the bullet on the cloud tier below says. Four things limit the exposure.
   it never fetches the attachment URLs that note references carry.
 - **Ingest and the local tools never send them anywhere.** `ask --cloud` is the
   one exception, described in the next paragraph and in the cloud section.
-  `offline-check` covers the ingest path, and `health_agent/ingest/fhir.py`
+  `offline-check` ingests the fixture `clinical-records/` folder and calls both
+  clinical tools inside the sandbox, so this path is covered by the same
+  no-socket proof as the rest, and `health_agent/ingest/fhir.py`
   falls under Claim 3's scan, which fails if any module outside the three named
   above imports a network transport. A dedicated test,
   `test_fhir_parser_imports_no_transport_and_fetches_nothing`, checks the

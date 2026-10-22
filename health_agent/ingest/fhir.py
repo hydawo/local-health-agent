@@ -170,9 +170,20 @@ def _date_part(stamp: str | None) -> str | None:
 def _quantity(obj: dict) -> tuple[float | None, str | None, str | None]:
     """(value, unit, text). A quantity when there is one, else the string
     form the resource used instead."""
-    q = obj.get("valueQuantity")
-    if isinstance(q, dict) and isinstance(q.get("value"), (int, float)):
-        return float(q["value"]), _text(q, "unit"), None
+    q = obj.get("valueQuantity") if isinstance(obj.get("valueQuantity"), dict) else None
+    if q is not None:
+        value = q.get("value")
+        # `isinstance(True, int)` is true, so an unguarded check stores a
+        # `"value": true` as the number 1. Both shapes below are invalid FHIR;
+        # neither may become a plausible-looking measurement.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value), _text(q, "unit"), None
+        unit = _text(q, "unit")
+        if unit:
+            # A quantity with a unit and no number carries no value, but the
+            # unit is the one thing it does say; falling through to the string
+            # branch dropped it. No value is invented in its place.
+            return None, unit, None
     for key in ("valueString", "valueBoolean", "valueInteger"):
         if key in obj:
             return None, None, str(obj[key])

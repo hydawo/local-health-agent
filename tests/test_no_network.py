@@ -127,7 +127,10 @@ def test_full_local_pipeline_runs_with_no_network(no_network, tmp_path):
     for required in ("ingest healthkit export", "ingest record PDFs (incl. OCR path)",
                      "ingest notes", "ingest documents (docx + images)",
                      "lab trend", "keyword search",
-                     "vector search (LanceDB)", "agent tool: search_records"):
+                     "vector search (LanceDB)", "agent tool: search_records",
+                     "ingest clinical records (FHIR)",
+                     "agent tool: get_clinical_history",
+                     "agent tool: get_clinical_vitals"):
         assert required in names, f"{required!r} missing from the offline proof"
 
 
@@ -311,6 +314,20 @@ def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):
     steps = offline_check.run_pipeline(FIXTURES, tmp_path)
     names = [s["step"] for s in steps]
     assert any("search_medical_literature" in n for n in names)
+    assert all(s["ok"] for s in steps)
+
+
+def test_offline_check_pipeline_covers_the_clinical_records_path(tmp_path):
+    """THREAT_MODEL Claim 7 says `offline-check` covers the FHIR ingest path.
+    It has to: a parser that reads a DocumentReference carrying an attachment
+    URL is the code a reader will suspect of fetching something, and a static
+    import test is a weaker proof than a sandboxed run."""
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    by_name = {s["step"]: s for s in steps}
+    ingest = by_name["ingest clinical records (FHIR)"]
+    assert ingest["ok"] and "labs" in ingest["detail"]
+    assert by_name["agent tool: get_clinical_history"]["ok"]
+    assert by_name["agent tool: get_clinical_vitals"]["ok"]
     assert all(s["ok"] for s in steps)
 
 

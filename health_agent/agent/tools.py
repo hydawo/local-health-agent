@@ -6,7 +6,7 @@ functions the CLI calls — so the model and `health-agent metric` cannot report
 different numbers for the same question. A tool that reimplemented its own
 aggregation would be a second source of truth, and the two would drift.
 
-**Context budget (plan §4).** A single question can touch all three tools, and
+**Context budget (plan §4).** A single question can touch several tools, and
 raw results are unbounded: a daily step series over three years is 1,100 points,
 and a vector search can return whole pages of a PDF. Every tool here caps what it
 returns *to the model*, separately from what it queried, and says so in the

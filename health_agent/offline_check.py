@@ -103,6 +103,24 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         step("rebuild daily aggregates",
              lambda: f"{sqlite_schema.rebuild_daily_metrics(conn)} rows")
 
+        # The clinical-records half of the export, inside the same sandbox.
+        # Spec §1 makes the no-socket proof a standing constraint on this
+        # feature, and a parser that reads a DocumentReference carrying an
+        # attachment URL is exactly the code a reader will suspect of
+        # fetching something. A static import test is not that proof.
+        from health_agent.ingest import fhir
+        if fhir.has_clinical_records(export):
+            def _ingest_clinical() -> str:
+                sid, _ = register(export, "healthkit")
+                stats = fhir.ingest_clinical(conn, export, source_file_id=sid)
+                counted = stats.counted()
+                if not counted:
+                    raise RuntimeError(
+                        f"no clinical record ingested (unreadable "
+                        f"{stats.unreadable}, failed {stats.failed})")
+                return ", ".join(f"{v} {k}" for k, v in counted.items())
+            step("ingest clinical records (FHIR)", _ingest_clinical)
+
     records_dir = data_dir / "records"
     if records_dir.is_dir():
         step("ingest record PDFs (incl. OCR path)", lambda: (
@@ -158,6 +176,10 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         f"{len(agent_tools.dispatch(ctx, 'get_lab_trend', {'analyte': 'ldl'}).get('points', []))} points"))
     step("agent tool: search_records", lambda: (
         f"{len(agent_tools.dispatch(ctx, 'search_records', {'query': 'vitamin d'}).get('results', []))} results"))
+    step("agent tool: get_clinical_history", lambda: (
+        f"{len(agent_tools.dispatch(ctx, 'get_clinical_history', {}).get('facts', []))} facts"))
+    step("agent tool: get_clinical_vitals", lambda: (
+        f"{len(agent_tools.dispatch(ctx, 'get_clinical_vitals', {}).get('measurements', []))} readings"))
 
     # The literature corpus, built and searched entirely inside the sandbox.
     # Without this the falsifiable proof would have a hole exactly where the

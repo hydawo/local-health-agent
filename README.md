@@ -243,7 +243,9 @@ The parser reads these resources.
   include the attachment, and the tool never fetches it.
 
 Duplicate records that differ only in resource id (the same medication or
-vaccine filed twice) are collapsed on read. The `Patient` resource, and every
+vaccine filed twice) are collapsed when they are stored, so the index holds one
+row. A lab value reported by both a PDF and the clinical records is collapsed
+on read instead, which is where the two sources meet. The `Patient` resource, and every
 subject, encounter and performer reference, is dropped when the file is
 parsed and never reaches the database.
 
@@ -262,7 +264,12 @@ The kinds are `labs`, `vitals`, `conditions`, `medications`, `allergies`,
 ```bash
 health-agent clinical [--kind medications]    # conditions, medications and the rest
 health-agent vitals [--metric pulse]          # what a clinician measured, newest first
+health-agent documents --kind fhir            # the resources themselves, one row each
 ```
+
+`health-agent check` reports whether the export you ingested had a
+clinical-records folder, and names the switch when one was there and was
+skipped.
 
 The tool reports what these records say. Interpreting a condition or a
 prescription, and deciding what to do about one, is left to you and your
