@@ -71,10 +71,15 @@ agent tool, two CLI surfaces, and no parsing.
 - New column `workout.indoor INTEGER` (1, 0 or null). Promoted out of
   `workout_stat` because T7 filters on it and "131 of 131 indoor" is a
   coverage statement the absence rules below have to be able to make.
-- `SCHEMA_VERSION = 6`. **`connect()` migrates a v5 file in place** by creating
-  the table and column and backfilling both from the `statistics_json` and
-  `metadata_json` already stored on every workout row. A version older than 5
-  still refuses and names `ingest --rebuild`, as before.
+- `SCHEMA_VERSION = 6`, and a new `migrate(conn) -> int | None` that takes a
+  v5 file to v6 in place: it creates the table and the column and backfills
+  both from the `statistics_json` and `metadata_json` already stored on every
+  workout row, then restamps the version and returns the version it migrated
+  from. `open_for_read()` calls it before `check_version()`, and `cmd_ingest`
+  calls it where it already calls `check_version()`, so every entry point
+  migrates once and no caller sees a v5 file. `connect()` itself stays a plain
+  open with no version opinion, as it is today. A version older than 5 still
+  refuses and names `ingest --rebuild`, as before.
 
 In-place migration is new for the personal index, which has refused every
 earlier bump. The reason is the same one the literature corpus already accepts
@@ -114,10 +119,15 @@ workout_series(conn, *, period="week", activity=None, start=None, end=None,
 ```
 
 One row per period: workout count, summed duration, distance and energy, and
-the median of each requested measure and derivation. Returns the same
-`SeriesResult` shape `metric_series` already returns, so a caller cannot tell
-a workout series from a metric series by its type. T3's "128 against 24
-minutes a week" is this function with `period="week"` and `activity="cycling"`.
+the median of each requested measure and derivation. It returns a
+`WorkoutSeries`, not a `SeriesResult`, because `SeriesResult` carries a
+`Metric` and a workout series has no metric. `WorkoutSeries` mirrors the field
+names a caller already knows (`points`, `unit`, `is_empty`, `total_records`,
+`available_from`, `available_to`) so the window code in §4 can read either
+without asking which it has. Periods are the existing `PERIODS` tuple, `day`,
+`week` and `month`; there is no year bucket, and T3 and T7 compare explicit
+ranges rather than year buckets. T3's "128 against 24 minutes a week" is this
+function with `period="week"` and `activity="cycling"`.
 
 ```python
 workout_measures(conn) -> list[dict]
