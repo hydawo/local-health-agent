@@ -2113,7 +2113,8 @@ def test_compare_a_workout_figure_names_the_workouts_held_when_a_side_is_empty(
                         "swim", "--left", "2023-01-01..2023-03-01",
                         "--right", "2023-04-01..2023-05-01")
     assert code == 0
-    assert "Cycling 3" in out and "whatever activity" in out
+    assert "Cycling (3 workouts)" in " ".join(out.split())
+    assert "whatever activity" not in out
 
 
 def test_compare_a_measure_nothing_carries_lists_what_is_held(workout_index,
@@ -2311,3 +2312,45 @@ def test_compare_prose_stays_within_118_columns(workout_index, capsys):
                      "--anchor-fact", "surgery", "--before", "7",
                      "--after", "7")
     assert max(len(l) for l in out.splitlines()) <= 118
+
+
+def test_compare_refuses_a_workout_only_flag_on_a_metric(workout_index, capsys):
+    for flag in ("--indoor", "--outdoor", "--workouts"):
+        code, out, err = _run(workout_index, capsys, "compare", "resting-hr",
+                              flag, *_LEFT, *_RIGHT)
+        assert code == 2 and not out
+        assert flag in err and "applies only to a workout figure" in err
+
+
+def test_an_indoor_miss_says_how_the_flag_splits(workout_index, capsys):
+    """All three workouts are flagged outdoor, so --indoor finds none."""
+    code, out, _ = _run(workout_index, capsys, "workouts", "--detail",
+                        "--indoor")
+    assert code == 1
+    assert ("0 are flagged indoor, 3 outdoor, and 0 carry no indoor flag"
+            in " ".join(out.split()))
+    code, out, _ = _run(workout_index, capsys, "compare", "--workouts",
+                        "--indoor", "--left", "2023-02-01..2023-02-28",
+                        "--right", "2023-03-01..2023-03-31")
+    assert "3 outdoor" in " ".join(out.split())
+
+
+def test_compare_prints_the_per_period_table_capped(workout_index, capsys):
+    _, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                     *_LEFT, *_RIGHT)
+    assert "Earlier, by period:" in out and "Later, by period:" in out
+    assert "2023-01-01" in out and "2023-01-31" in out
+    assert "2023-01-15" not in out                      # elided
+    assert "31 periods in all; the middle 21 are not shown" in out
+    assert "--json carries them whole" in out
+    assert max(len(l) for l in out.splitlines()) <= 118
+    _, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                     "--left", "2023-01-01..2023-01-10",
+                     "--right", "2024-01-01..2024-01-10")
+    assert "2023-01-05" in out and "not shown" not in out
+
+
+def test_compare_anchor_day_is_said_once(workout_index, capsys):
+    _, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
+                     "--anchor", "2023-01-15", "--before", "7", "--after", "7")
+    assert out.count("is in neither side") == 1 and "own day" not in out

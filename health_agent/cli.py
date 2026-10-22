@@ -982,6 +982,19 @@ def _measures_not_held(conn, measures) -> list[str]:
     return [m for m in measures if m not in held]
 
 
+def _indoor_split(conn) -> str:
+    """Across all workouts: how many are flagged indoor, flagged outdoor, and
+    carry no flag at all. Unset is not outdoor, and the filters treat it so."""
+    every = 1_000_000
+    indoor = len(queries.workout_detail(conn, indoor=True, limit=every))
+    outdoor = len(queries.workout_detail(conn, indoor=False, limit=every))
+    total = queries.workout_coverage(conn)[0]
+    return (f"Of the index's {total:,} workouts, {indoor:,} are flagged "
+            f"indoor, {outdoor:,} outdoor, and {total - indoor - outdoor:,} "
+            "carry no indoor flag, which neither --indoor nor --outdoor "
+            "matches.")
+
+
 def _why_no_workouts(conn, *, activity, start, end, indoor, exclude) -> str:
     """Two absences, kept apart: an index with no workouts, and workouts that
     the filters between them leave nothing of. In the second case, say which
@@ -1010,7 +1023,8 @@ def _why_no_workouts(conn, *, activity, start, end, indoor, exclude) -> str:
     else:
         lead = ("No workout matches those filters together, and taking off "
                 "any one of them alone would still leave none.")
-    return f"{lead} {_holdings_sentence(held)}"
+    split = f" {_indoor_split(conn)}" if indoor is not None else ""
+    return f"{lead}{split} {_holdings_sentence(held)}"
 
 
 def _print_notes(notes_: list[str]) -> None:
@@ -1251,12 +1265,52 @@ def _compare_holdings(conn, spec: windows.SeriesSpec, comparison) -> list[str]:
     sides = (comparison.left, comparison.right)
     if all(s.n and s.value_periods for s in sides):
         return []
+    # The layer's own absence sentence names the activities, the span and any
+    # filter. What it does not say is which measures the index holds.
     held = _workout_holdings(conn)
-    lines = [_holdings_sentence(held)]
-    if spec.activity or spec.indoor is not None or spec.source_exclude:
-        lines.append("The record counts above are of all workouts, whatever "
-                     "activity, indoor flag or source was asked for.")
+    lines = []
+    if held["measures"]:
+        top = ", ".join(f"{_short(m['key'])} ({m['n']:,})"
+                        for m in held["measures"][:6])
+        rest = len(held["measures"]) - 6
+        lines.append(f"Workout measures held: {top}"
+                     + (f", and {rest} more" if rest > 0 else "") + ".")
+    if spec.indoor is not None:
+        lines.append(_indoor_split(conn))
     return lines
+
+
+_POINTS_ALL = 14
+_POINTS_EDGE = 5
+
+
+def _point_value(point, spec: windows.SeriesSpec, side) -> str:
+    if spec.metric:
+        return _value_cell(point.value, side.unit)
+    if spec.derive_name:
+        d = point.derived.get(spec.derive_name) or {}
+        return _value_cell(d.get("value"), d.get("unit"))
+    if spec.measure:
+        m = point.measures.get(spec.measure) or {}
+        return _value_cell(m.get("median"), m.get("unit"))
+    return _value_cell(point.duration, point.duration_unit)
+
+
+def _print_points(name: str, points, spec, side) -> None:
+    if not points:
+        return
+    rows = [[p.period, _point_value(p, spec, side), f"{p.n:,}"]
+            for p in points]
+    hidden = 0
+    if len(rows) > _POINTS_ALL:
+        hidden = len(rows) - 2 * _POINTS_EDGE
+        rows = rows[:_POINTS_EDGE] + [["...", "...", "..."]] \
+            + rows[-_POINTS_EDGE:]
+    print(f"\n{name}, by period:")
+    print(_table(["period", "value", "n"], rows, indent="  "))
+    if hidden:
+        print(_wrap(f"{len(points)} periods in all; the middle {hidden} are "
+                    "not shown. --json carries them whole.", indent="  "))
 
 
 def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
@@ -1278,6 +1332,16 @@ def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
               "anchor; with --left and --right the ranges are the windows",
               file=sys.stderr)
         return 2
+    if args.metric:
+        only = [flag for flag, on in (
+            ("--indoor", args.indoor is True),
+            ("--outdoor", args.indoor is False),
+            ("--workouts", args.workouts)) if on]
+        if only:
+            print(f"error: {', '.join(only)} applies only to a workout "
+                  "figure, not to the metric " + args.metric
+                  + "; drop the metric or the flag", file=sys.stderr)
+            return 2
     if not (args.metric or workout_figure):
         print("error: name a metric (health-agent compare resting-hr ...) or "
               "a workout figure (--workouts, --activity, --measure, "
@@ -1354,12 +1418,15 @@ def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
             return 0
         if anchor:
             print(f"Windows of {before} day(s) before and {after} day(s) "
-                  f"after {anchor.date}, in periods of a {args.period}; the "
-                  "anchor's own day is in neither.")
+                  f"after {anchor.date}, in periods of a {args.period}.")
             if anchor.citation:
                 print(f"Anchor from: {anchor.citation}")
         for line in windows.render(comparison).splitlines():
             print(_wrap(line))
+        _print_points(comparison.left_label.capitalize(),
+                      comparison.left_points, spec, comparison.left)
+        _print_points(comparison.right_label.capitalize(),
+                      comparison.right_points, spec, comparison.right)
         for line in _compare_holdings(conn, spec, comparison):
             print(_wrap(line))
         return 0
