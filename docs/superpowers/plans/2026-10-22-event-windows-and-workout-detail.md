@@ -643,6 +643,16 @@ def test_a_percentile_returns_a_value_that_was_actually_measured():
     assert derive.percentile(values, 50, "mph").value == 30.0
     assert derive.percentile(values, 90, "mph").value == 50.0
     assert derive.percentile(values, 90, "mph").unit == "mph"
+    # Sizes where a half-to-even round() disagrees with nearest rank. n=6 and
+    # n=10 are what a week of workouts and a month of readings actually land
+    # on, so these are not corner cases.
+    four = [1.0, 2.0, 3.0, 4.0]
+    assert derive.percentile(four, 25, "u").value == 1.0
+    assert derive.percentile(four, 75, "u").value == 3.0
+    assert derive.percentile([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 50, "u").value == 3.0
+    ten = [float(i) for i in range(1, 11)]
+    assert derive.percentile(ten, 50, "u").value == 5.0
+    assert derive.percentile(ten, 90, "u").value == 9.0
 
 
 def test_every_derivation_handles_missing_and_zero_inputs_without_raising():
@@ -683,6 +693,7 @@ rate is a time composition, is visible in the unit string, and is allowed.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 DERIVATIONS = ("pace", "speed", "efficiency", "ratio", "percentile")
@@ -768,9 +779,8 @@ def percentile(values, p: int, unit: str | None) -> Derived:
     ordered = sorted(v for v in values if v is not None)
     if not ordered:
         return Derived(f"p{p}", None, unit, "no values in scope")
-    index = max(0, min(len(ordered) - 1,
-                       int(round((p / 100.0) * len(ordered) + 0.5)) - 1))
-    return Derived(f"p{p}", ordered[index], unit)
+    rank = math.ceil(p / 100.0 * len(ordered))
+    return Derived(f"p{p}", ordered[max(0, min(len(ordered) - 1, rank - 1))], unit)
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
