@@ -345,13 +345,65 @@ def test_check_reports_clinical_records(cli_records, monkeypatch):
             "2 note references") in out
 
 
-def test_check_is_silent_and_unchanged_without_clinical(cli_no_clinical,
-                                                       monkeypatch):
+def test_check_names_the_switch_that_skipped_the_folder(cli_no_clinical,
+                                                        monkeypatch):
+    """Spec §9: `check` reports whether the ingested export had clinical
+    records, and names the switch when a folder was there and was skipped.
+    Silence was the old behaviour and it is the one answer the reader cannot
+    act on: --no-clinical and "your health system sent nothing" looked
+    identical."""
     from health_agent import embeddings
     monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
                         lambda self: "stubbed")
     code, out = cli_no_clinical("check")
-    assert "clinical records" not in out.lower()
+    assert "clinical records: a clinical-records folder was in the export "\
+           "and was skipped by --no-clinical" in out
+
+
+def test_check_reports_an_export_with_no_clinical_folder(tmp_path, capsys,
+                                                         monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    export = tmp_path / "export.xml"
+    export.write_bytes((FIXTURES / "export.xml").read_bytes())
+    main(["--index", str(index), "ingest", str(export), "--no-embed"])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert ("clinical records: none; the ingested export had no "
+            "clinical-records folder." in out)
+
+
+def test_check_names_the_kinds_left_out_by_skip_clinical(tmp_path, capsys,
+                                                         monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", "vitals,conditions"])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert "clinical records: 3 lab values" in out
+    assert "left out by --skip-clinical conditions,vitals" in out
+
+
+def test_check_reports_a_folder_skipped_in_full(tmp_path, capsys, monkeypatch):
+    from health_agent import embeddings
+    monkeypatch.setattr(embeddings.OllamaEmbedder, "health_check",
+                        lambda self: "stubbed")
+    index = tmp_path / "health.db"
+    every = ",".join(("labs", "vitals", "conditions", "medications",
+                      "allergies", "immunizations", "procedures", "notes"))
+    main(["--index", str(index), "ingest", str(FIXTURES), "--no-ocr",
+          "--no-embed", "--skip-clinical", every])
+    capsys.readouterr()
+    main(["--index", str(index), "check"])
+    out = capsys.readouterr().out
+    assert "was skipped by --skip-clinical" in out
 
 
 def test_clinical_table_stays_within_120_columns_for_long_rows(tmp_path,
@@ -431,6 +483,36 @@ def test_documents_listing(cli_records):
     assert code == 0
     assert "labs_2026-03-10.pdf" in out
     assert "scan_2025-03-04.pdf" in out
+
+
+def test_documents_listing_keeps_its_meaning_and_names_the_fhir_switch(
+        cli_records):
+    """I5: the records surface is the PDFs and notes a person dropped in. The
+    export's clinical-records resources are documents too, and dumping them
+    here turned a 3-row listing into thousands with no way to filter."""
+    code, out = cli_records("documents")
+    assert code == 0
+    assert "Observation-lab-chol.json" not in out
+    assert "documents --kind fhir" in out
+
+
+def test_documents_kind_fhir_lists_the_clinical_resources(cli_records):
+    code, out = cli_records("documents", "--kind", "fhir")
+    assert code == 0
+    assert "Observation-lab-chol.json" in out
+    assert "labs_2026-03-10.pdf" not in out
+
+
+def test_documents_rejects_an_unknown_kind(cli_records):
+    code, _ = cli_records("documents", "--kind", "nope")
+    assert code == 2
+
+
+def test_documents_kind_fhir_reports_absence_as_coverage(cli_no_clinical):
+    code, out = cli_no_clinical("documents", "--kind", "fhir")
+    assert code == 1
+    assert "No clinical-records resources in this index" in out
+    assert "HealthKit records" in out
 
 
 def test_labs_listing(cli_records):

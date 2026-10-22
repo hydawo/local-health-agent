@@ -494,6 +494,13 @@ def list_documents(conn: sqlite3.Connection,
     elif kind:
         sql += "WHERE d.kind = ? "
         params.append(kind)
+    else:
+        # No kind means the records surface, which is what this listing meant
+        # before the export's clinical-records folder was ingested. A FHIR
+        # resource is a document row with no pages and no chunks, and
+        # thousands of them would bury the records a person actually dropped
+        # in; `kind='fhir'` asks for those on purpose.
+        sql += "WHERE d.kind != 'fhir' "
     sql += "ORDER BY COALESCE(d.doc_date, d.ingested_at)"
     return [dict(r) for r in conn.execute(sql, params)]
 

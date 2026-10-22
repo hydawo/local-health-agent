@@ -192,9 +192,10 @@ def test_the_patient_resource_contributes_nothing(conn, tmp_path):
 def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
                                                              monkeypatch, caplog):
     """One resource that raises something other than FhirParseError (a
-    KeyError from a malformed dosageInstruction, say) is counted unreadable
-    and every other member is still stored. The log names the member and the
-    exception type, never the exception's content."""
+    KeyError from a malformed dosageInstruction, say) is counted under its own
+    counter, not as the person's unreadable data, and every other member is
+    still stored. The log names the member and the exception type, never the
+    exception's content."""
     path = _zip_with_clinical(tmp_path)
     sid = _source(conn, path)
     real = fhir.parse_bytes
@@ -215,7 +216,8 @@ def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
     finally:
         package_logger.removeHandler(caplog.handler)
     conn.commit()
-    assert stats.unreadable == 2            # malformed.json plus the KeyError one
+    assert stats.unreadable == 1            # malformed.json: not valid FHIR
+    assert stats.failed == 1                # the KeyError: this tool's defect
     assert stats.medications == 0
     assert stats.labs == 3 and stats.vitals == 3 and stats.conditions == 1
     assert stats.allergies == 1 and stats.immunizations == 1
@@ -228,8 +230,9 @@ def test_a_non_parse_error_in_one_file_does_not_stop_the_run(conn, tmp_path,
 def test_a_failure_while_storing_one_file_does_not_stop_the_run(conn, tmp_path,
                                                                 monkeypatch):
     """The failing record raises AFTER its document row is written, inside the
-    real store. It must leave no document and no child row, be counted
-    unreadable, and cost no other member its rows."""
+    real store. It must leave no document and no child row, be counted under
+    the store-failure counter rather than as unreadable data, and cost no
+    other member its rows."""
     path = _zip_with_clinical(tmp_path)
     baseline_conn = sqlite_schema.connect(tmp_path / "baseline.db", create=True)
     sqlite_schema.initialize(baseline_conn)
@@ -256,7 +259,8 @@ def test_a_failure_while_storing_one_file_does_not_stop_the_run(conn, tmp_path,
     stats = fhir.ingest_clinical(conn, path, source_file_id=_source(conn, path))
     conn.commit()
 
-    assert stats.unreadable == baseline.unreadable + 1
+    assert stats.unreadable == baseline.unreadable
+    assert stats.failed == baseline.failed + 1
     assert stats.labs == baseline.labs - 1
     assert stats.documents == baseline.documents - 1
     for name in ("vitals", "conditions", "medications", "allergies",
@@ -301,6 +305,20 @@ def test_a_clinical_folder_outside_the_given_path_is_never_read(tmp_path):
     assert list(fhir.iter_members(inner / "export.xml")) == []
 
 
+def test_a_skipped_run_still_reports_the_unreadable_file(tmp_path, capsys):
+    """Minor 1: with every kind skipped and one file unreadable, the report
+    used to print the skip alone and the unreadable file vanished."""
+    from health_agent.cli import main
+    target = _zip_with_clinical(tmp_path)
+    every = ",".join(fhir.CLINICAL_KINDS)
+    code = main(["--index", str(tmp_path / "h.db"), "ingest", str(target),
+                 "--no-embed", "--skip-clinical", every])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "all 13 skipped" in out
+    assert "1 unreadable (not valid FHIR)" in out
+
+
 def test_all_unreadable_still_prints_a_clinical_line(tmp_path, capsys):
     from health_agent.cli import main
     target = tmp_path / "export.zip"
@@ -312,4 +330,5 @@ def test_all_unreadable_still_prints_a_clinical_line(tmp_path, capsys):
                  "--no-embed"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "clinical records    none readable (1 unreadable)" in out
+    assert "clinical records    none readable" in out
+    assert "1 unreadable (not valid FHIR)" in out

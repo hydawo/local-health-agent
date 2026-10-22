@@ -333,7 +333,12 @@ class ClinicalStats:
     immunizations: int = 0
     procedures: int = 0
     notes: int = 0
+    # The person's data: a file that is not valid FHIR.
     unreadable: int = 0
+    # This tool's own defect: anything else that went wrong storing a file.
+    # Separate, because a systematic store failure counted as "unreadable"
+    # would describe thousands of the person's good files as bad ones.
+    failed: int = 0
     skipped: int = 0
 
     def counted(self) -> dict[str, int]:
@@ -502,6 +507,19 @@ def iter_members(path: Path) -> Iterator[tuple[str, bytes]]:
             return
 
 
+def has_clinical_records(path: Path) -> bool:
+    """Whether a clinical-records folder sits beside `path` at all.
+
+    Asked separately from ingesting it, because `--no-clinical` reads nothing
+    and `check` still has to tell "your export had no clinical records" from
+    "you skipped them". Stops at the first member, so it costs a directory
+    listing rather than a read of the archive.
+    """
+    for _ in iter_members(path):
+        return True
+    return False
+
+
 def ingest_clinical(conn, path: Path, *, source_file_id: int,
                     skip: frozenset[str] = frozenset(),
                     on_progress=None) -> ClinicalStats:
@@ -511,6 +529,11 @@ def ingest_clinical(conn, path: Path, *, source_file_id: int,
     an archive of thousands must not cost the rest. The log line carries the
     member path and the exception type only, never the exception's content,
     which could quote health data.
+
+    Two counters, not one. `unreadable` is the person's data: a file that is
+    not valid FHIR. `failed` is anything else, which is a defect in this tool
+    rather than in their export, and is reported in its own words so a
+    systematic store failure can never read as thousands of bad files.
     """
     stats = ClinicalStats()
     for index, (member, blob) in enumerate(iter_members(path), start=1):
@@ -536,7 +559,10 @@ def ingest_clinical(conn, path: Path, *, source_file_id: int,
                 setattr(stats, name, value)
             log.warning("skipped a clinical record: %s (%s)", member,
                         type(exc).__name__)
-            stats.unreadable += 1
+            if isinstance(exc, FhirParseError):
+                stats.unreadable += 1
+            else:
+                stats.failed += 1
         finally:
             conn.execute("RELEASE clinical_record")
         if on_progress is not None and index % 500 == 0:

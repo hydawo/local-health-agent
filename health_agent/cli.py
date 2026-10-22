@@ -191,7 +191,14 @@ def cmd_ingest(args: argparse.Namespace, cfg: config.Config) -> int:
 
         if export is not None:
             _ingest_healthkit(conn, export, cfg, force=force)
-            if not args.no_clinical:
+            if args.no_clinical:
+                # Nothing is read, so nothing would record that the folder was
+                # there; `check` has to be able to name the switch.
+                _record_clinical_ingest(
+                    conn, folder_seen=fhir.has_clinical_records(export),
+                    skipped_by="--no-clinical")
+                conn.commit()
+            else:
                 _ingest_clinical(conn, export, skip_clinical)
         if record_files:
             _ingest_records(conn, record_files, cfg, force=force,
@@ -260,6 +267,9 @@ def _ingest_clinical(conn: sqlite3.Connection, target: Path,
         conn, target, source_file_id=source_file_id, skip=skip,
         on_progress=lambda n: print(f"  ... {n:,} clinical records read",
                                     flush=True))
+    _record_clinical_ingest(
+        conn, folder_seen=fhir.has_clinical_records(target),
+        skipped_by=f"--skip-clinical {','.join(sorted(skip))}" if skip else None)
     conn.commit()
     counted = clinical.counted()
     if counted:
@@ -268,15 +278,46 @@ def _ingest_clinical(conn: sqlite3.Connection, target: Path,
         if clinical.skipped:
             print(f"                      {clinical.skipped:,} skipped by "
                   f"--skip-clinical")
-        if clinical.unreadable:
-            print(f"                      {clinical.unreadable:,} unreadable")
     elif clinical.skipped:
         print(f"  clinical records    all {clinical.skipped:,} skipped")
-    elif clinical.unreadable:
-        print(f"  clinical records    none readable "
-              f"({clinical.unreadable:,} unreadable)")
-    if counted or clinical.skipped or clinical.unreadable:
+    elif clinical.unreadable or clinical.failed:
+        print("  clinical records    none readable")
+    # Unconditional: a run that skipped every kind and also hit an unreadable
+    # file used to report only the skip, and the unreadable file vanished.
+    if clinical.unreadable:
+        print(f"                      {clinical.unreadable:,} unreadable "
+              f"(not valid FHIR)")
+    if clinical.failed:
+        # Kept apart from "unreadable" on purpose: a store error is this
+        # tool's own defect, and reporting it as the person's unreadable data
+        # would let a systematic failure render as thousands of bad files.
+        print(f"                      {clinical.failed:,} could not be stored "
+              f"(a problem in this tool, not in your records); see the log")
+    if counted or clinical.skipped or clinical.unreadable or clinical.failed:
         print()
+
+
+# What the last ingest found at the export's clinical-records folder. Needed
+# because a switch that skips the folder writes no rows, and `check` must tell
+# "skipped" from "the export had none" (spec §9).
+_CLINICAL_MARKER = "clinical_ingest"
+
+
+def _record_clinical_ingest(conn: sqlite3.Connection, *, folder_seen: bool,
+                            skipped_by: str | None) -> None:
+    sqlite_schema.set_meta(conn, _CLINICAL_MARKER, json.dumps(
+        {"folder_seen": bool(folder_seen), "skipped_by": skipped_by}))
+
+
+def _clinical_marker(conn: sqlite3.Connection) -> dict | None:
+    raw = sqlite_schema.get_meta(conn, _CLINICAL_MARKER)
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
 
 
 def _ingest_records(conn: sqlite3.Connection, files: list[Path],
@@ -836,15 +877,48 @@ def cmd_workouts(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+_DOC_KINDS = ("pdf", "note", "image", "fhir")
+
+
+def _fhir_documents_note(conn: sqlite3.Connection) -> str:
+    """What the unfiltered listing leaves out, so its absence is coverage.
+
+    The records surface is what a person dropped in a folder. The export's
+    clinical-records resources are documents too, and on a real export there
+    are thousands of them; naming the switch that lists them keeps the
+    unfiltered listing meaning what it meant without hiding them."""
+    n = conn.execute(
+        "SELECT COUNT(*) FROM document WHERE kind = 'fhir'").fetchone()[0]
+    if not n:
+        return ""
+    return (f"\n{n:,} clinical-records resource(s) are not listed here; "
+            f"`health-agent documents --kind fhir` lists them.")
+
+
 def cmd_documents(args: argparse.Namespace, cfg: config.Config) -> int:
+    kind = (args.kind or "").strip().lower() or None
+    if kind and kind not in _DOC_KINDS:
+        print(f"error: --kind must be one of {', '.join(_DOC_KINDS)}",
+              file=sys.stderr)
+        return 2
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
-        docs = queries.list_documents(conn)
+        docs = queries.list_documents(conn, kind=kind)
         if args.json:
             print(json.dumps(docs, indent=2))
             return 0
         if not docs:
-            print("No documents in this index.")
+            if kind == "fhir":
+                held = queries.clinical_holdings(conn)
+                print("No clinical-records resources in this index. It holds "
+                      + queries.clinical_holdings_phrase(conn, holdings=held)
+                      + ". They come from the clinical-records folder of an "
+                        "Apple Health export; `health-agent ingest` reads it "
+                        "unless --no-clinical or --skip-clinical left it out.")
+                return 1
+            print("No documents in this index."
+                  + ("" if kind else
+                     _fhir_documents_note(conn)))
             print(f"Put bloodwork or record PDFs in {cfg.records_dir} and run "
                   f"`health-agent ingest`.")
             return 1
@@ -859,6 +933,8 @@ def cmd_documents(args: argparse.Namespace, cfg: config.Config) -> int:
         ] for d in docs]
         print(_table(["file", "date", "pages", "read via", "labs", "chunks",
                       "title"], rows))
+        if not kind:
+            print(_fhir_documents_note(conn).lstrip())
         return 0
     finally:
         conn.close()
@@ -2173,6 +2249,34 @@ def cmd_literature_consent(args: argparse.Namespace, cfg: config.Config) -> int:
     return 0
 
 
+def _check_clinical_line(conn: sqlite3.Connection) -> str:
+    """One line in all three states spec §9 asks for: records present, folder
+    present but skipped by a named switch, or no folder in the export.
+
+    Silence was the old behaviour and it is the one answer that cannot be
+    read: a person who passed --no-clinical and a person whose health system
+    sent nothing saw the same blank."""
+    held = _clinical_counts(conn)
+    marker = _clinical_marker(conn)
+    skipped_by = (marker or {}).get("skipped_by")
+    if held:
+        line = ", ".join(f"{n:,} {label}" for label, n, _ in held)
+        if skipped_by:
+            line += f"   (some kinds left out by {skipped_by})"
+        return line
+    if marker is None:
+        return ("not recorded yet. Run `health-agent ingest` on your export "
+                "to record whether it has a clinical-records folder.")
+    if not marker.get("folder_seen"):
+        return "none; the ingested export had no clinical-records folder."
+    if skipped_by:
+        return (f"a clinical-records folder was in the export and was "
+                f"skipped by {skipped_by}. Re-run `health-agent ingest` "
+                f"without it to read them.")
+    return ("a clinical-records folder was in the export but nothing could "
+            "be read from it; see the log.")
+
+
 def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
     """Environment check (plan §5a): report what works and what doesn't."""
     ok = True
@@ -2192,10 +2296,8 @@ def cmd_check(args: argparse.Namespace, cfg: config.Config) -> int:
                   f"{docs['documents']} document(s), "
                   f"{docs['lab_results']} lab value(s), "
                   f"{docs['chunks_embedded']}/{docs['chunks']} chunks embedded")
-            clinical = _clinical_counts(conn)
-            if clinical:
-                print("               clinical records: "
-                      + ", ".join(f"{n:,} {label}" for label, n, _ in clinical))
+            print("               clinical records: "
+                  + _check_clinical_line(conn))
             conn.close()
         except (sqlite_schema.SchemaVersionMismatch,
                 sqlite_schema.AggregatesMissing) as exc:
@@ -2437,7 +2539,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_workouts.add_argument("--json", action="store_true")
     p_workouts.set_defaults(func=cmd_workouts)
 
-    p_docs = sub.add_parser("documents", help="list ingested record documents")
+    p_docs = sub.add_parser("documents", help="list ingested record documents",
+                            description="Record documents: the PDFs and notes "
+                                        "you dropped in. --kind fhir lists the "
+                                        "export's clinical-records resources "
+                                        "instead.")
+    p_docs.add_argument("--kind", metavar="KIND",
+                        help="one of: " + ", ".join(_DOC_KINDS))
     p_docs.add_argument("--json", action="store_true")
     p_docs.set_defaults(func=cmd_documents)
 

@@ -474,6 +474,23 @@ def open_for_read(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Record one fact about this index itself, beside the schema version.
+
+    Used for things no row can carry, such as whether the last ingested export
+    had a clinical-records folder: a switch that skipped it writes no rows, so
+    without a note here `check` could not tell "skipped" from "not there"."""
+    conn.execute(
+        "INSERT INTO schema_meta(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+
+
+def get_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM schema_meta WHERE key = ?",
+                       (key,)).fetchone()
+    return row["value"] if row else None
+
+
 def mark_source_file(conn: sqlite3.Connection, source_file_id: int, *,
                      record_count: int, status: str = "complete") -> None:
     """Stamp a source file as fully (or partially) ingested.
