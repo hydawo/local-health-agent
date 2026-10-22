@@ -53,6 +53,19 @@ def test_a_percentile_returns_a_value_that_was_actually_measured():
     assert derive.percentile(values, 50, "mph").value == 30.0
     assert derive.percentile(values, 90, "mph").value == 50.0
     assert derive.percentile(values, 90, "mph").unit == "mph"
+    # n=4: p25 is the 1st of 4 by nearest rank, p75 the 3rd. The first
+    # version of this used Python's round(), which is half to even, and
+    # returned the 2nd and the 4th.
+    four = [1.0, 2.0, 3.0, 4.0]
+    assert derive.percentile(four, 25, "u").value == 1.0
+    assert derive.percentile(four, 50, "u").value == 2.0
+    assert derive.percentile(four, 75, "u").value == 3.0
+    # n=6 at p50 and n=10 at p50 and p90 are the sizes this project will
+    # actually hit, since a week of workouts or a month of readings lands there.
+    assert derive.percentile([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 50, "u").value == 3.0
+    ten = [float(i) for i in range(1, 11)]
+    assert derive.percentile(ten, 50, "u").value == 5.0
+    assert derive.percentile(ten, 90, "u").value == 9.0
 
 
 def test_every_derivation_handles_missing_and_zero_inputs_without_raising():

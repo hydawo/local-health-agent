@@ -12,6 +12,7 @@ rate is a time composition, is visible in the unit string, and is allowed.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 DERIVATIONS = ("pace", "speed", "efficiency", "ratio", "percentile")
@@ -97,6 +98,6 @@ def percentile(values, p: int, unit: str | None) -> Derived:
     ordered = sorted(v for v in values if v is not None)
     if not ordered:
         return Derived(f"p{p}", None, unit, "no values in scope")
-    index = max(0, min(len(ordered) - 1,
-                       int(round((p / 100.0) * len(ordered) + 0.5)) - 1))
+    rank = math.ceil(p / 100.0 * len(ordered))
+    index = max(0, min(len(ordered) - 1, rank - 1))
     return Derived(f"p{p}", ordered[index], unit)
