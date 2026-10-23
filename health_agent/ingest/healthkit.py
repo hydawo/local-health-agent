@@ -67,6 +67,7 @@ from pathlib import Path
 from typing import IO, Any
 
 from ..logging_setup import get_logger
+from ..store import sqlite_schema, workout_stats
 
 log = get_logger("ingest.healthkit")
 
@@ -370,6 +371,10 @@ def ingest_export(
         )
 
     flush()
+    # One implementation of "JSON to stat rows" lives in sqlite_schema. It runs
+    # after the last flush so its writes cannot reach the insert counters above.
+    sqlite_schema.backfill_workout_stats(conn)
+    conn.commit()
     stats.elapsed_sec = time.monotonic() - started
     return stats
 
@@ -387,8 +392,8 @@ INSERT OR IGNORE INTO workout (
     activity_type, duration, duration_unit, total_distance, total_distance_unit,
     total_energy, total_energy_unit, source_name, source_version, device,
     start_date, end_date, creation_date, start_epoch, local_date,
-    metadata_json, statistics_json, source_file_id, dedup_key
-) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    indoor, metadata_json, statistics_json, source_file_id, dedup_key
+) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 """
 
 _INSERT_SUMMARY = """
@@ -446,6 +451,7 @@ def _workout_row(elem: ET.Element, source_file_id: int) -> tuple | None:
     activity = get("workoutActivityType")
     source_name = get("sourceName")
     duration = _as_float(get("duration"))
+    metadata_json = _metadata(elem)
 
     return (
         activity, duration, get("durationUnit"),
@@ -453,7 +459,8 @@ def _workout_row(elem: ET.Element, source_file_id: int) -> tuple | None:
         _as_float(get("totalEnergyBurned")), get("totalEnergyBurnedUnit"),
         source_name, get("sourceVersion"), get("device"),
         start_iso, end_iso, created_iso, start_epoch, local_date,
-        _metadata(elem), _workout_statistics(elem), source_file_id,
+        workout_stats.indoor_flag(metadata_json), metadata_json,
+        _workout_statistics(elem), source_file_id,
         _dedup_key(activity, start_iso, end_iso, source_name, duration),
     )
 

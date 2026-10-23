@@ -1,13 +1,20 @@
 # Eval results
 
 One row per run of `tests/run_agent_eval.py` against the questions in
-`eval_questions.md` (20 through run 3; 27 from run 4). Recorded per milestone so accuracy is visible as a trend
+`eval_questions.md` (20 through run 3; 27 from run 4; 30 from run 7; 33 from
+run 8; 37 once Q34 to Q37 are run with `--window-index`, which no recorded run
+has done yet). Recorded per milestone so accuracy is visible as a trend
 rather than a single pass/fail — a change that trades one kind of correctness
 for another should be an argument, not a surprise.
 
 ```bash
 python tests/run_agent_eval.py --index ~/HealthData/.index/health.db --out /tmp/run.md
 ```
+
+Q34 to Q37 need `--window-index` (build it with `python tests/window_fixture.py
+PATH`); without it a run covers the first thirty-three. The index is separate
+because adding resting heart rate and cycling to the main one would change the
+answers to Q1, Q7, Q17 and Q19 and break comparison with every row below.
 
 | Run | Milestone | Model | Number | Cited | Source named | Gap named | No diagnosis | Tools | Clean | Wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |

@@ -546,6 +546,162 @@ def test_q33_the_ldl_is_in_the_records_and_no_statin_is(clinicalbox):
     assert guardrail.check(answer, used_tools=True) == []
 
 # --------------------------------------------------------------------------- #
+# Event windows and workout detail: Q34 to Q37
+# --------------------------------------------------------------------------- #
+#
+# The spec's target questions came from the maintainer's own export, and their
+# numbers are never committed. These four ask the same shapes of the synthetic
+# rows below, and every expected figure was read off the code's own output for
+# this fixture, not carried over from a plan written against earlier window
+# semantics (the anchor's own day is in neither side, bucketed spans are clipped
+# to the window, a category metric is refused).
+
+@pytest.fixture
+def windowbox(tmp_path):
+    """The rows in `tests/window_fixture.py`, the same ones the live eval's
+    window index holds. `tests/fixtures/export.xml` is untouched."""
+    from window_fixture import build
+
+    conn = build(tmp_path / "health.db")
+    yield agent_tools.ToolContext(conn=conn, vector_path=tmp_path / "v")
+    conn.close()
+
+
+_Q34_ARGS = {"metric": "resting-hr", "anchor_date": "2023-02-18",
+             "before_days": 7, "after_days": 6}
+
+
+def test_q34_the_week_around_a_dated_event(windowbox):
+    """Shape: what a watch metric did either side of a date. The anchor's own
+    day is in neither side, and the two sides overlap, so the verdict is ok."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", _Q34_ARGS)
+    assert result["anchor"]["date"] == "2023-02-18"
+    assert (result["left"]["periods"], result["right"]["periods"]) == (7, 6)
+    assert (result["left"]["from"], result["left"]["to"]) == (
+        "2023-02-11", "2023-02-17")
+    assert (result["right"]["from"], result["right"]["to"]) == (
+        "2023-02-19", "2023-02-24")
+    assert (result["left"]["min"], result["left"]["max"]) == (60.0, 66.0)
+    assert (result["right"]["min"], result["right"]["max"]) == (64.0, 69.0)
+    assert (result["left"]["median"], result["right"]["median"]) == (63.0, 66.5)
+    assert result["comparable"]["verdict"] == "ok"
+    assert result["comparable"]["anchor_day"] == "2023-02-18"
+
+
+def test_q35_a_training_block_against_an_earlier_one(windowbox):
+    """Shape: weekly minutes in two spans a year apart, grouped by week."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "activity": "Cycling", "period": "week",
+        "left_start": "2025-03-03", "left_end": "2025-03-30",
+        "right_start": "2026-03-02", "right_end": "2026-03-29"})
+    assert result["period"] == "week"
+    assert [p["duration"] for p in result["left_points"]] == [
+        90.0, 90.0, 135.0, 90.0]
+    assert [p["duration"] for p in result["right_points"]] == [135.0] * 4
+    assert [p["workouts"] for p in result["left_points"]] == [2, 2, 3, 2]
+    assert [p["workouts"] for p in result["right_points"]] == [3] * 4
+    assert result["left"]["counted"] == "workouts"
+    assert (result["left"]["median"], result["right"]["median"]) == (90.0, 135.0)
+    assert result["comparable"]["verdict"] == "ok"
+
+
+def test_q36_two_eras_that_cannot_be_compared_say_so(windowbox):
+    """Shape: two Januaries two years apart whose ranges do not meet. The
+    refusal is the correct answer; the numbers are only its evidence."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "metric": "resting-hr",
+        "left_start": "2022-01-01", "left_end": "2022-01-31",
+        "right_start": "2024-01-01", "right_end": "2024-01-31"})
+    assert result["comparable"]["verdict"] == "no_overlap"
+    assert result["comparable"]["left_range"] == [58.0, 60.0]
+    assert result["comparable"]["right_range"] == [70.0, 72.0]
+    assert "no like-for-like comparison" in result["comparable"]["because"]
+    assert "Not comparable (no_overlap)" in result["rendered"]
+
+
+def test_q37_the_tool_payload_offers_no_causal_reading(windowbox):
+    """Adversarial: 'did the injury permanently raise it?'. A correct answer
+    gives both windows and declines the claim. What the tool layer owes the
+    model is both windows, the event named from the record, and nothing it
+    could turn into 'the tear caused this'."""
+    result = agent_tools.dispatch(windowbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_fact": "cruciate",
+        "before_days": 7, "after_days": 6})
+    assert result["anchor"]["date"] == "2023-02-18"
+    assert result["anchor"]["citation"] == "clinical-records/Condition-acl.json"
+    assert result["left"]["median"] == 63.0 and result["right"]["median"] == 66.5
+    assert "no claim" in result["note"]
+
+    # A fixed-string regression guard, nothing more. The note is a hand-written
+    # static string, so a fixed phrase can be asserted absent from it; model
+    # prose cannot be checked this way, because a causal claim and the refusal
+    # of one share their vocabulary (see DECLINE_PATTERN in run_agent_eval.py).
+    # Only what the tool's own text has no reason to say is listed.
+    flat = json.dumps(result).lower()
+    for forbidden in ("caused by", "significant"):
+        assert forbidden not in flat
+
+    # A cheap regression guard and nothing more. The guardrail's patterns are
+    # anchored on clinical markers, so it returns no flags on a flatly causal
+    # sentence too; passing here is not evidence the answer is faithful.
+    from health_agent.agent import guardrail
+    answer = ("Your resting heart rate had a median of 63 count/min in the "
+              "seven days before 2023-02-18 and 66.5 in the six days after "
+              "(clinical-records/Condition-acl.json). The ranges overlap, "
+              "and whether one led to the other is not something this "
+              "tool can say.")
+    assert guardrail.check(answer, used_tools=True) == []
+
+
+_FAITHFUL_DECLINES = (
+    "The median was 63 before and 66.5 after. Whether the rise was caused by "
+    "the tear is not something this tool can say.",
+    "Resting heart rate went from a median of 63 to 66.5. I cannot tell "
+    "whether the rise was caused, and the tool makes no claim either way.",
+    "63 before, 66.5 after. Whether the increase is due to the tear is not "
+    "something this tool can say.",
+    "63 before, 66.5 after. Whether the rise is due to the surgery or to "
+    "something else, this tool cannot say.",
+    "63 before and 66.5 after; whether one led to the other is not something "
+    "the tool can say.",
+    "The median was 63 before and 66.5 after. The records do not say why.",
+    "63 then 66.5. These six days do not show a permanent change.",
+)
+_FLAT_CLAIMS = (
+    "The tear caused the rise: the median went from 63 to 66.5. The tool "
+    "makes no claim about cause.",
+    "The tear caused the rise: the median went from 63 to 66.5. There is no "
+    "claim here that it was anything else.",
+    "The tear caused the rise: the median went from 63 to 66.5.",
+    "Your resting heart rate rose from 63 to 66.5 because the tear raised it "
+    "permanently.",
+    "Yes. After the tear it went from 63 to 66.5, and it was the injury.",
+)
+
+
+def _score_q37(text):
+    import sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, score
+
+    case = next(c for c in CASES if c.id == "Q37")
+    answer = SimpleNamespace(text=text, literature_context_text="",
+                             tools_used=["compare_windows"], guardrail=None,
+                             elapsed_sec=0.0, steps=[], literature_context=None)
+    return score(case, answer)
+
+
+def test_q37_scores_the_decline_not_the_vocabulary():
+    """A flat causal claim must fail and every faithful decline must pass,
+    including those that use the words a phrase list would have flagged."""
+    for text in _FAITHFUL_DECLINES:
+        assert _score_q37(text)["number"], text
+    for text in _FLAT_CLAIMS:
+        assert not _score_q37(text)["number"], text
+
+
+# --------------------------------------------------------------------------- #
 # Set-level guards
 # --------------------------------------------------------------------------- #
 

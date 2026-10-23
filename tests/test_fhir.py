@@ -228,8 +228,8 @@ def _source_id(conn) -> int:
     return conn.execute("SELECT id FROM source_file").fetchone()["id"]
 
 
-def test_schema_version_is_5():
-    assert sqlite_schema.SCHEMA_VERSION == 5
+def test_schema_version_is_6():
+    assert sqlite_schema.SCHEMA_VERSION == 6
 
 
 def test_storing_a_lab_writes_a_document_and_a_lab_result(index):

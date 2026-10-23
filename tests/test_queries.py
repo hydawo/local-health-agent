@@ -464,3 +464,29 @@ def test_a_vital_stored_under_a_real_name_is_found_by_that_name(tmp_path, name, 
 
 def test_clinical_facts_limit_zero_means_zero(clinical_index):
     assert queries.clinical_facts(clinical_index, limit=0) == []
+
+
+def test_metric_series_can_exclude_a_source_without_re_aggregating(ingested):
+    """The Oura rule: a ring that writes into Apple Health must not be able to
+    masquerade as a physiological change when it arrives."""
+    conn, _ = ingested
+    full = series(conn, "resting-hr", period="month")
+    sources = full.sources_seen
+    assert sources, "fixture should carry at least one source"
+    trimmed = series(conn, "resting-hr", period="month",
+                     source_exclude=(sources[0],))
+    assert sources[0] not in trimmed.sources_seen
+
+
+def test_a_source_named_in_both_include_and_exclude_is_an_error(ingested):
+    conn, _ = ingested
+    with pytest.raises(ValueError):
+        series(conn, "resting-hr", source="Watch", source_exclude=("Watch",))
+
+
+def test_a_single_named_source_still_selects_only_that_source(ingested):
+    conn, _ = ingested
+    sources = series(conn, "resting-hr").sources_seen
+    only = series(conn, "resting-hr", source=sources[0])
+    assert only.sources_seen == (sources[0],)
+    assert series(conn, "resting-hr", source="No Such Device").is_empty

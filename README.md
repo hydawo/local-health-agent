@@ -286,6 +286,39 @@ conditions, medications and other facts after duplicates collapsed; the one
 [design spec](docs/superpowers/specs/2026-10-21-fhir-clinical-records-design.md)
 has the full breakdown.
 
+## Comparing two spans of time
+
+`health-agent compare` and the `compare_windows` tool put two spans side by
+side for one watch metric or one workout measure: either side of a dated
+event, or between two ranges you name.
+
+```bash
+health-agent compare resting-hr --anchor 2023-02-18 --before 7 --after 7
+health-agent compare resting-hr --anchor-fact "knee" --before 30 --after 30
+health-agent compare --workouts --activity Cycling --period week \
+    --left 2025-03-03..2025-03-30 --right 2026-03-02..2026-03-29
+```
+
+An event can be a date you give, or the name of a dated row in your clinical
+records. If a name matches rows on more than one date, the tool lists the dates
+and asks you to choose. The anchor's own day sits in neither span.
+
+Each span reports its length, its range, its median and the dates it actually
+covers, and where a span has no data it says what the index does hold. Between
+them sits a verdict on whether the two can be read against each other at all.
+`ok` means both sides carry values in the same unit over enough periods and
+their ranges overlap. The others say why not: `no_overlap` (the ranges do not
+meet, so there is no like-for-like comparison), `thin_on_one_side`,
+`missing_measure_on_one_side`, `unit_mismatch`, `unit_mixed_on_one_side` and
+`insufficient_data`. A refusal is a result, and it is the right answer when two
+eras were measured too differently to line up.
+
+**The tool never reports the gap between two spans.** It does not subtract,
+divide, or call a change significant, and its note on every result says it
+makes no claim that anything in one span brought about anything in the other.
+That is left to you and your clinician. The verdict also does not check whether the two
+spans were sampled equally densely, which is a known gap.
+
 ## Measured performance
 
 Numbers from an actual Apple Health export. Latency for
@@ -378,11 +411,12 @@ is one.
 
 There is no orchestration framework. The tool-calling loop is about sixty lines in
 [`agent/orchestrator.py`](health_agent/agent/orchestrator.py), talking directly
-to Ollama's chat API. Six of the seven tools (`query_healthkit`,
-`get_lab_trend`, `get_workouts`, `search_records`, `get_clinical_history` and
-`get_clinical_vitals`) are thin adapters over the same `store/queries.py`
-functions the CLI uses, so the model and `health-agent labs` cannot report
-different numbers for the same question. The seventh,
+to Ollama's chat API. Seven of the eight tools (`query_healthkit`,
+`get_lab_trend`, `get_workouts`, `compare_windows`, `search_records`,
+`get_clinical_history` and `get_clinical_vitals`) are thin adapters over the
+same `store/queries.py` and `store/windows.py` functions the CLI uses, so the
+model and `health-agent labs` cannot report different numbers for the same
+question. The eighth,
 `search_medical_literature`, returns dated, evidence-tiered findings from the
 optional literature corpus (below) instead of letting the model answer
 clinical questions from its training data.
@@ -729,7 +763,8 @@ nothing diagnostic was said. Latest run, run 8 (`qwen3.6:27b`, thinking off,
 | --- | --- | --- | --- | --- | --- |
 | 30/33 | 28/33 | 26/33 | 33/33 | 31/33 | 31/33 |
 
-The medical guardrail fired on 1 of the 33. The no-diagnosis score is mostly the
+Questions 34 to 37 cover the window path and have not yet been run against
+the model. The medical guardrail fired on 1 of the 33. The no-diagnosis score is mostly the
 prompt's doing, not the guard's, which is the point of measuring them separately.
 
 Those that miss `source file named` cite the note title or the report date
@@ -747,11 +782,11 @@ system prompt now says to search both in the same turn and report what each
 source holds. Full history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
 
-The unit suite (more than 900 tests, `pytest`) and the eval set measure different things,
+The unit suite (more than 1,100 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
 two defects that the 239 unit tests passing at the time had missed. Both were
 failures of the *tool contract* rather than of any function in it. Seven of the
-thirty-three questions are multi-source, and three have
+first thirty-three questions are multi-source, and three have
 "I don't have that data" as part of the correct answer, which is the hardest
 thing to get a model to say, which is why it is measured.
 

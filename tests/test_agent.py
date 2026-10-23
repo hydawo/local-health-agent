@@ -715,7 +715,7 @@ def test_clinical_vitals_report_absence_as_coverage(ctx):
 def test_both_tools_are_registered_and_schemas_are_well_formed():
     assert "get_clinical_history" in tools.BY_NAME
     assert "get_clinical_vitals" in tools.BY_NAME
-    assert len(tools.TOOLS) == 7
+    assert len(tools.TOOLS) == 8
     for schema in tools.schemas():
         assert schema["function"]["description"]
         assert schema["function"]["parameters"]["type"] == "object"
@@ -906,3 +906,374 @@ def test_disagreement_note_skips_dates_not_in_the_payload():
                        {"value": 2.0, "unit": "x", "sources": ["fhir"]}]},)
     assert tools._source_disagreement_note(d, {"2021-01-01"}) is None
     assert "2020-01-01" in tools._source_disagreement_note(d, {"2020-01-01"})
+
+
+# --------------------------------------------------------------------------- #
+# compare_windows and get_workouts detail
+# --------------------------------------------------------------------------- #
+
+_RHR = "HKQuantityTypeIdentifierRestingHeartRate"
+_HR = "HKQuantityTypeIdentifierHeartRate"
+
+
+@pytest.fixture
+def workoutbox(tmp_path):
+    """An index built by direct inserts; tests/fixtures/export.xml is untouched."""
+    import datetime as dt
+
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    conn.execute("INSERT INTO source_file(id, path, kind, sha256, size_bytes, "
+                 "ingested_at) VALUES(1, 'x', 'healthkit', 'h', 1, 'now')")
+    n = 0
+    for year, base in ((2023, 60), (2024, 55)):
+        for day in range(1, 32):
+            n += 1
+            date = dt.date(year, 1, day).isoformat()
+            epoch = dt.datetime(year, 1, day, 8,
+                                tzinfo=dt.timezone.utc).timestamp()
+            conn.execute(
+                "INSERT INTO record(type, value_num, unit, source_name, "
+                "start_date, start_epoch, local_date, dedup_key) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                (_RHR, base + day % 4, "count/min", "Watch",
+                 f"{date}T08:00:00+00:00", epoch, date, n.to_bytes(4, "big")))
+    sqlite_schema.rebuild_daily_metrics(conn)
+
+    for i, (name, onset) in enumerate((("Knee sprain", "2023-06-01"),
+                                       ("Knee surgery", "2023-09-15"))):
+        cur = conn.execute(
+            "INSERT INTO document(source_file_id, path, kind, extraction, "
+            "ingested_at) VALUES(1, ?, 'fhir', 'text', 'now')",
+            (f"clinical-records/knee{i}.json",))
+        conn.execute(
+            "INSERT INTO clinical_fact(document_id, kind, name, onset_date, "
+            "dedup_key) VALUES(?, 'condition', ?, ?, ?)",
+            (cur.lastrowid, name, onset, bytes([i + 1])))
+
+    for i, date in enumerate(("2023-02-06", "2023-02-08", "2023-02-10")):
+        cur = conn.execute(
+            "INSERT INTO workout(activity_type, duration, duration_unit, "
+            "total_distance, total_distance_unit, source_name, start_date, "
+            "start_epoch, local_date, dedup_key) "
+            "VALUES('HKWorkoutActivityTypeCycling', 60, 'min', 20, 'km', "
+            "'Watch', ?, ?, ?, ?)",
+            (f"{date}T09:00:00+00:00",
+             dt.datetime.fromisoformat(f"{date}T09:00:00+00:00").timestamp(),
+             date, bytes([10 + i])))
+        conn.execute(
+            "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+            "VALUES(?, 'statistic', ?, ?, 'count/min')",
+            (cur.lastrowid, f"{_HR}:average", 140.0 + i))
+    conn.commit()
+    yield tools.ToolContext(conn=conn, vector_path=tmp_path / "v")
+    conn.close()
+
+
+_RANGES = {"metric": "resting-hr",
+           "left_start": "2023-01-01", "left_end": "2023-01-31",
+           "right_start": "2024-01-01", "right_end": "2024-01-31"}
+
+
+def test_compare_windows_returns_both_sides_and_the_verdict(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", _RANGES)
+    assert result["left"]["periods"] == 31 and result["right"]["periods"] == 31
+    assert result["comparable"]["verdict"] in windows_verdicts()
+    assert "no claim" in result["note"]
+    # An empty-handed side reports coverage, not an empty record.
+    assert result["left"]["coverage"]["total_records"] == 62
+
+
+def windows_verdicts():
+    from health_agent.store import windows
+    return windows.VERDICTS
+
+
+def test_compare_windows_carries_no_difference_between_the_sides(workoutbox):
+    flat = json.dumps(tools.dispatch(workoutbox, "compare_windows", _RANGES)).lower()
+    for forbidden in ("difference", "delta", "percent", "pct_change", "ratio",
+                      "significant", "likely", "suggests", "caused"):
+        assert forbidden not in flat
+
+
+def test_compare_windows_anchored_uses_the_windows_own_note_and_labels(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_date": "2023-01-16",
+        "before_days": 7, "after_days": 7})
+    assert result["anchor"]["date"] == "2023-01-16"
+    assert result["left_label"] == "before"
+    assert result["left"]["periods"] == 7 and result["right"]["periods"] == 7
+    assert "no claim" in result["note"]
+    assert "records" not in result["left"]
+
+
+def test_compare_windows_sample_counts_only_when_asked(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows",
+                            {**_RANGES, "sample_counts": True})
+    assert result["left"]["records"] == 31
+    assert result["comparable"]["left_records"] == 31
+
+
+def test_an_empty_side_names_what_the_index_holds(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        **_RANGES, "right_start": "2025-01-01", "right_end": "2025-01-31"})
+    assert result["comparable"]["verdict"] == "insufficient_data"
+    assert result["right"]["periods"] == 0
+    assert result["right"]["coverage"]["available_to"] == "2024-01-31"
+    assert "62 records" in result["comparable"]["because"]
+
+
+def test_compare_windows_reports_an_ambiguous_anchor_instead_of_choosing(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_fact": "knee",
+        "before_days": 7, "after_days": 7})
+    assert result["anchor_ambiguous"] is True
+    assert {c["date"] for c in result["candidates"]} == {"2023-06-01",
+                                                         "2023-09-15"}
+    assert "which" in result["note"].lower()
+    assert "left" not in result
+
+
+def test_an_unmatched_anchor_fact_is_not_found_and_names_what_is_held(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_fact": "asthma"})
+    assert result["error"] == "anchor_not_found"
+    assert "condition" in result["clinical_kinds_held"]
+
+
+def test_compare_windows_with_no_anchor_and_no_ranges_says_what_it_needs(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows",
+                            {"metric": "resting-hr"})
+    assert result["error"]
+    assert "anchor_date" in result["note"] and "left_start" in result["note"]
+
+
+def test_compare_windows_refuses_an_anchor_and_ranges_together(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows",
+                            {**_RANGES, "anchor_date": "2023-01-16"})
+    assert result["error"] == "two_ways_to_name_windows"
+
+
+def test_compare_windows_layer_refusals_come_back_as_the_reason(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        **_RANGES, "metric": "resting-hrr"})
+    assert result["error"] == "invalid_request"
+    assert "unknown metric" in result["note"]
+
+
+def test_compare_windows_over_a_workout_measure(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": f"{_HR}:average", "period": "week",
+        "left_start": "2023-02-01", "left_end": "2023-02-14",
+        "right_start": "2023-03-01", "right_end": "2023-03-14"})
+    assert result["left"]["median"] == 141.0
+    assert result["right"]["periods"] == 0
+    assert result["right"]["coverage"]["total_workouts"] == 3
+
+
+def test_compare_windows_lists_every_point_under_the_cap(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr",
+        "left_start": "2023-01-01", "left_end": "2023-01-31",
+        "right_start": "2024-01-01", "right_end": "2024-01-31"})
+    assert "points_truncated" not in result      # 31 <= 60
+    assert len(result["left_points"]) == 31
+
+
+def test_get_workouts_detail_carries_measures_and_derivations(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "measures": [f"{_HR}:average"],
+        "derive": ["pace"], "limit": 5})
+    first = result["workouts"][0]
+    assert first["measures"][f"{_HR}:average"]["value"] == 142.0
+    assert first["derived"]["pace"]["value"] is not None
+    assert first["citation"]
+    assert "sample_depth" not in first
+    assert "note" not in result
+
+
+def test_get_workouts_detail_samples_carry_sample_depth(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "measures": [f"{_HR}:average"], "samples": True})
+    depth = result["workouts"][0]["sample_depth"][_HR]
+    assert depth["count"] == 0 and depth["bounds"] == "inclusive"
+
+
+def test_get_workouts_detail_by_period_groups_workouts(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "period": "week", "measures": [f"{_HR}:average"]})
+    (point,) = result["points"]
+    assert point["workouts"] == 3
+    assert point["measures"][f"{_HR}:average"]["median"] == 141.0
+
+
+def test_get_workouts_detail_ratio_without_its_pair_is_refused_in_words(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "period": "week", "measures": [f"{_HR}:average"],
+        "ratio_of": [f"{_HR}:average", "x"]})
+    assert result["error"] == "invalid_request"
+    assert "ratio" in result["note"]
+
+
+def test_get_workouts_without_detail_keeps_its_old_shape(workoutbox):
+    """No question that worked before this change may change its answer."""
+    result = tools.dispatch(workoutbox, "get_workouts", {})
+    assert set(result) == {"workouts", "totals_by_activity"}
+    assert set(result["workouts"][0]) == {
+        "date", "activity", "duration", "duration_unit", "distance",
+        "distance_unit", "energy", "energy_unit", "source"}
+    ignored = tools.dispatch(workoutbox, "get_workouts",
+                             {"measures": [f"{_HR}:average"], "period": "week"})
+    assert ignored.pop("ignored_arguments") == ["period", "measures"]
+    assert "unfiltered" in ignored.pop("ignored_note")
+    assert ignored == result
+
+
+def test_outdoor_only_without_detail_is_a_dropped_filter_not_an_unset_one(
+        workoutbox):
+    """`indoor: False` means outdoor only. Read as unset, it returned every
+    workout, indoor ones included, with nothing saying the filter was
+    dropped, which is an answer that reads as filtered."""
+    outdoor = tools.dispatch(workoutbox, "get_workouts", {"indoor": False})
+    assert outdoor["ignored_arguments"] == ["indoor"]
+    assert "detail" in outdoor["ignored_note"]
+    indoor = tools.dispatch(workoutbox, "get_workouts", {"indoor": True})
+    assert indoor["ignored_arguments"] == ["indoor"]
+
+
+def test_samples_with_a_period_is_refused_with_a_reason(workoutbox):
+    """The depth is per workout and a period is a group of them, so there is
+    nothing to attach it to. Read and then dropped, the answer carried no
+    depth and no reason against a schema that promises the count."""
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "period": "week", "measures": [f"{_HR}:average"],
+        "samples": True})
+    assert result["error"] == "invalid_request"
+    assert "period" in result["note"] and "samples" in result["note"]
+    assert "sample_depth" not in result
+
+
+def test_a_metric_window_with_an_indoor_flag_comes_back_as_a_refusal(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows",
+                            {**_RANGES, "indoor": True})
+    assert result["error"] == "invalid_request"
+    assert "workout figure" in result["note"]
+
+
+def test_the_tool_descriptions_say_what_a_mixed_unit_means(workoutbox):
+    """The sentinel reaches the model as a unit string with a null figure and
+    no reason beside it, so the word is defined where the model reads it."""
+    for name in ("get_workouts", "compare_windows"):
+        tool = next(t for t in tools.TOOLS if t.name == name)
+        assert "never as a unit" in tool.description
+
+
+def test_get_workouts_names_the_measures_it_holds_when_one_is_missing(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True,
+        "measures": ["HKQuantityTypeIdentifierVO2Max:average"]})
+    assert [m["key"] for m in result["measures_available"]] == [
+        f"{_HR}:average"]
+    assert "no workout carries" in result["note"].lower()
+    assert result["workouts"]               # the workouts still come back
+
+
+def test_detail_with_no_workouts_in_range_keeps_the_coverage_shape(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "measures": [f"{_HR}:average"],
+        "start_date": "2020-01-01", "end_date": "2020-12-31"})
+    assert result["no_data_in_range"] is True       # the old empty shape
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "period": "week", "measures": [f"{_HR}:average"],
+        "indoor": True})
+    assert result["no_data_in_range"] is True
+
+
+def test_the_index_with_no_workout_measures_says_so(workoutbox):
+    workoutbox.conn.execute("DELETE FROM workout_stat")
+    workoutbox.conn.commit()
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "measures": [f"{_HR}:average"]})
+    assert result["measures_available"] == []
+    assert "no workout measures of any kind" in result["note"]
+
+
+def test_the_system_prompt_forbids_a_causal_reading_of_two_windows():
+    prompt = orchestrator.SYSTEM_PROMPT
+    assert "two sets of numbers from two spans of time" in prompt
+    assert "never compute the difference between the two sides yourself" in prompt
+    rule = prompt[prompt.index("1f."):prompt.index("1a.")]
+    assert "\u2014" not in rule
+
+
+def test_the_tool_count_is_eight():
+    """One new tool, not one per data shape. Later sub-projects add sources and
+    add no tools."""
+    assert len(tools.TOOLS) == 8
+    assert {t.name for t in tools.TOOLS} >= {
+        "compare_windows", "get_workouts", "get_clinical_history"}
+
+
+def test_compare_windows_unheld_measure_names_the_measures_held(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
+        "before_days": 7, "after_days": 7})
+    because = result["comparable"]["because"]
+    assert result["comparable"]["verdict"] == "missing_measure_on_one_side"
+    assert "no workout carries nope" in because
+    assert f"{_HR}:average" in because
+    assert f"{_HR}:average" in result["rendered"]
+    assert "records of this figure" not in because
+
+
+def test_compare_windows_surfaces_a_category_metric_refusal_readably(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {**_RANGES,
+                                                            "metric": "sleep"})
+    assert result["error"] == "invalid_request"
+    assert "query_healthkit" in result["note"]
+
+
+def test_no_bare_samples_key_survives_in_a_comparison(workoutbox):
+    flat = json.dumps(tools.dispatch(workoutbox, "compare_windows",
+                                     {**_RANGES, "sample_counts": True}))
+    assert '"samples"' not in flat and '"records": 31' in flat
+
+
+def test_an_empty_filtered_answer_names_the_activities_and_the_exclusion(workoutbox):
+    swim = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "activity": "Swimming"})
+    assert swim["asked"] == {"activity": "Swimming"}
+    assert swim["activities_in_range"] == [{"activity": "Cycling", "workouts": 3}]
+    assert "3 Cycling" in swim["note"] and "matched none" in swim["note"]
+
+    excluded = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "exclude_source": ["Watch"]})
+    assert excluded["excluded_by_source"] == {"sources": ["Watch"], "workouts": 3}
+    assert "excluded source" in excluded["note"]
+
+
+def test_an_unfiltered_empty_answer_is_unchanged(workoutbox):
+    result = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "start_date": "2020-01-01", "end_date": "2020-12-31"})
+    assert "asked" not in result and "activities_in_range" not in result
+
+
+def test_an_explicit_zero_is_refused_not_replaced(workoutbox):
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_date": "2023-01-16", "before_days": 0})
+    assert result["error"] == "invalid_request"
+    assert "before_days" in result["note"]
+
+
+def test_bad_arguments_get_a_readable_expectation(workoutbox):
+    date = tools.dispatch(workoutbox, "compare_windows", {
+        **_RANGES, "left_start": "nope"})
+    assert "YYYY-MM-DD" in date["note"] and "isoformat" not in date["note"]
+    days = tools.dispatch(workoutbox, "compare_windows", {
+        "metric": "resting-hr", "anchor_date": "2023-01-16",
+        "before_days": "x"})
+    assert "whole number of days" in days["note"]
+    assert "invalid literal" not in days["note"]
+    limit = tools.dispatch(workoutbox, "get_workouts", {
+        "detail": True, "limit": "x"})
+    assert "limit is a whole number" in limit["note"]

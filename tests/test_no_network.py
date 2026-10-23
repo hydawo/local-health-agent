@@ -428,3 +428,30 @@ def test_fhir_parser_imports_no_transport_and_fetches_nothing():
                       "import socket", "import requests", "import httpx",
                       "urlopen"):
         assert forbidden not in text, f"ingest/fhir.py mentions {forbidden!r}"
+
+
+def test_window_and_derivation_modules_import_no_transport():
+    store = Path(offline_check.__file__).parent / "store"
+    for name in ("windows.py", "derive.py"):
+        text = (store / name).read_text()
+        for forbidden in ("import urllib", "from urllib", "import http",
+                          "import socket", "import requests", "import httpx",
+                          "urlopen"):
+            assert forbidden not in text, f"store/{name} mentions {forbidden!r}"
+
+
+def test_offline_check_pipeline_covers_the_window_path(tmp_path):
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    by_name = {s["step"]: s for s in steps}
+    step = by_name["agent tool: compare_windows"]
+    assert step["ok"], step
+    assert all(s["ok"] for s in steps)
+
+
+def test_a_compare_windows_payload_without_a_verdict_fails_the_step():
+    class _Ctx:
+        pass
+
+    with pytest.raises(AssertionError, match="comparable"):
+        offline_check._compare_windows_detail(
+            lambda ctx, name, args: {"error": "invalid_request"}, _Ctx())
