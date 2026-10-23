@@ -70,6 +70,45 @@ def test_lab_trend_requires_one_of_analyte_or_analytes(ctx):
                                          {"analytes": ["ldl"]})
 
 
+def test_clinical_history_returns_the_notes_beside_the_feed(ctx):
+    """The fix for Q27, which prompt rule 1e only ever made likely.
+
+    Five draws on one unchanged commit had the model searching the notes three
+    times out of five; the two failures told the person they take no
+    lipid-lowering drug while their own note records atorvastatin. The second
+    lookup is no longer requested, it is performed, so the claim cannot be made
+    from a feed alone.
+    """
+    result = tools.dispatch(ctx, "get_clinical_history", {"kind": "medications"})
+    notes = result["also_in_personal_notes"]
+    assert notes, "the fixture notes record medications"
+    assert any("atorvastatin" in n["text"].lower() for n in notes), \
+        "the drug the health system feed does not hold"
+    assert all(n["citation"] for n in notes)
+    # The feed itself must not be presentable as the whole truth.
+    assert "`facts` alone" in result["two_sources_note"]
+
+
+def test_clinical_history_carries_both_sources_on_every_path(ctx):
+    """Including the empty ones: "no clinical records" with notes present is
+    the absence-as-coverage case this project has broken most often."""
+    for args in ({}, {"kind": "medications"}, {"kind": "conditions"},
+                 {"kind": "allergies"}, {"since": "2099-01-01"}):
+        result = tools.dispatch(ctx, "get_clinical_history", args)
+        assert "also_in_personal_notes" in result, args
+        assert "two_sources_note" in result, args
+
+
+def test_the_notes_lookup_needs_no_embeddings(ctx):
+    """FTS5 over the chunk table, so it runs on a fresh index with nothing
+    embedded and never depends on a model being reachable."""
+    from health_agent.agent.tools import _notes_beside_clinical
+    assert _notes_beside_clinical(ctx, "medication")
+    assert _notes_beside_clinical(ctx, "condition")
+    # An unknown kind falls back to the whole vocabulary rather than no query.
+    assert _notes_beside_clinical(ctx, "immunization")
+
+
 def test_a_lab_trend_carries_the_citation_rule_with_the_data(ctx):
     """Eval run 10 measured `source named` at 23/37, and two answers in that
     run settled why: Q20 printed a Source column naming the PDF and page while
@@ -369,6 +408,30 @@ def test_single_tool_round_trip(ctx, monkeypatch):
     assert not answer.guardrail.flags
 
 
+def test_one_clinical_call_still_puts_the_notes_in_front_of_the_model(ctx,
+                                                                      monkeypatch):
+    """Q27's failure mode exactly, and why it is now harmless.
+
+    The two failing draws made a single `get_clinical_history` call, saw
+    ibuprofen, and concluded the person takes no lipid-lowering drug. Rule 1e
+    asked for a second call and got one three times in five. Here the model is
+    scripted to make that one call and stop, which no prompt can prevent, and
+    the assertion is that atorvastatin was in its context anyway.
+    """
+    orch, fake = make(ctx, [
+        {"content": "", "tool_calls": [{"function": {
+            "name": "get_clinical_history", "arguments": {"kind": "medications"}}}]},
+        {"content": "Your records list ibuprofen; your notes list atorvastatin."},
+    ])
+    monkeypatch.setattr(ollama_client, "chat", fake)
+
+    answer = orch.ask("Given my medications, is my LDL trend a worry?")
+    assert answer.tools_used == ["get_clinical_history"]
+    fed_back = json.dumps(answer.steps[0].result).lower()
+    assert "atorvastatin" in fed_back
+    assert "`facts` alone" in answer.steps[0].result["two_sources_note"]
+
+
 def test_tool_results_are_fed_back_to_the_model(ctx, monkeypatch):
     """The loop is iterative for a measured reason: asked to compare two
     sources, qwen3.6 requests one tool, then the other only after seeing the
@@ -530,21 +593,30 @@ def test_system_prompt_states_the_hard_constraints(ctx):
     assert "clinical thresholds" in prompt
 
 
-def test_system_prompt_says_clinical_history_is_not_the_whole_medication_list(ctx):
+def test_a_feed_is_never_presented_as_the_whole_medication_list(ctx):
     """Eval run 8 regressed Q27. Given the question "given my medications, is
     my LDL trend something to worry about", the model called
     get_clinical_history, found only ibuprofen, never searched the note that
     records the statin, and told the person they take no lipid-lowering
     medication. The clinical tool had displaced the notes search, and the
     model read a health system's feed as the whole truth about what the
-    person takes."""
+    person takes.
+
+    This test used to assert that the prompt asked for a second search, which
+    is the shape of test run 8 itself warned against: it measures wording, and
+    wording only makes compliance likely. Five draws on one commit put that
+    likelihood at three in five. So the assertion moved to the mechanism. The
+    prompt no longer asks, because the tool no longer leaves anything to ask
+    for, and what has to hold is that no caller can receive a feed without the
+    notes beside it.
+    """
     prompt = orchestrator.SYSTEM_PROMPT
     assert "not the whole of what this person takes" in prompt
-    assert "search their notes in the same turn" in prompt
-    # The first wording was satisfiable by saying less: the model stopped
-    # making the false claim, scoped it to "recorded by your health systems",
-    # and offered to check the notes instead of checking them.
-    assert "check them, then answer" in prompt
+    assert "already retrieved" in prompt
+    assert "search their notes in the same turn" not in prompt, \
+        "the prompt must not ask for a lookup the tool performs"
+    result = tools.dispatch(ctx, "get_clinical_history", {})
+    assert "also_in_personal_notes" in result
 
 
 def test_progress_events_are_emitted(ctx, monkeypatch):

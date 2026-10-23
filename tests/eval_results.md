@@ -625,7 +625,22 @@ were single draws. Asked five times on unmodified `adcd30d`, Q27 calls
 | with the panel-note imperative | 0/4 |
 | with the imperative softened | 2/3 |
 
-So rule 1e raised a reliable failure into a weighted coin, not into a fix. The
+**So rule 1e was replaced rather than reworded.** A prompt rule is a request,
+and a request that must hold every time is the wrong mechanism for stopping a
+false clinical claim. `get_clinical_history` now performs the notes lookup
+itself and returns `facts` beside `also_in_personal_notes`, both already
+retrieved, through FTS5 over the chunk table: pure SQLite, no embeddings, no
+model, no network. 1e no longer asks for a second call because there is
+nothing left to ask for, and the test that used to assert the prompt's wording
+now scripts a model making the single call that failed twice in five draws and
+asserts atorvastatin is in its context regardless. Ollama was not available
+when this was written, so the end-to-end rate is unmeasured; what is measured
+is that the claim can no longer be made from a feed alone, which is the part a
+live run was only ever sampling. A run worth doing once Ollama is back:
+Q27 repeated five times, against the 3/5 baseline below.
+
+The rest of this still stands. Rule 1e raised a reliable failure into a
+weighted coin, not into a fix. The
 softened change is indistinguishable from baseline and the imperative is
 clearly worse than it; that comparison, not the earlier single passes, is what
 justified committing. The general lesson applies to every row in this file: a

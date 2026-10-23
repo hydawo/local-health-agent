@@ -1190,6 +1190,78 @@ _FACT_KIND_ARG = {
 FACT_KIND_ARG = _FACT_KIND_ARG
 _FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
 
+# What the person wrote down themselves, fetched beside a health system's feed.
+#
+# Rule 1e asked the model to search the notes in the same turn as it called
+# get_clinical_history, because a feed holds what a health system sent and not
+# what someone takes. Five draws on one commit had it comply three times out of
+# five, and the two failures said this person takes no lipid-lowering drug while
+# their own note records atorvastatin. A prompt rule is a request, and a request
+# that must hold every time is the wrong mechanism for a false clinical claim.
+#
+# So the second lookup is not requested any more, it is performed. FTS5 over the
+# chunk table is pure SQLite: no embeddings, no model, no network, and it runs
+# whether or not anything has been embedded. The vocabulary is ORed by
+# `_fts_query`, so these are terms a person's own medication or condition note
+# tends to contain, not a question.
+# Keyed on the singular row kind (`row_kind`), not the plural tool argument:
+# the tool takes "medications" and the fact table stores "medication", and
+# keying this on the argument made every call fall through to the whole
+# vocabulary instead of the relevant half.
+_NOTE_VOCABULARY = {
+    "medication": "medication medications prescription prescribed taking dose mg",
+    "condition": "diagnosed diagnosis condition conditions history",
+}
+MAX_NOTES_BESIDE = 5
+
+
+def _notes_beside_clinical(ctx: ToolContext, kind: str) -> list[dict]:
+    """Passages from this person's own notes and photographed lists that bear on
+    medications or conditions. Empty is a fact about the index, not a failure,
+    and the caller reports it as coverage either way."""
+    from ..store import vector_store
+
+    terms = (_NOTE_VOCABULARY.get(kind) or
+             " ".join(_NOTE_VOCABULARY.values()))
+    try:
+        hits = vector_store.keyword_search(ctx.conn, terms,
+                                           limit=MAX_NOTES_BESIDE)
+    except Exception:  # pragma: no cover - a missing FTS table must not
+        return []      # take down a clinical answer
+    return [
+        {
+            "citation": h.citation,
+            "kind": h.kind,
+            "text": " ".join(h.text.split())[:MAX_SNIPPET_CHARS],
+        }
+        for h in hits
+    ]
+
+
+def _attach_personal_notes(ctx: ToolContext, payload: dict, kind: str) -> dict:
+    """Every get_clinical_history answer carries both sources or says it has one.
+
+    Always present, so an empty list means the notes hold nothing on this and
+    not that nobody looked -- the same contract `other_analytes_in_this_panel`
+    keeps. Descriptive only: this names what is already in the payload and must
+    never ask for another tool call, because an imperative inside a tool result
+    outranks a prompt rule and will displace whatever the model would have done
+    next.
+    """
+    notes = _notes_beside_clinical(ctx, kind)
+    payload["also_in_personal_notes"] = notes
+    payload["two_sources_note"] = (
+        "`facts` is what this person's health systems sent. "
+        "`also_in_personal_notes` is what they wrote down or photographed "
+        "themselves, already retrieved for you. Neither is the whole of what "
+        "they take or have been told, and an empty `also_in_personal_notes` "
+        "means their notes hold nothing on this. Report what each source "
+        "holds, and never say they take no medication of some kind, or have "
+        "no condition of some kind, on the strength of `facts` alone."
+    )
+    return payload
+
+
 def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
     kind = (args.get("kind") or "").strip().lower()
     row_kind = _FACT_KIND_ARG.get(kind)
@@ -1216,7 +1288,7 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
             "person has either not ingested or skipped. Say that rather than "
             "answering from anything else."
         )
-        return payload
+        return _attach_personal_notes(ctx, payload, row_kind or "")
     if not coverage:
         payload["clinical_records_held"] = {
             label: n for label, n, _ in holdings["labels"]}
@@ -1229,14 +1301,14 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
             + ". Say what is absent and what is held, and do not say this "
               "person has no clinical records."
         )
-        return payload
+        return _attach_personal_notes(ctx, payload, row_kind or "")
     if not facts:
         payload["note"] = (
             f"No {kind or 'clinical'} records in the requested range. The "
             f"index does hold {', '.join(payload['kinds_available'])}. Say "
             f"what is absent."
         )
-        return payload
+        return _attach_personal_notes(ctx, payload, row_kind or "")
     if len(facts) >= MAX_CLINICAL_FACTS:
         payload["truncated"] = True
     payload["note"] = (
@@ -1244,7 +1316,7 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
         "told you. State them as records with their dates, cite the file, and "
         "do not say whether a regimen or a diagnosis is correct."
     )
-    return payload
+    return _attach_personal_notes(ctx, payload, row_kind or "")
 
 
 def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:

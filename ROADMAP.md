@@ -490,8 +490,11 @@ than a fix.
   load-bearing needs repeated draws, not a pass. And a column that moves by
   one or two between runs may be noise, which means run-to-run comparisons in
   `tests/eval_results.md` carry an unknown error bar. An `--repeat N` flag on
-  the eval that reports a rate per question would settle it, and until then
-  rule 1e should be treated as partially effective.
+  the eval that reports a rate per question would settle it. Rule 1e itself is
+  no longer the mechanism: `get_clinical_history` performs the notes lookup and
+  returns both sources, so the false claim cannot be made from a feed alone
+  whether or not the model would have complied. Q27 repeated five times is the
+  first thing to run when Ollama is next available, against the 3/5 baseline.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while
