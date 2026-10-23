@@ -27,6 +27,7 @@ answers to Q1, Q7, Q17 and Q19 and break comparison with every row below.
 | 7 | Lab literature block, 30 questions | qwen3.6:27b | 28/30 | 26/30 | 23/30 | 29/30 | 28/30 | 29/30 | 23/30 | 37.4 min |
 | 8 | Clinical records, 33 questions | qwen3.6:27b | 30/33 | 28/33 | 26/33 | **33/33** | 31/33 | 31/33 | 25/33 | 55.6 min |
 | 9 | Event windows, 37 questions | qwen3.6:27b | 36/37 | 31/37 | 27/37 | 36/37 | 35/37 | **37/37** | 28/37 | 67.0 min |
+| 10 | Run 9's scorer fixes, same bed | qwen3.6:27b | 36/37 | 30/37 | 23/37 | **37/37** | **37/37** | **37/37** | 29/37 | 49.6 min |
 
 Thinking mode off for every run. Run 7 adds three questions (Q28 to Q30) and a `context` column, scored 3/3 and not shown in this table; run 8 adds Q31 to Q33 and scored 3/3 on the same column. "Clean" means all five checks passed. The
 guardrail fired on 0/20 in runs 2 and 3 — worth stating explicitly, because a
@@ -514,3 +515,64 @@ the thing the question is asking. Recorded, not engineered around.
 **Timing.** 67.0 minutes for 37 questions, slower per question than run 8.
 Q12 alone took 353 s on a single tool call. The four window questions cost
 101 to 179 s each, and Q37's three calls put it at the top of that range.
+
+
+## Run 10: the same questions against the fixed scorer
+
+Same bed, model and questions as run 9, rerun after run 9's five scorer
+fixes. This is a fresh sample, not a rescore: the model's answers differ, so
+rows move for reasons unrelated to the scorer. The comparison that means
+anything is against run 9's answers scored by the fixed scorer, which would
+have read 37/37 number, 32/37 cited, 37/37 gap, 37/37 no-diagnosis and 32/37
+clean.
+
+**All five fixes held, on text written independently of them.** `gap` and
+`no diagnosis` are both full columns, the first time either has been. Q30 and
+Q32 keep their no-diag, Q35 cites its month and year, Q23 names its gap in
+whatever verb it reached for, and Q37 passes every column. That last one
+matters most: Q37 now scores the resolved anchor date rather than figures
+from a window the question leaves free, and the run proves the point by
+choosing a different window again and passing anyway, over four tool calls.
+
+**The guardrail fired zero times**, against once in run 9 (Q22). Both are
+within the variance this project has seen on that counter; it is not evidence
+of a change.
+
+**Q20 is a real miss.** Asked "What do I know about my cholesterol overall?",
+the model answered total cholesterol only, across four reports with sources
+and an OCR caveat, and closed by offering to pull LDL, HDL and triglycerides
+next. The case wants 186, 112 and 52. The answer is accurate and well
+sourced; it just answers a narrower question than the one asked, and said so.
+Q20 passed in runs 5 through 9.
+
+**Citation is unstable, not absent, and that is the run's real finding.**
+`source named` fell from 27/37 to 23/37, with Q24 and Q29 joining the
+standing Q13, Q18 and Q27. Two answers in the same run settle what the
+column has been unable to say for several:
+
+- Q20 printed a Source column naming `labs_2026-03-10.pdf, p.1`,
+  `Observation-lab-chol.json, p.0` and `scan_2025-03-04.pdf, p.1`, marking
+  the OCR-read page as OCR-read.
+- Q29 asked almost the same question of the same tool, printed the same shape
+  of table with Date, Value, Range and Flag, and left the Source column out.
+
+So the model has the paths, knows the format, and uses it on one question and
+not the next. This is not a capability the agent lacks but a prompt that does
+not require it, which makes `source named` a measure of luck. Recorded as a
+ROADMAP item rather than fixed here: a prompt rule aimed at this needs its
+own run to verify, and run 9 is the standing lesson that a rule meant to make
+the model do something can be satisfied by it saying less.
+
+**Q24 and Q23/Q26 are the same shape at different severities.** Q24's
+literature search returned no LDL threshold, so the answer had no PMID to
+cite and fell back to the lab's own printed range, correctly. Because Q24 is
+a `needs_source` case, a date cannot rescue it, so an honest empty-handed
+answer scores worse there than on Q23 and Q26, where the floor was already
+recorded as permanent. Three of the five `cited` misses in this run are an
+answer reporting that something is not in the corpus.
+
+**Timing.** 49.6 minutes against run 9's 67.0 for the same 37 questions,
+with no code change between them that touches inference. Per-question times
+moved in both directions (Q12 from 353 s to 60.7 s, Q37 from 179 s to
+190 s). Wall time on this bed is not a stable number and should not be read
+as a performance change.

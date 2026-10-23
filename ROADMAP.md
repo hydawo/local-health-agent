@@ -481,3 +481,17 @@ than a fix.
   whether the key carries an aggregate suffix. They agree on every real export,
   because statistic keys carry a suffix and metadata keys do not. They are
   three rules for one fact.
+- Nothing requires the model to name the file a value came from, so whether it
+  does is luck. Eval run 10 settled this: Q20 printed a Source column naming
+  `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while
+  Q29 asked almost the same question of the same tool, printed the same shape
+  of table, and left the column out. The paths are in the tool's output and the
+  model uses them on one question and not the next, which is why `source
+  named` has been the weakest column in the eval since it was added (23/37 in
+  run 10, 27/37 in run 9). A prompt rule is the obvious fix and needs its own
+  run to verify, because the standing lesson from run 8's rule 1e is that a
+  rule meant to make the model *do* something can be satisfied by it saying
+  less. Any attempt should also decide what a citation is when the honest
+  answer is that the corpus holds nothing: three of run 10's five `cited`
+  misses were exactly that, and on a `needs_source` case a date cannot rescue
+  it.
