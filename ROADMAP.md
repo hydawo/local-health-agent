@@ -481,6 +481,17 @@ than a fix.
   whether the key carries an aggregate suffix. They agree on every real export,
   because statistic keys carry a suffix and metadata keys do not. They are
   three rules for one fact.
+- Every per-question eval result in this repository is a single draw, and the
+  width of that distribution has never been measured. Asked five times on one
+  unchanged commit, Q27 called `search_records` three times out of five, so
+  prompt rule 1e raised a reliable failure into a weighted coin rather than
+  fixing it, and the run 9 and run 10 narratives calling it measured were
+  reading one draw each. Two consequences. A question that guards something
+  load-bearing needs repeated draws, not a pass. And a column that moves by
+  one or two between runs may be noise, which means run-to-run comparisons in
+  `tests/eval_results.md` carry an unknown error bar. An `--repeat N` flag on
+  the eval that reports a rate per question would settle it, and until then
+  rule 1e should be treated as partially effective.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while
@@ -488,10 +499,10 @@ than a fix.
   of table, and left the column out. The paths are in the tool's output and the
   model uses them on one question and not the next, which is why `source
   named` has been the weakest column in the eval since it was added (23/37 in
-  run 10, 27/37 in run 9). A prompt rule is the obvious fix and needs its own
-  run to verify, because the standing lesson from run 8's rule 1e is that a
-  rule meant to make the model *do* something can be satisfied by it saying
-  less. Any attempt should also decide what a citation is when the honest
+  run 10, 27/37 in run 9). Addressed after run 10: a date, a title and a
+  table's date column are now each named as not being a citation, in rule 2
+  and in the payload beside the unit and OCR warnings, taking `source named`
+  from 1/8 to 6/8 on the affected questions. Any attempt should also decide what a citation is when the honest
   answer is that the corpus holds nothing: three of run 10's five `cited`
   misses were exactly that, and on a `needs_source` case a date cannot rescue
   it.

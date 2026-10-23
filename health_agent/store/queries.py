@@ -956,6 +956,31 @@ class LabTrend:
         return not self.points
 
 
+def panel_siblings(conn: sqlite3.Connection, analyte_key: str) -> list[dict]:
+    """Every other analyte the reports hold from the same panel as `analyte_key`.
+
+    Read off the index rather than the registry, so an analyte that arrived
+    with a slugified key still counts: the question this answers is "what else
+    do these reports hold", and the registry only knows what it was taught.
+
+    An empty list means the reports hold no sibling, which is a different fact
+    from nobody having asked. Callers must pass the distinction on rather than
+    omitting the field.
+    """
+    panel = conn.execute(
+        "SELECT panel FROM lab_result WHERE analyte_key = ? AND panel IS NOT NULL "
+        "LIMIT 1", (analyte_key,)).fetchone()
+    if panel is None or not panel["panel"]:
+        return []
+    rows = conn.execute(
+        "SELECT analyte_key, COUNT(*) AS n, MAX(analyte) AS printed_as, "
+        "MIN(collected_date) AS first, MAX(collected_date) AS last "
+        "FROM lab_result WHERE panel = ? AND analyte_key <> ? "
+        "GROUP BY analyte_key ORDER BY n DESC, analyte_key",
+        (panel["panel"], analyte_key))
+    return [dict(r) for r in rows]
+
+
 def list_documents(conn: sqlite3.Connection,
                    kind: str | None = None) -> list[dict]:
     sql = (

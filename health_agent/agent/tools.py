@@ -203,6 +203,21 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
     return payload
 
 
+# Every lab and document result carries a `citation`, and the system prompt
+# already says to reproduce it. Eval run 10 showed that is not enough: Q20
+# printed a Source column naming the PDF and page while Q29 asked almost the
+# same question of the same tool and left it out, so `source named` was
+# measuring luck at 23/37. In this project an instruction inside the payload
+# has held where a prompt rule alone has not: the `no_data` note, the unit
+# warning and the OCR warning all ride with the data, and `gap named` is a
+# full column. This puts the citation rule where those live.
+CITATION_NOTE = (
+    "Every result above carries a `citation`. Reproduce it verbatim at least "
+    "once for each report you draw on; in a table, give it a column. A date "
+    "on its own is not a citation."
+)
+
+
 # --------------------------------------------------------------------------- #
 # get_lab_trend
 # --------------------------------------------------------------------------- #
@@ -839,6 +854,22 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
     }
     if truncated:
         payload["truncated"] = True
+    payload["citation_note"] = CITATION_NOTE
+    siblings = queries.panel_siblings(ctx.conn, trend.key)
+    payload["other_analytes_in_this_panel"] = [s["analyte_key"] for s in siblings]
+    # Coverage, stated as a fact and nothing more. The first version of this
+    # note ended with "call get_lab_trend again with `analytes` set to those
+    # keys", and that broke Q27 four times out of four: an imperative inside a
+    # tool result arrives exactly when the model is choosing its next call, and
+    # it beat prompt rule 1e, so the notes search that finds atorvastatin never
+    # happened. A payload instruction outranking a prompt rule is why
+    # `citation_note` works; it is also why this one must not direct a call.
+    # Only the prompt sees the question, so whether to widen is rule 4b's.
+    payload["panel_note"] = (
+        "other_analytes_in_this_panel is every other analyte from this panel "
+        "that these reports hold, so an empty list means they hold none. This "
+        "states what the reports cover. It is not a request to fetch them."
+    )
     if len(trend.units_seen) > 1:
         payload["unit_warning"] = (
             f"Results use different units across reports "
@@ -911,6 +942,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
 
     payload: dict = {
         "analytes": found,
+        "citation_note": CITATION_NOTE,
         # Precomputed so the model doesn't have to scan every result itself and
         # risk missing one — the same principle as `overall` for time series.
         "out_of_range_on_latest_report": flagged,
@@ -983,8 +1015,10 @@ def _search_records(ctx: ToolContext, args: dict) -> dict:
             }
             for h in hits
         ],
-        "note": ("Quote or paraphrase only what these snippets say, and cite the "
-                 "citation string with any claim drawn from them."),
+        "note": ("Quote or paraphrase only what these snippets say, and cite "
+                 "the `citation` string verbatim with any claim drawn from "
+                 "them. The note's own date or heading is not a citation: "
+                 "reproduce the string."),
     }
 
 

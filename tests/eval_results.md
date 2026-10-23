@@ -576,3 +576,60 @@ with no code change between them that touches inference. Per-question times
 moved in both directions (Q12 from 353 s to 60.7 s, Q37 from 179 s to
 190 s). Wall time on this bed is not a stable number and should not be read
 as a performance change.
+
+
+## After run 10: the citation fix, and what repeated draws showed
+
+Run 10's two findings got fixed, and verifying them turned up something
+larger about every single-draw result in this file.
+
+**Citations.** `source named` was 23/37 because nothing made the model print
+the `citation` string it was already given. Rule 2 had said to since the
+beginning, and `search_records` already carried an in-payload note saying it
+too, so "add a rule" was the wrong fix. What the failures had in common was
+narrower: Q13 gave the note's date, Q27 gave a table's date column, Q29
+omitted the column Q20 printed. Nothing said that a date, a title, or a date
+column is **not** a citation. Rule 2 and that note now say so by name, and the
+lab payloads carry a `citation_note` beside the existing unit and OCR
+warnings, where instructions in this project have actually held. On the eight
+affected questions, `source named` went from 1/8 to 6/8 and `cited` from 3/8
+to 6/8. Q23 and Q26 are the permanent empty-corpus floor.
+
+**Q20's panel.** The narrow answer was not the model's fault. Only the
+`no_data` path listed the analytes the reports hold, so a *successful* query
+said nothing about its own coverage, and asked about cholesterol "overall" the
+model had no way to know HDL and LDL were there. The absence-as-coverage
+doctrine, failing in a new place. Every successful trend now carries
+`other_analytes_in_this_panel`, read off the index rather than the registry,
+with a note saying an empty list means the reports hold none. Q20 passes, in
+one batched call.
+
+**The panel note broke Q27 four times out of four**, and the reason is worth
+more than the fix. Its first version ended with "call get_lab_trend again
+with `analytes` set to those keys". An imperative inside a tool result arrives
+exactly when the model is choosing its next call, and it beat prompt rule 1e:
+the notes search that finds atorvastatin never ran, and the answer said
+ibuprofen is not a lipid-lowering drug. Payload instructions outranking prompt
+rules is *why* `citation_note` works. The same property makes a payload a bad
+place to direct a tool call, and only the prompt sees the question, so the
+note now states coverage and says it is not a request to fetch anything.
+
+**Q27 is not fixed, and never was.** Run 9's narrative says prompt rule 1e
+was "measured rather than spot-checked" and run 10 repeated the pass. Both
+were single draws. Asked five times on unmodified `adcd30d`, Q27 calls
+`search_records` three times out of five:
+
+| prompt state | calls `search_records` |
+| --- | --- |
+| unmodified `adcd30d` | 3/5 |
+| with the panel-note imperative | 0/4 |
+| with the imperative softened | 2/3 |
+
+So rule 1e raised a reliable failure into a weighted coin, not into a fix. The
+softened change is indistinguishable from baseline and the imperative is
+clearly worse than it; that comparison, not the earlier single passes, is what
+justified committing. The general lesson applies to every row in this file: a
+per-question pass is one draw from a distribution whose width this project has
+never measured, and a column that moves by one or two between runs may be
+telling us nothing. Where a question guards something that matters, it needs
+repeated draws, and ROADMAP #16 now carries that.

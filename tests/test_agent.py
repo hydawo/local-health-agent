@@ -70,6 +70,53 @@ def test_lab_trend_requires_one_of_analyte_or_analytes(ctx):
                                          {"analytes": ["ldl"]})
 
 
+def test_a_lab_trend_carries_the_citation_rule_with_the_data(ctx):
+    """Eval run 10 measured `source named` at 23/37, and two answers in that
+    run settled why: Q20 printed a Source column naming the PDF and page while
+    Q29 asked almost the same question of the same tool and left it out. The
+    system prompt had told it to cite since the beginning. In this project an
+    instruction that rides with the data has held where a prompt rule alone
+    has not, so the rule now travels in the payload too.
+    """
+    result = tools.dispatch(ctx, "get_lab_trend", {"analyte": "ldl"})
+    assert "citation_note" in result
+    assert "verbatim" in result["citation_note"]
+    assert all(p["citation"] for p in result["points"])
+    # The batch path returns the same `citation` on every result and lost it on
+    # run 10's Q24, so it carries the rule as well.
+    batch = tools.dispatch(ctx, "get_lab_trend", {"analytes": ["ldl", "hdl"]})
+    assert "citation_note" in batch
+
+
+def test_a_lab_trend_reports_what_else_the_panel_holds(ctx):
+    """Run 10's Q20 answered "what do I know about my cholesterol overall?"
+    with total cholesterol alone and offered the rest afterwards. It had no way
+    to know what else was there: only the `no_data` path listed the analytes
+    the reports hold, so a successful narrow query said nothing about its own
+    coverage. That is this project's central doctrine failing in a new place.
+    """
+    result = tools.dispatch(ctx, "get_lab_trend", {"analyte": "cholesterol"})
+    assert result["analyte"] == "cholesterol_total"
+    siblings = result["other_analytes_in_this_panel"]
+    assert "ldl" in siblings and "hdl" in siblings
+    assert "cholesterol_total" not in siblings
+    # An empty list has to mean "the reports hold none", so the field is
+    # always present and the note says which fact an empty list is.
+    assert "empty list means they hold none" in result["panel_note"]
+
+
+def test_panel_siblings_reads_the_index_not_the_registry(ctx):
+    """The question is what these reports hold, and the registry only knows
+    what it was taught."""
+    from health_agent.store import queries
+    assert queries.panel_siblings(ctx.conn, "made_up_analyte") == []
+    keys = {s["analyte_key"] for s in queries.panel_siblings(ctx.conn, "ldl")}
+    assert "cholesterol_total" in keys
+    assert "ldl" not in keys
+    assert all(s["n"] >= 1 and s["last"] for s in
+               queries.panel_siblings(ctx.conn, "ldl"))
+
+
 def test_batched_lab_lookup_precomputes_out_of_range(ctx):
     """One call instead of one per analyte. Measured before this existed: a
     "what's abnormal?" question took 23 tool calls and 358 seconds."""
