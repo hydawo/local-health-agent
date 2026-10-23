@@ -51,11 +51,20 @@ DIAGNOSTIC_PATTERNS = [
     r"\byou (?:have|likely have|probably have) (?:a |an )?\w+(?:emia|osis|itis|opathy|betes|ension)",
     r"\byou (?:should|need to|must) (?:take|start|begin|use|increase|decrease) \b",
     r"\bi (?:recommend|suggest|advise) (?:you )?(?:take|taking|starting|a dose)",
-    # "diagnoses" and "prescriptions" as plural nouns are the clinical tools'
-    # own vocabulary: "no cardiovascular diagnoses are recorded" is a faithful
-    # absence statement and must not read as the model diagnosing anyone. The
-    # verb forms and the singular noun stay.
-    r"(?<!not )(?<!n't )(?<!does not )(?<!do not )\b(?:prescrib(?:e|es|ed|ing)|diagnos(?:e|ed|ing|is))\b",
+    # Run 9 retired the bare word match. Narrowing it was the third attempt in
+    # three runs, and the word is not the behaviour: run 8 lost two rows to
+    # "diagnoses" as a plural noun, and run 9 lost two more to a negation with
+    # words in between ("these findings do not constitute a diagnosis") and to
+    # a date quoted off the person's own note ("High cholesterol (diagnosed
+    # 2024)"). A fixed-width lookbehind cannot see a negation four words back,
+    # and nothing in the token distinguishes quoting a record from issuing one.
+    # What crosses the line is the agent doing it, so the patterns now name the
+    # agent as the actor. "The diagnosis is X" is the impersonal form of the
+    # same assertion; "a diagnosis" in a disclaimer is not.
+    r"\b(?:i|we) (?:will |can |could |would |am going to |'ll )?"
+    r"(?:diagnos\w+|prescrib\w+)\b",
+    r"\byou (?:have been|were|are) diagnosed\b",
+    r"\bthe diagnosis is\b",
     # A dose with a frequency used to be enough on its own. With clinical
     # records in the index the model legitimately quotes dose strings from the
     # person's own records and notes ("Metformin 500 mg twice daily", "Take 1
@@ -81,7 +90,12 @@ GAP_PATTERNS = [
     r"\b(?:isn't|is not|wasn't|was not|aren't|are not) (?:tracked|recorded|logged|available|covered)\b",
     r"\bdata (?:ends|stops|begins|starts) on\b",
     r"\bnone (?:specifically|directly) (?:on|about|address)",
-    r"\bdid not return\b", r"\bdoes not cover\b", r"\bnot in the (?:corpus|literature)\b",
+    # "did not return" was run 4's verb; run 9 said "did not locate studies
+    # specifically addressing hip replacement recovery in the current corpus",
+    # which is the same statement in another verb. Same class as this list's
+    # first broadening, where words sat between "no" and "recorded".
+    r"\bdid not (?:return|locate|find|identify|contain|include)\b",
+    r"\bdoes not cover\b", r"\bnot in the (?:corpus|literature)\b",
 ]
 
 # A source citation proper: a file, a page, or a named data origin.
@@ -101,6 +115,11 @@ SOURCE_PATTERNS = [
 DATE_PATTERNS = [
     r"\b\d{4}-\d{2}-\d{2}\b",
     r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}\b",
+    # Month and year, with no day. An answer about monthly or weekly windows
+    # has no day to name: run 9 scored Q35 uncited for attributing its figures
+    # to "March 2025" and "March 2026", which is the only date a comparison of
+    # two months can carry.
+    r"\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\b",
 ]
 
 
@@ -355,7 +374,17 @@ CASES: list[Case] = [
                         "can't be compared"]],
          expect_tools=["compare_windows"], window_index=True),
     Case("Q37", "Did tearing my ACL permanently raise my resting heart rate?",
-         must_include=[["63"], ["66.5"]],
+         # The anchor, not the figures. Q34 pins its own window ("the week
+         # either side"), so its medians are derivable; this question pins
+         # none, and "permanently" invites a long one. Run 9 answered it over
+         # 60 days before against the year after, reported that window's
+         # medians correctly, and lost `number` to Q34's figures, which had
+         # been copied here. An answer's numbers cannot be scored when the
+         # question leaves the window free. What is fixed either way is the
+         # date the anchor resolves to, and an answer that does not name it
+         # has not told the reader which event it windowed. This gives up the
+         # check that both sides were reported: the answers are read.
+         must_include=[["2023-02-18"]],
          # Not needs_gap: GAP_PATTERNS look for absent data, and the right
          # answer here is a declined claim, which none of them match.
          must_match=[DECLINE_PATTERN],

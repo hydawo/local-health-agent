@@ -464,7 +464,13 @@ than a fix.
   error path, and two notes in `_get_clinical_history`), none on that
   question's path. A test that scans tool output against scorer patterns would
   catch the next one, and needs an exemption mechanism designed on purpose
-  rather than at the end of a branch.
+  rather than at the end of a branch. Eval run 9 found the same shape in a
+  second list and retired it the same way: a bare `diagnos*` token behind
+  fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
+  constitute a diagnosis", negation four words away) and a date quoted off the
+  person's note ("High cholesterol (diagnosed 2024)"). Three narrowings in
+  three runs. A word is not a behaviour, so the patterns now name the agent as
+  the actor.
 - A metric whose rows carry no unit now reports the string `unlabelled` rather
   than nothing, which is honest, since the alternative is borrowing a
   neighbour's unit. But that sentinel reaches `metric`'s printed title and the

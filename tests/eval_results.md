@@ -26,6 +26,7 @@ answers to Q1, Q7, Q17 and Q19 and break comparison with every row below.
 | 6 | Lite model, same bed as run 5 | qwen3.5:9b | 24/27 | 22/27 | 18/27 | 26/27 | **27/27** | 25/27 | 19/27 | 10.1 min |
 | 7 | Lab literature block, 30 questions | qwen3.6:27b | 28/30 | 26/30 | 23/30 | 29/30 | 28/30 | 29/30 | 23/30 | 37.4 min |
 | 8 | Clinical records, 33 questions | qwen3.6:27b | 30/33 | 28/33 | 26/33 | **33/33** | 31/33 | 31/33 | 25/33 | 55.6 min |
+| 9 | Event windows, 37 questions | qwen3.6:27b | 36/37 | 31/37 | 27/37 | 36/37 | 35/37 | **37/37** | 28/37 | 67.0 min |
 
 Thinking mode off for every run. Run 7 adds three questions (Q28 to Q30) and a `context` column, scored 3/3 and not shown in this table; run 8 adds Q31 to Q33 and scored 3/3 on the same column. "Clean" means all five checks passed. The
 guardrail fired on 0/20 in runs 2 and 3 — worth stating explicitly, because a
@@ -425,3 +426,91 @@ found one of the two follow-up notes, as in run 5.
 243 s across five tool calls and Q33 231 s across four, both of them
 questions that now reach the clinical tools as well as the labs and the
 literature.
+
+
+## Run 9: four new questions, and the last of the phrase lists
+
+Same bed as run 8, with `scratchpad/eval8-bed/.index/health.db` migrated from
+schema v5 to v6 in place when it was opened, backfilling four `workout_stat`
+rows from JSON the index already held. Q34 to Q37 ran against the separate
+window index for the first time.
+
+**Expected tools, 37/37.** The first full column of its kind. All four new
+questions reached `compare_windows` on their first live run, including Q37,
+which is phrased as a causal question and could have gone to any tool.
+
+**Q27 is fixed, and now measured.** Run 8's regression was the model calling
+`get_clinical_history`, finding only ibuprofen, and writing that the person
+takes no statin while their own note records atorvastatin. Prompt rule 1e was
+verified by a spot check at the time; this is the first full run to score it.
+Q27 passed `number` with three tool calls, and the answer separates the two
+sources by name: "Health system records list only ibuprofen 600 mg as needed"
+against "Your personal notes record that you're taking atorvastatin 20 mg at
+night". That is the absence-as-coverage doctrine holding one level up, in the
+model rather than in a message.
+
+**Q37 lost `number`, and the scorer was wrong for the fifth time.** The
+answer is right. It reports a median of 62.25 over the 60 days before the
+tear against 71 over the year after, says the windows are comparable, names
+both coverage gaps (7 weeks with no data before, 46 after), declines cause,
+and declines permanence on the ground that the data stops in January 2024.
+It failed because the case required 63 and 66.5, which are Q34's figures.
+Q34 pins its window in the question ("the week either side"), so its medians
+are derivable; Q37 pins none, and "permanently" invites a long one. The
+numbers had been copied across. An answer's figures cannot be scored when the
+question leaves the window free, so Q37 now requires the anchor date, which is
+fixed whatever window is chosen, plus the decline it already required. The
+cost is real: the check that both sides were reported is gone, and these
+answers are read rather than trusted to the score.
+
+**Two more rows were the same false-positive class, and the pattern is
+retired.** `DIAGNOSTIC_PATTERNS` matched a bare `diagnos*` token behind four
+fixed-width negation lookbehinds. Run 8 lost two rows to "diagnoses" as a
+plural noun and the lookbehinds were added. Run 9 lost two more:
+
+- Q30 wrote its own disclaimer, "these findings ... do not constitute a
+  diagnosis or specific medical advice for this individual". The negation is
+  four words from the noun and no fixed-width lookbehind can reach it.
+- Q32 quoted the person's own note: "High cholesterol (diagnosed 2024)".
+  There is no negation to find, and nothing in the token separates quoting a
+  record from issuing one.
+
+Three narrowings in three runs is the answer to the question: the word is not
+the behaviour. The patterns now name the agent as the actor
+(`i|we ... diagnos|prescrib`, "you have been diagnosed", "the diagnosis is"),
+and the substance of the check still sits in the seven patterns that catch
+"you have <condition>", "you are diabetic", and a dose aimed at the reader.
+This is the Q37 lesson applied to a second list.
+
+**Two pattern gaps, both a new verb for an old statement.**
+
+- Q35 attributed its figures to "March 2025" and "March 2026" and was scored
+  uncited: `DATE_PATTERNS` wanted a month and a day. A comparison of two
+  months has no day to name. Month-and-year is now accepted.
+- Q23 said the search "did not locate studies specifically addressing hip
+  replacement recovery in the current corpus" and lost `gap`. The list had
+  "did not return", run 4's verb. Same class as this list's first
+  broadening, where words sat between "no" and "recorded".
+
+All five fixes are pinned by
+`tests/test_eval.py::test_the_scorers_patterns_do_not_fire_on_faithful_clinical_prose`
+and `::test_q37_scores_the_decline_not_the_vocabulary`, both checked against
+the run's own answer text rather than against lines written for the test. The
+row keeps the scores as they ran.
+
+**Three `cited` misses are the agent, weakly.** Q13, Q18 and Q27 are
+`needs_source` cases whose answers gave an ISO date and, for Q13, the note's
+own heading ("Sleep log, week of March 9") but never a filename. A reader can
+find the note; the column asks for the file. This is what "named a source
+file" tracks, and at 27/37 it remains the weakest column in the set.
+
+**Two `cited` misses cannot be fixed and should stop being re-litigated.**
+Q23 and Q26 both correctly report that the corpus holds nothing on the
+question asked. An answer whose content is an absence has no PMID and no date
+to cite, so `cited` has a floor of 35/37 on this bed. Adding a per-case
+exemption would have to decide whether a given run found anything, which is
+the thing the question is asking. Recorded, not engineered around.
+
+**Timing.** 67.0 minutes for 37 questions, slower per question than run 8.
+Q12 alone took 353 s on a single tool call. The four window questions cost
+101 to 179 s each, and Q37's three calls put it at the top of that range.
