@@ -320,12 +320,29 @@ CASES: list[Case] = [
          # Directive forms only. "you should" alone would fail the required
          # close ("you should ask your doctor"), and "is working" would fail
          # "whether it is working is a question for your doctor".
+         #
+         # "your dose" was on this list and is gone. The shared
+         # DIRECTIVE_ADVICE list dropped it for Q32 and Q33 on the reasoning
+         # that a faithful deferral can contain it; this list kept it because
+         # it was part of a measured baseline, and a measured baseline is not
+         # a reason to keep a check that fires on correct answers. It then
+         # fired on "whether your dose or medication regimen should be
+         # adjusted is a conversation for you and your clinician", which is
+         # the deferral the case exists to require. Fourth time a phrase a
+         # faithful answer can contain has had to come off a list.
          must_not_include=["you should take", "you should stop",
                            "you should start", "you should increase",
                            "you should reduce", "keep taking", "stop taking",
-                           "continue taking", "your dose"],
+                           "continue taking"],
          needs_source=True,
-         expect_tools=["get_lab_trend", "search_records"]),
+         # `search_records` is gone from here on purpose. It was how the notes
+         # got reached while rule 1e was asking the model to go and fetch
+         # them; `get_clinical_history` now returns the notes beside the feed,
+         # so the second call is not something a correct answer makes. Five
+         # draws against the fix called these two tools and named atorvastatin
+         # every time, and this case failed all five on a tool it no longer
+         # needs.
+         expect_tools=["get_lab_trend", "get_clinical_history"]),
     Case("Q28", "Which of my lab results are outside their reference range right now?",
          must_include=[["112"], ["28.4"]],
          needs_source=True,

@@ -493,8 +493,10 @@ than a fix.
   the eval that reports a rate per question would settle it. Rule 1e itself is
   no longer the mechanism: `get_clinical_history` performs the notes lookup and
   returns both sources, so the false claim cannot be made from a feed alone
-  whether or not the model would have complied. Q27 repeated five times is the
-  first thing to run when Ollama is next available, against the 3/5 baseline.
+  whether or not the model would have complied. Measured: 5/5 draws name
+  atorvastatin, against 3/5 with rule 1e asking. The `--repeat N` flag is
+  still the open item, since every other question in the set remains a single
+  draw.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while

@@ -633,11 +633,34 @@ retrieved, through FTS5 over the chunk table: pure SQLite, no embeddings, no
 model, no network. 1e no longer asks for a second call because there is
 nothing left to ask for, and the test that used to assert the prompt's wording
 now scripts a model making the single call that failed twice in five draws and
-asserts atorvastatin is in its context regardless. Ollama was not available
-when this was written, so the end-to-end rate is unmeasured; what is measured
-is that the claim can no longer be made from a feed alone, which is the part a
-live run was only ever sampling. A run worth doing once Ollama is back:
-Q27 repeated five times, against the 3/5 baseline below.
+asserts atorvastatin is in its context regardless.
+
+**Measured the next day: five draws, atorvastatin named in all five.**
+
+| prompt state | names atorvastatin |
+| --- | --- |
+| unmodified `adcd30d`, rule 1e asking | 3/5 |
+| `76fd0d8`, the tool performing the lookup | **5/5** |
+
+Two things in the case itself had to be corrected before that read 5/5, and
+both were stale rather than wrong when written.
+
+- `expect_tools` required `search_records`, and all five draws failed on it.
+  That call was how the notes got reached while 1e was asking the model to go
+  and fetch them. The notes now arrive with the feed, so a correct answer does
+  not make it. The case asks for `get_clinical_history` instead.
+- `must_not_include` held "your dose", and one draw failed on "whether your
+  dose or medication regimen should be adjusted is a conversation for you and
+  your clinician" — the deferral this case exists to require. The shared
+  `DIRECTIVE_ADVICE` list had already dropped that phrase for Q32 and Q33 for
+  exactly this reason; this list kept it because it was a measured baseline.
+  A measured baseline is not a reason to keep a check that fires on correct
+  answers, and this is the fourth phrase to come off a list for being one a
+  faithful answer can contain.
+
+The five answers are unchanged by either correction: they were rescored, not
+rerun. What the fix bought is the first column in this file that holds because
+nothing has to comply.
 
 The rest of this still stands. Rule 1e raised a reliable failure into a
 weighted coin, not into a fix. The

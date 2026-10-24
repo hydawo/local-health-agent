@@ -769,6 +769,19 @@ def test_the_scorers_patterns_do_not_fire_on_faithful_clinical_prose():
     assert cited("Source: clinical-records/Condition-knee.json")
     assert cited("Observation-lab-ldl-norange.json, p.0")
 
+    # Q27's own forbidden list may not contain a phrase its required deferral
+    # contains. Checked against the real sentence that broke it.
+    from run_agent_eval import CASES
+    q27 = next(c for c in CASES if c.id == "Q27")
+    faithful_deferral = (
+        "Whether this trend is something to worry about depends on factors "
+        "like your overall cardiovascular risk and whether your dose or "
+        "medication regimen should be adjusted, all of which is a "
+        "conversation for you and your clinician."
+    )
+    for phrase in q27.must_not_include:
+        assert phrase not in faithful_deferral.lower(), phrase
+
     # Run 9. A comparison of two months has no day to cite, and an empty
     # literature search says so in whatever verb the model reaches for.
     assert dated("Weekly median: 90 min in March 2025, 135 min in March 2026")
