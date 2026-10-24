@@ -492,7 +492,16 @@ def main() -> int:
     parser.add_argument("--only", help="comma-separated question ids")
     parser.add_argument("--out", help="write a markdown report here")
     parser.add_argument("--fail-under", type=float, default=0.0)
+    parser.add_argument("--repeat", type=int, default=1, metavar="N",
+                        help="ask each question N times and report a rate per "
+                             "question. Every row in tests/eval_results.md "
+                             "before this flag existed is a single draw, and "
+                             "Q27 turned out to call the right tool three "
+                             "times in five, so a pass there was a coin. Costs "
+                             "N times the wall clock.")
     args = parser.parse_args()
+    if args.repeat < 1:
+        parser.error("--repeat must be at least 1")
 
     cases = CASES
     if args.only:
@@ -529,25 +538,31 @@ def main() -> int:
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.id}: {case.question}",
               file=sys.stderr, flush=True)
-        orchestrator = Orchestrator(window_ctx if case.window_index else ctx,
-                                    model=args.model, think=args.think)
-        try:
-            answer = orchestrator.ask(case.question)
-        except ollama_client.OllamaUnavailable as exc:
-            print(f"  aborted: {exc}", file=sys.stderr)
-            conn.close()
-            if window_conn is not None:
-                window_conn.close()
-            if literature_conn is not None:
-                literature_conn.close()
-            return 2
-        row = score(case, answer)
-        results.append(row)
-        marks = "".join(
-            "." if row[k] else "X" for k in ("number", "cited", "gap",
-                                             "no_diag", "tools", "context"))
-        print(f"  [{marks}] {row['elapsed_sec']}s, {row['steps']} tool call(s)",
-              file=sys.stderr, flush=True)
+        for draw in range(1, args.repeat + 1):
+            # A fresh orchestrator per draw. Sharing one would carry the
+            # previous draw's messages into the next and measure a
+            # conversation rather than N independent answers.
+            orchestrator = Orchestrator(window_ctx if case.window_index else ctx,
+                                        model=args.model, think=args.think)
+            try:
+                answer = orchestrator.ask(case.question)
+            except ollama_client.OllamaUnavailable as exc:
+                print(f"  aborted: {exc}", file=sys.stderr)
+                conn.close()
+                if window_conn is not None:
+                    window_conn.close()
+                if literature_conn is not None:
+                    literature_conn.close()
+                return 2
+            row = score(case, answer)
+            row["draw"] = draw
+            results.append(row)
+            marks = "".join(
+                "." if row[k] else "X" for k in ("number", "cited", "gap",
+                                                 "no_diag", "tools", "context"))
+            prefix = f"  draw {draw}/{args.repeat}" if args.repeat > 1 else "  "
+            print(f"{prefix} [{marks}] {row['elapsed_sec']}s, "
+                  f"{row['steps']} tool call(s)", file=sys.stderr, flush=True)
 
     conn.close()
     if window_conn is not None:
@@ -560,45 +575,106 @@ def main() -> int:
     if args.out:
         Path(args.out).write_text(report)
 
+    # Each draw is a row, so with --repeat 1 this is exactly what it always
+    # was, and with more it is the pass rate over every answer given.
     passed = sum(1 for r in results if all(
         r[k] for k in ("number", "cited", "gap", "no_diag", "tools", "context")))
     rate = passed / len(results) if results else 0.0
     return 1 if rate < args.fail_under else 0
 
 
+COLUMNS = (("number", "correct number"), ("cited", "cited"),
+           ("source_named", "named a source file"), ("gap", "gap named"),
+           ("no_diag", "no diagnosis"), ("tools", "expected tools"))
+# The six columns the per-question table shows, which is COLUMNS without
+# `source_named` (summary-only) and with `context`.
+_TABLE_KEYS = ("number", "cited", "gap", "no_diag", "tools", "context")
+
+
+def _grouped(results: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Draws per question, in the order the questions were asked."""
+    order: list[str] = []
+    by_id: dict[str, list[dict]] = {}
+    for row in results:
+        if row["id"] not in by_id:
+            by_id[row["id"]] = []
+            order.append(row["id"])
+        by_id[row["id"]].append(row)
+    return [(qid, by_id[qid]) for qid in order]
+
+
 def render(results: list[dict], elapsed: float, args) -> str:
+    repeat = getattr(args, "repeat", 1) or 1
+    groups = _grouped(results)
     lines = [
         "# Agent eval run",
         "",
         f"- model: `{args.model or ollama_client.DEFAULT_CHAT_MODEL}`",
         f"- thinking: {'on' if args.think else 'off'}",
-        f"- questions: {len(results)}",
+        f"- questions: {len(groups) if repeat > 1 else len(results)}",
+    ]
+    if repeat > 1:
+        lines.append(f"- draws per question: {repeat}")
+    lines += [
         f"- wall time: {elapsed / 60:.1f} min",
         "",
         "| Q | number | cited | gap | no-diag | tools | context | time | calls |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     mark = {True: "pass", False: "FAIL"}
-    for row in results:
-        context_mark = mark[row["context"]] if row["context_scored"] else "n/a"
-        lines.append(
-            f"| {row['id']} | {mark[row['number']]} | {mark[row['cited']]} | "
-            f"{mark[row['gap']]} | {mark[row['no_diag']]} | "
-            f"{mark[row['tools']]} | {context_mark} | "
-            f"{row['elapsed_sec']}s | {row['steps']} |")
+    if repeat == 1:
+        for row in results:
+            context_mark = mark[row["context"]] if row["context_scored"] else "n/a"
+            lines.append(
+                f"| {row['id']} | {mark[row['number']]} | {mark[row['cited']]} | "
+                f"{mark[row['gap']]} | {mark[row['no_diag']]} | "
+                f"{mark[row['tools']]} | {context_mark} | "
+                f"{row['elapsed_sec']}s | {row['steps']} |")
+    else:
+        # A rate per cell. "3/5" is the fact a single "pass" was hiding.
+        for qid, draws in groups:
+            cells = []
+            for key in _TABLE_KEYS:
+                if key == "context" and not draws[0]["context_scored"]:
+                    cells.append("n/a")
+                    continue
+                hit = sum(1 for d in draws if d[key])
+                cells.append(f"{hit}/{len(draws)}")
+            mean_time = sum(d["elapsed_sec"] for d in draws) / len(draws)
+            calls = sorted({d["steps"] for d in draws})
+            call_cell = (str(calls[0]) if len(calls) == 1
+                         else f"{calls[0]}-{calls[-1]}")
+            lines.append(f"| {qid} | " + " | ".join(cells)
+                         + f" | {mean_time:.1f}s avg | {call_cell} |")
 
-    for key, label in (("number", "correct number"), ("cited", "cited"),
-                       ("source_named", "named a source file"),
-                       ("gap", "gap named"), ("no_diag", "no diagnosis"),
-                       ("tools", "expected tools")):
+    for key, label in COLUMNS:
         count = sum(1 for r in results if r[key])
         lines.append("") if key == "number" else None
-        lines.append(f"- {label}: {count}/{len(results)}")
+        if repeat > 1:
+            # Out of every answer given, and then out of the questions that
+            # held on every draw, because those are different claims.
+            every = sum(1 for _, draws in groups if all(d[key] for d in draws))
+            lines.append(f"- {label}: {count}/{len(results)} draws, "
+                         f"{every}/{len(groups)} questions on every draw")
+        else:
+            lines.append(f"- {label}: {count}/{len(results)}")
 
     scored_context = [r for r in results if r["context_scored"]]
     if scored_context:
         count = sum(1 for r in scored_context if r["context"])
         lines.append(f"- literature block as expected: {count}/{len(scored_context)}")
+
+    if repeat > 1:
+        # The reason the flag exists: a question that passes sometimes is not
+        # a question that passes, and a single-draw run cannot tell them apart.
+        # Over every scored column, not just the six the table shows:
+        # `source_named` is summary-only, and the first live --repeat run had
+        # it at 1/2 on a question this line called unvaried.
+        checked = tuple(k for k, _ in COLUMNS) + ("context",)
+        varied = [qid for qid, draws in groups
+                  if any(len({d[k] for d in draws}) > 1 for k in checked)]
+        lines.append(f"- varied between draws: {len(varied)}/{len(groups)}"
+                     + (f" ({', '.join(varied)})" if varied else ""))
 
     fired = [r["id"] for r in results if r["guardrail_flags"]]
     rewrote = [r["id"] for r in results if r["guardrail_rewrote"]]
@@ -609,7 +685,9 @@ def render(results: list[dict], elapsed: float, args) -> str:
 
     lines += ["", "## Answers", ""]
     for row in results:
-        lines += [f"### {row['id']}", ""]
+        heading = (f"### {row['id']}" if repeat == 1
+                   else f"### {row['id']} draw {row.get('draw', 1)}/{repeat}")
+        lines += [heading, ""]
         if row["missing_groups"]:
             lines.append(f"- missing: {row['missing_groups']}")
         if row["forbidden_found"]:

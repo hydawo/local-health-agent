@@ -711,6 +711,103 @@ def test_q37_scores_the_decline_not_the_vocabulary():
         assert not _score_q37(text)["number"], text
 
 
+def _row(qid, *, draw=1, number=True, cited=True, gap=True, no_diag=True,
+         tools=True, context=True, context_scored=False, steps=1,
+         elapsed=10.0):
+    return {
+        "id": qid, "draw": draw, "number": number, "cited": cited,
+        "source_named": cited, "gap": gap, "no_diag": no_diag, "tools": tools,
+        "context": context, "context_scored": context_scored,
+        "missing_groups": [], "forbidden_found": [], "diagnostic_hits": [],
+        "tools_used": ["get_lab_trend"], "guardrail_flags": [],
+        "guardrail_rewrote": False, "elapsed_sec": elapsed, "steps": steps,
+        "answer": f"answer for {qid} draw {draw}",
+    }
+
+
+class _Args:
+    model = "m"
+    think = False
+    def __init__(self, repeat=1):
+        self.repeat = repeat
+
+
+def test_one_draw_renders_exactly_as_it_did_before_repeat_existed():
+    """Every row in eval_results.md was produced by the single-draw renderer,
+    so --repeat 1 has to keep producing the same report or none of those rows
+    can be compared with a later one."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    rows = [_row("Q1"), _row("Q2", cited=False)]
+    report = render(rows, 60.0, _Args(repeat=1))
+    assert "| Q1 | pass | pass | pass | pass | pass | n/a | 10.0s | 1 |" in report
+    assert "| Q2 | pass | FAIL | pass | pass | pass | n/a | 10.0s | 1 |" in report
+    assert "- correct number: 2/2" in report
+    assert "- cited: 1/2" in report
+    assert "draws per question" not in report
+    assert "varied between draws" not in report
+    assert "### Q1\n" in report and "draw 1/1" not in report
+
+
+def test_repeated_draws_report_a_rate_and_name_what_varied():
+    """What a single draw cannot say. Q27 called the right tool three times in
+    five and read "pass" in two consecutive runs."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    rows = [
+        _row("Q27", draw=1, tools=True), _row("Q27", draw=2, tools=False),
+        _row("Q27", draw=3, tools=True), _row("Q27", draw=4, tools=False),
+        _row("Q27", draw=5, tools=True),
+        _row("Q1", draw=1), _row("Q1", draw=2), _row("Q1", draw=3),
+        _row("Q1", draw=4), _row("Q1", draw=5),
+    ]
+    report = render(rows, 600.0, _Args(repeat=5))
+
+    assert "- draws per question: 5" in report
+    assert "- questions: 2" in report
+    # The rate, in the cell where a bare "pass" used to be.
+    assert "| Q27 | 5/5 | 5/5 | 5/5 | 5/5 | 3/5 | n/a |" in report
+    assert "| Q1 | 5/5 | 5/5 | 5/5 | 5/5 | 5/5 | n/a |" in report
+    # Two different claims, kept apart: how many answers held, and how many
+    # questions held every time.
+    assert "- expected tools: 8/10 draws, 1/2 questions on every draw" in report
+    assert "- varied between draws: 1/2 (Q27)" in report
+    # Every draw's answer is readable, and labelled.
+    assert "### Q27 draw 2/5" in report
+
+
+def test_variance_is_checked_on_every_scored_column_not_just_the_table():
+    """`source_named` is reported in the summary but has no table column. The
+    first live --repeat run had it at 1/2 on a question the variance line
+    called unvaried, which made that line quietly incomplete."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    rows = [_row("Q7", draw=1), _row("Q7", draw=2)]
+    rows[1]["source_named"] = False       # varies
+    rows[1]["cited"] = True               # every table column holds
+    report = render(rows, 60.0, _Args(repeat=2))
+    assert "- named a source file: 1/2 draws" in report
+    assert "- varied between draws: 1/1 (Q7)" in report
+
+
+def test_a_question_that_holds_on_every_draw_is_not_called_varied():
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    rows = [_row("Q1", draw=d, number=False) for d in (1, 2, 3)]
+    report = render(rows, 30.0, _Args(repeat=3))
+    # Failing consistently is not variance.
+    assert "- varied between draws: 0/1" in report
+    assert "- correct number: 0/3 draws, 0/1 questions on every draw" in report
+
+
 # --------------------------------------------------------------------------- #
 # Set-level guards
 # --------------------------------------------------------------------------- #

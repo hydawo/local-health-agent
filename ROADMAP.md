@@ -489,8 +489,13 @@ than a fix.
   reading one draw each. Two consequences. A question that guards something
   load-bearing needs repeated draws, not a pass. And a column that moves by
   one or two between runs may be noise, which means run-to-run comparisons in
-  `tests/eval_results.md` carry an unknown error bar. An `--repeat N` flag on
-  the eval that reports a rate per question would settle it. Rule 1e itself is
+  `tests/eval_results.md` carry an unknown error bar. `--repeat N` now exists:
+  it asks each question N times, prints a rate in every cell, separates "how
+  many answers held" from "how many questions held every time", and names the
+  questions that varied. `--repeat 1` renders exactly as before, so the rows
+  below stay comparable, and a test pins that. What is still open is the
+  measuring: no multi-draw run of the full set has been done, so every column
+  in the table below except Q27's is still one draw. Rule 1e itself is
   no longer the mechanism: `get_clinical_history` performs the notes lookup and
   returns both sources, so the false claim cannot be made from a feed alone
   whether or not the model would have complied. Measured: 5/5 draws name

@@ -662,6 +662,20 @@ The five answers are unchanged by either correction: they were rescored, not
 rerun. What the fix bought is the first column in this file that holds because
 nothing has to comply.
 
+**`--repeat N` now exists**, so this does not have to be done by hand again.
+It asks each question N times and prints a rate in every cell, and it keeps
+two claims apart that a single run conflates: how many answers held, and how
+many questions held on every draw. It also names the questions that varied,
+which is the only line that could have caught Q27 reading "pass" twice in a
+row. `--repeat 1` renders exactly as every row above, pinned by a test, so
+nothing here loses its comparability.
+
+Its first live use, two draws of Q7, found `named a source file` at 1/2 on a
+question that has read "pass" in every run since it was added. That is one
+question and two draws and settles nothing, which is the point: **every row
+above except Q27's is a single draw, and the width of these columns is still
+unmeasured.** A full set at `--repeat 5` is the run that would tell us.
+
 The rest of this still stands. Rule 1e raised a reliable failure into a
 weighted coin, not into a fix. The
 softened change is indistinguishable from baseline and the imperative is
