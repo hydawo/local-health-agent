@@ -493,15 +493,40 @@ than a fix.
   it asks each question N times, prints a rate in every cell, separates "how
   many answers held" from "how many questions held every time", and names the
   questions that varied. `--repeat 1` renders exactly as before, so the rows
-  below stay comparable, and a test pins that. What is still open is the
-  measuring: no multi-draw run of the full set has been done, so every column
-  in the table below except Q27's is still one draw. Rule 1e itself is
+  below stay comparable, and a test pins that. The measuring is now done:
+  run 11 is the full set at `--repeat 3`, and nine of thirty-seven questions
+  varied between draws, four of them only on `source named`, which the
+  per-question table does not print. So the error bar is real and the rows
+  above run 11 should be read as one sample each. Rule 1e itself is
   no longer the mechanism: `get_clinical_history` performs the notes lookup and
   returns both sources, so the false claim cannot be made from a feed alone
   whether or not the model would have complied. Measured: 5/5 draws name
-  atorvastatin, against 3/5 with rule 1e asking. The `--repeat N` flag is
-  still the open item, since every other question in the set remains a single
-  draw.
+  atorvastatin, against 3/5 with rule 1e asking. Run 11 then measured the
+  whole set at three draws, and Q27 held 3/3.
+- Four scorer defects found by run 11, each reproducible against that run's
+  own answer text and none of them fixed. Q36's `must_include` is seven English
+  paraphrases of a verdict the tool already returns in a field, so it failed
+  two draws that reported `thin_on_one_side` correctly in their own words and
+  passed the one that matched a phrase while misreading the verdict. This is
+  the fifth time a phrase list has failed to separate a behaviour from its
+  vocabulary and the first in the `must_include` direction. Q17 pins boundary
+  dates on a question whose anchor is free, the same defect Q37 was fixed for
+  in run 9: "around the time I logged poor sleep" resolves to more than one
+  night, and the draw that anchored on the one with data lost `number` and
+  `gap` for answering a different valid reading. Q37 pins the anchor as
+  `2023-02-18` only, so a draw writing "February 18, 2023" lost `number`, which
+  is the sixth defect in that one question's scoring. And `DIRECTIVE_ADVICE`
+  matches "you take Atorvastatin 20 mg" because its modal is optional, firing
+  on Q33 for attributing a dose to the person's own note, which is the second
+  time a dose written as the person's own has sat on a forbidden list after
+  `"your dose"` came off Q27's.
+- The guardrail fired on all three draws of Q22 in run 11 and rewrote all
+  three, having fired 0/37 in run 10 and 0/20 in runs 2 and 3. It also fired
+  twice, on Q24 and Q29, during the citation verification run, which was noted
+  and never chased. Q22 passes every column either way, so this is not a wrong
+  answer, but nothing explains the change. The citation work is the only thing
+  between run 10 and run 11 and it changed what the model writes about
+  sources, which is what `uncited_medical_claim` reads. Unverified.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while
