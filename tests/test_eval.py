@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -919,3 +921,97 @@ def test_the_scorers_patterns_do_not_fire_on_faithful_clinical_prose():
         "We can diagnose this from your lab results.",
     ):
         assert flagged(crossing), crossing
+
+
+# --------------------------------------------------------------------------- #
+# The bed these questions are scored against
+# --------------------------------------------------------------------------- #
+
+def _bed_verifier():
+    """`scripts/verify_eval_bed.py`, which is a script rather than a module."""
+    import importlib.util
+
+    path = Path(__file__).parent.parent / "scripts" / "verify_eval_bed.py"
+    spec = importlib.util.spec_from_file_location("verify_eval_bed", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_beds_expected_counts_are_what_the_fixtures_actually_ingest():
+    """The numbers in the bed verifier are a copy of the fixtures' contents.
+
+    A copy goes stale: add a lab value to a fixture PDF and the verifier starts
+    rejecting correctly built beds, which is the failure that teaches people to
+    skip it. So the counts are checked against a real ingest here, where a
+    fixture change fails this test instead.
+
+    The suite ingests with `--no-ocr`, so the image-only page contributes
+    nothing; `OCR_ONLY` is the verifier's own account of that difference and
+    this is what holds it honest.
+    """
+    from health_agent.cli import main as cli_main
+
+    verifier = _bed_verifier()
+    with tempfile.TemporaryDirectory() as tmp:
+        index = Path(tmp) / "health.db"
+        cli_main(["--index", str(index), "ingest", str(FIXTURES),
+                  "--no-ocr", "--no-embed"])
+        conn = sqlite3.connect(index)
+        try:
+            actual = {
+                table: conn.execute(
+                    f"select count(*) from {table}").fetchone()[0]
+                for table in verifier.MAIN_COUNTS
+            }
+            documents = dict(conn.execute(
+                "select kind, count(*) from document group by kind"))
+        finally:
+            conn.close()
+
+    expected = {
+        table: want - verifier.OCR_ONLY.get(table, 0)
+        for table, want in verifier.MAIN_COUNTS.items()
+    }
+    assert actual == expected
+    assert documents == verifier.MAIN_DOCUMENTS
+
+
+def test_the_bed_verifier_names_what_an_incomplete_bed_is_missing(tmp_path):
+    """An empty bed must be rejected, table by table, not merely "invalid".
+
+    The whole point of the check is to tell a build mistake from a model
+    regression, and that only works if the failure says which part is thin.
+    """
+    verifier = _bed_verifier()
+    (tmp_path / ".index").mkdir()
+    for path in (tmp_path / ".index" / "health.db",
+                 tmp_path / "window-eval.db"):
+        conn = sqlite_schema.connect(path, create=True)
+        sqlite_schema.initialize(conn)
+        conn.close()
+    conn = lit_schema.connect(tmp_path / ".index" / "literature.db",
+                              create=True)
+    lit_schema.initialize(conn)
+    conn.close()
+
+    problems = verifier.verify(tmp_path)
+    assert problems
+    joined = "\n".join(problems)
+    for table in verifier.MAIN_COUNTS:
+        assert f"{table} rows: 0" in joined, table
+    for table in verifier.WINDOW_COUNTS:
+        assert f"window {table} rows: 0" in joined, table
+    assert "literature articles: 0" in joined
+    assert "document kinds" in joined
+    assert "the clinical-records folder was never read" in joined
+
+
+def test_the_bed_verifier_rejects_a_bed_with_no_literature_corpus(tmp_path):
+    """The corpus is a separate file, and run 5 onward are scored with it."""
+    verifier = _bed_verifier()
+    (tmp_path / ".index").mkdir()
+    problems = verifier.verify(tmp_path)
+    assert any(str(tmp_path / ".index" / "literature.db") in p
+               for p in problems)
+    assert any(str(tmp_path / "window-eval.db") in p for p in problems)

@@ -7,14 +7,27 @@ has done yet). Recorded per milestone so accuracy is visible as a trend
 rather than a single pass/fail — a change that trades one kind of correctness
 for another should be an argument, not a surprise.
 
+Build the bed first, then score against it:
+
 ```bash
-python tests/run_agent_eval.py --index ~/HealthData/.index/health.db --out /tmp/run.md
+./scripts/build-eval-bed.sh --yes /tmp/eval-bed
+python tests/run_agent_eval.py --index /tmp/eval-bed/.index/health.db \
+    --window-index /tmp/eval-bed/window-eval.db --out /tmp/run.md
 ```
 
-Q34 to Q37 need `--window-index` (build it with `python tests/window_fixture.py
-PATH`); without it a run covers the first thirty-three. The index is separate
-because adding resting heart rate and cycling to the main one would change the
-answers to Q1, Q7, Q17 and Q19 and break comparison with every row below.
+Runs 5 onward are all scored against the same bed: the committed fixtures plus
+the published `sample` pack, with the window questions in an index of their
+own. The script is that bed, and it checks its own contents when it finishes
+(`scripts/verify_eval_bed.py`), because a bed missing the clinical records or
+the corpus still answers every question, from less data, and the run then reads
+as a model regression rather than a build mistake. Until run 11 the recipe lived
+only in the narratives below, and the index is never committed, so reproducing
+a row meant re-deriving it.
+
+Q34 to Q37 need `--window-index`; without it a run covers the first
+thirty-three. That index is separate because adding resting heart rate and
+cycling to the main one would change the answers to Q1, Q7, Q17 and Q19 and
+break comparison with every row below.
 
 | Run | Milestone | Model | Number | Cited | Source named | Gap named | No diagnosis | Tools | Clean | Wall |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
