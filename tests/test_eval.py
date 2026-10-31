@@ -2383,3 +2383,46 @@ def test_a_capture_with_no_commit_says_so_rather_than_guessing():
                              capture_output=True, text=True,
                              check=True).stdout
     assert "answers produced at: not recorded" in out
+
+
+def _results_rows() -> list[list[str]]:
+    """The run table in eval_results.md, one row of cells per run."""
+    rows = []
+    for line in (Path(__file__).parent / "eval_results.md").read_text(
+            ).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 11 and re.fullmatch(r"\d+", cells[0]):
+            rows.append(cells)
+    return rows
+
+
+def _readme_accuracy_row() -> list[str]:
+    """The six figures in the README's Accuracy table."""
+    found = []
+    for line in (Path(__file__).parent.parent / "README.md").read_text(
+            ).splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) == 6 and all(re.fullmatch(r"\d+/\d+", c) for c in cells):
+            found.append(cells)
+    assert len(found) == 1, f"expected one accuracy row, found {len(found)}"
+    return found[0]
+
+
+def test_the_readme_accuracy_table_is_the_latest_run():
+    """It was run 8's for four runs, over 33 questions when the suite had held
+    37 since run 9, and nothing failed. A reader takes that table as the
+    project's accuracy claim, so staleness in it is the most expensive kind
+    this repository has."""
+    rows = _results_rows()
+    assert len(rows) >= 12, "the run table should hold every run"
+    latest = rows[-1]
+    # Number, Cited, Source named, Gap named, No diagnosis, Tools: cells 3
+    # to 8 of the results row, which also carries Run, Milestone, Model,
+    # Clean and Wall.
+    assert _readme_accuracy_row() == [c.replace("*", "") for c in latest[3:9]]
+
+
+def test_the_readme_names_the_run_its_table_came_from():
+    readme = (Path(__file__).parent.parent / "README.md").read_text()
+    run = _results_rows()[-1][0]
+    assert f"run {run}" in readme, f"the README should name run {run}"
