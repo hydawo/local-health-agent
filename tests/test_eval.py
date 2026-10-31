@@ -1939,3 +1939,109 @@ def test_a_run_where_no_tool_reported_an_absence_omits_the_gap_line():
     args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
     report = render([_row("Q1", gap_required=[])], 60.0, args)
     assert "gap coverage actually scored" not in report
+
+
+# A literature payload shaped like the one run 12 got: the search returned
+# its best matches, none of them on the topic, and `no_matches` is absent
+# because the tool has no way to know they are off topic.
+_OFF_TOPIC = _step(
+    "search_medical_literature", {"query": "hip replacement recovery"},
+    {"corpus_installed": True,
+     "corpus": {"packs": ["sample@2026.09"], "article_count": 2000,
+                "built": "2026.09"},
+     "method": "semantic",
+     "findings": [
+         {"title": "Outcomes after femoral artery bypass grafting in "
+                   "patients with claudication",
+          "pmid": "42379512", "year": 2026},
+         {"title": "Patellar tendinopathy rehabilitation: a randomized "
+                   "controlled trial",
+          "pmid": "42730713", "year": 2026}],
+     "note": "Cite the finding you used."})
+
+
+def test_a_gap_question_whose_search_returned_off_topic_work_is_still_scored():
+    """Run 12's blind spot, in one test. The semantic search always hands
+    back its top matches, so a corpus holding nothing on the topic reports no
+    absence and the old claim list came back empty: the run's own summary
+    read "gap coverage actually scored: 0/0 draws that reported an absence".
+    Saying the corpus does not cover it is right, and naming nothing it does
+    hold is the half that was going unmeasured."""
+    named = _score_with_steps(
+        "Q23", "My literature does not cover hip replacement recovery. The "
+        "searches came back on femoral bypass grafting and patellar "
+        "tendinopathy instead.", [_OFF_TOPIC],
+        tools_used=("search_medical_literature",))
+    assert named["gap"] and named["gap_scored"]
+
+    bare = _score_with_steps(
+        "Q23", "The local literature does not cover hip replacement "
+        "recovery, so I cannot say what the research found. Ask your "
+        "clinician.", [_OFF_TOPIC], tools_used=("search_medical_literature",))
+    assert not bare["gap"], "named nothing the corpus holds"
+    assert bare["gap_scored"], "and the cell has to say it was measured"
+
+
+def test_a_pmid_counts_as_naming_what_the_corpus_holds():
+    """One run-12 draw answered this way: it listed the PMIDs it got rather
+    than describing them, which tells the person exactly where to look."""
+    row = _score_with_steps(
+        "Q23", "Nothing here is about hip replacement recovery; the results "
+        "were PMID 42379512 and PMID 42730713, on other subjects.",
+        [_OFF_TOPIC], tools_used=("search_medical_literature",))
+    assert row["gap"] and row["gap_scored"]
+
+
+def test_research_boilerplate_is_not_naming_what_the_corpus_holds():
+    """Every title carries words like "patients", "outcomes" and
+    "randomized", and so does every answer. A match on those would hand back
+    the pass this check was built to withhold."""
+    row = _score_with_steps(
+        "Q23", "The corpus does not cover hip replacement recovery. The "
+        "randomized controlled trials and patient outcomes it returned were "
+        "not about that, so I cannot report results here.", [_OFF_TOPIC],
+        tools_used=("search_medical_literature",))
+    assert not row["gap"]
+
+
+def test_the_questions_own_words_are_not_naming_what_the_corpus_holds():
+    """"Recovery" is in the question, and a title that also carries it would
+    otherwise let the model pass by repeating the question back. Dropping it
+    can leave a finding with nothing requirable, and then the cell has to
+    report itself unmeasured rather than failing a model for a title the
+    question wrote for it."""
+    row = _score_with_steps(
+        "Q23", "There is nothing on hip replacement recovery in my "
+        "literature.",
+        [_step("search_medical_literature", {"query": "hip"},
+               {"findings": [{"title": "Recovery after hip replacement",
+                              "pmid": ""}]})],
+        tools_used=("search_medical_literature",))
+    assert not row["gap_scored"], "nothing left to require, so nothing scored"
+    assert not row["gap_required"], "and nothing to print as a requirement"
+
+
+def test_naming_one_finding_out_of_either_search_is_enough():
+    """Q23 drew two searches in run 12. Requiring something from each would
+    fail an answer that named one thing and said the rest was off topic."""
+    second = _step(
+        "search_medical_literature", {"query": "arthroplasty rehabilitation"},
+        {"findings": [{"title": "Cancer prehabilitation before thoracic "
+                                "resection", "pmid": "42015544"}]}, step=2)
+    row = _score_with_steps(
+        "Q23", "Not covered. What came back was work on femoral bypass "
+        "grafting, nothing on the joint itself.", [_OFF_TOPIC, second],
+        tools_used=("search_medical_literature",))
+    assert row["gap"] and row["gap_scored"]
+
+
+def test_a_non_gap_question_is_not_asked_to_name_the_corpus():
+    """Q21 is a literature question with a real answer in the corpus, and
+    `cited` is what holds it to naming its source. The off-topic claim must
+    not reach it."""
+    row = _score_with_steps(
+        "Q21", "Aerobic exercise lowered systolic pressure by about 5 mmHg "
+        "(PMID 42379512, 2026).", [_OFF_TOPIC],
+        tools_used=("search_medical_literature",))
+    assert row["gap"]
+    assert not row["gap_scored"]

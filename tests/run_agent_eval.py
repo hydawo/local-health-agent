@@ -217,9 +217,12 @@ def _coverage_claims(steps) -> list[_Coverage]:
     # `coverage` block inside the side, neither of which `_is_absence` reads,
     # so a comparison that found nothing yields no claim and the question
     # reads as unscorable rather than failing. No case currently needs it:
-    # Q19 goes through `query_healthkit` and Q23 through the literature tool.
-    # A gap question built on a comparison would need `_is_absence` taught
-    # that shape, and `gap_scored` is what would show it had not been.
+    # Q19 goes through `query_healthkit`, and Q23's literature search is
+    # covered by `_off_topic_claims` instead, which is where the real corpus
+    # put it: a search that returns its best off-topic matches reports no
+    # absence at all. A gap question built on a comparison would need
+    # `_is_absence` taught that shape, and `gap_scored` is what would show
+    # it had not been.
     claims: list[_Coverage] = []
     for node in _absence_nodes(step.result for step in steps):
         first, last = node.get("available_from"), node.get("available_to")
@@ -274,6 +277,82 @@ def _coverage_claims(steps) -> list[_Coverage]:
             seen.add(key)
             out.append(claim)
     return out
+
+
+# Research boilerplate, which appears in almost every title and in almost
+# every answer, so a match on one of these words says nothing about whether
+# the model named what the corpus holds.
+_TITLE_BOILERPLATE = frozenset("""
+    about after among analysis assessment associated association before
+    between clinical cohort compared comparison controlled during effect
+    effects efficacy evaluation evidence following guideline guidelines
+    impact intervention interventions management measures meta multicenter
+    multicentre outcome outcomes participants patient patients population
+    practice predictors prevalence prospective protocol randomised randomized
+    rates ratio registry report research results retrospective review
+    secondary series study studies subjects systematic therapy through
+    treatment trial trials versus within without
+""".split())
+
+
+def _held_alternatives(findings: list, question: str) -> list[str]:
+    """Regexes that match the model naming one of the findings it was handed.
+
+    A term already in the question is dropped: an answer that repeats the
+    words of "what does the evidence say about hip replacement recovery?"
+    has named nothing the corpus holds, and would otherwise match on
+    "recovery". Boilerplate goes the same way, for the same reason.
+    """
+    asked = set(re.findall(r"[a-z]{4,}", question.lower()))
+    out: list[str] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        pmid = str(finding.get("pmid") or "").strip()
+        if pmid:
+            out.append(rf"\b{re.escape(pmid)}\b")
+        for word in re.findall(r"[A-Za-z][A-Za-z-]{4,}",
+                               finding.get("title") or ""):
+            low = word.lower()
+            if low in asked or low in _TITLE_BOILERPLATE:
+                continue
+            # A suffix wildcard, because a title says "arthroplasty" and an
+            # answer says "arthroplasties".
+            out.append(rf"\b{re.escape(low)}\w*\b")
+    return out
+
+
+def _off_topic_claims(steps, question: str) -> list[_Coverage]:
+    """What a gap question requires when the search returned something anyway.
+
+    The semantic literature search always hands back its best matches, so a
+    corpus holding nothing on the topic reports no absence at all and
+    `_is_absence` never fires. Run 12 scored Q23 on nothing for exactly that
+    reason and said so in its own summary: "gap coverage actually scored:
+    0/0 draws that reported an absence". The floor here is the one the tool's
+    own note asks for, measured against the payload rather than the prose:
+    an answer that says the corpus does not cover this must name something
+    it does hold, by PMID or by a term out of a returned title.
+    """
+    # Every call's findings together, as one claim: a model that searched
+    # twice and named one thing out of either search has done what the note
+    # asks. Requiring something from each call would fail that answer.
+    findings: list = []
+    for step in steps:
+        payload = step.result
+        if not isinstance(payload, dict):
+            continue
+        held = payload.get("findings")
+        if held and isinstance(held, list):
+            findings += [f for f in held if isinstance(f, dict)]
+    alternatives = _held_alternatives(findings, question)
+    if not alternatives:
+        return []
+    titles = [f.get("title") for f in findings[:2] if f.get("title")]
+    return [_Coverage(
+        label="something the corpus does hold ("
+              + "; ".join(str(t)[:40] for t in titles) + ")",
+        groups=(tuple(alternatives),))]
 
 
 def _absence_nodes(values):
@@ -721,6 +800,8 @@ def score(case: Case, answer) -> dict:
     # to carry itself. See `_coverage_claims`: the old check matched the
     # absence vocabulary that the tools themselves write.
     claims = _coverage_claims(answer.steps) if case.needs_gap else []
+    if case.needs_gap:
+        claims += _off_topic_claims(answer.steps, case.question)
     scorable = [c for c in claims if c.groups]
     gap_missing = [c.label for c in scorable
                    if not all(any(re.search(p, text, re.IGNORECASE)
