@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
+from run_agent_eval import CLEAN_KEYS, clean_checks_measured  # noqa: E402
 from run_agent_eval import _commit as rescored_by  # noqa: E402
 from run_agent_eval import rescore  # noqa: E402
 
@@ -34,8 +35,7 @@ from run_agent_eval import rescore  # noqa: E402
 COLUMNS = (("Number", "number"), ("Cited", "cited"),
            ("Source named", "source_named"), ("Gap named", "gap"),
            ("No diagnosis", "no_diag"), ("Tools", "tools"))
-CLEAN = ("number", "cited", "gap", "no_diag", "tools", "context", "verdict",
-         "pmid")
+CLEAN = CLEAN_KEYS
 
 
 def _questions(rows: list[dict]) -> dict[str, list[dict]]:
@@ -90,6 +90,19 @@ def main() -> int:
         blank = sorted({r["id"] for r in over if not r.get(f"{key}_scored")})
         print(f"- {label} measured on {len(scored)}/{len(over)} draws"
               + (f"; nothing to check on {', '.join(blank)}" if blank else ""))
+    # What the clean cell is a conjunction of, per question that earned it.
+    # A check with nothing to check passes, so a clean question measured on
+    # four of the eight is reporting eligibility as much as accuracy.
+    spread: dict[int, int] = {}
+    for draws in groups.values():
+        if all(all(d[k] for k in CLEAN) for d in draws):
+            n = clean_checks_measured(draws)
+            spread[n] = spread.get(n, 0) + 1
+    if spread:
+        print("- clean questions, by how many of the "
+              f"{len(CLEAN)} checks were measured: "
+              + ", ".join(f"{n} of {len(CLEAN)} on {c}"
+                          for n, c in sorted(spread.items())))
     varied = sorted(qid for qid, draws in groups.items()
                     if any(len({d[k] for d in draws}) > 1 for k in CLEAN))
     print(f"- varied between draws: {len(varied)}/{len(groups)}"

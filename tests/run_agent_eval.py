@@ -1325,6 +1325,30 @@ COLUMNS = (("number", "correct number"), ("cited", "cited"),
 # `source_named` (summary-only) and with `context`.
 _TABLE_KEYS = ("number", "cited", "gap", "no_diag", "tools", "context")
 
+# The checks a clean draw is the conjunction of, and the companion that says
+# whether each was measured at all. `cited` and `no_diag` have none, because
+# there is always text to read.
+CLEAN_KEYS = ("number", "cited", "gap", "no_diag", "tools", "context",
+              "verdict", "pmid")
+_SCORED_COMPANION = {"number": "number_scored", "gap": "gap_scored",
+                     "tools": "tools_scored", "context": "context_scored",
+                     "verdict": "verdict_scored", "pmid": "pmid_scored"}
+
+
+def clean_checks_measured(draws: list[dict]) -> int:
+    """How many of `CLEAN_KEYS` were measured on any of a question's draws.
+
+    A clean cell is every check passing, and a check with nothing to check
+    passes. In run 13, 19 of the 26 clean questions were measured on 4 of
+    these 8 and none on more than 6, so the headline cell is mostly reporting
+    how many checks a question is eligible for. The figure is printed rather
+    than the definition changed: thirteen runs of that row are read against
+    each other.
+    """
+    return sum(1 for key in CLEAN_KEYS
+               if any(draw.get(_SCORED_COMPANION.get(key, ""), True)
+                      for draw in draws))
+
 
 def _grouped(results: list[dict]) -> list[tuple[str, list[dict]]]:
     """Draws per question, in the order the questions were asked."""

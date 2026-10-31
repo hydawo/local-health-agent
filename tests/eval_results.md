@@ -1153,6 +1153,25 @@ report prints prose. These are the columns that depended on them.
 - **`context` measured Q28, Q29 and Q30 and passed**, including the Q29 draw
   that run 11 failed.
 
+### The clean cell is mostly reporting eligibility
+
+"Clean" is every one of eight checks passing, and a check with nothing to
+check passes. Of run 13's 26 clean questions, 19 were measured on 4 of those
+8 and none on more than 6:
+
+| checks measured | clean questions |
+| --- | --- |
+| 4 of 8 | 19 |
+| 5 of 8 | 6 |
+| 6 of 8 | 1 |
+
+`verdict` is pinned on one question of 37, `context` on three, and `pmid` is
+only checkable on a draw that cited one, which is 16 of 111. Those are honest
+denominators for what each column asks, but their conjunction is the headline
+cell, and a reader takes 26/37 as 26 questions fully right. The definition is
+unchanged, because thirteen runs of that cell are read against each other, and
+the row script now prints the spread beside it.
+
 ### Q19 gives back the window it asked for
 
 All three draws answered correctly that no comparison is possible, and all

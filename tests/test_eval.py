@@ -2316,6 +2316,28 @@ def test_a_comparison_with_values_on_both_sides_claims_nothing():
     assert not row["gap_scored"]
 
 
+def test_a_clean_question_says_how_many_checks_it_was_eligible_for():
+    """"Clean" is every check passing, and a check with nothing to check
+    passes. In run 13, 19 of the 26 clean questions were measured on 4 of the
+    8 checks clean is the conjunction of, and none on more than 6, so the
+    headline cell mostly reports eligibility. The row script prints the
+    spread; the definition is unchanged, because thirteen runs of that cell
+    are read against each other."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CLEAN_KEYS, clean_checks_measured
+
+    bare = _row("Q2", number_scored=False, tools_scored=False)
+    assert clean_checks_measured([bare]) == 2, "cited and no diagnosis"
+    full = _row("Q36", gap_scored=True, pmid_scored=True,
+                context_scored=True, verdict_scored=True)
+    assert clean_checks_measured([full]) == len(CLEAN_KEYS)
+    # Measured on any draw counts, because a question is scored per draw and
+    # a model that called a different tool on one draw still had the check
+    # applied to it.
+    assert clean_checks_measured([bare, full]) == len(CLEAN_KEYS)
+
+
 def test_a_coverage_block_without_period_counts_is_not_a_comparison_side():
     """The rule keys off a period count that is present and zero. A payload
     carrying a coverage block and no period counts at all belongs to another
