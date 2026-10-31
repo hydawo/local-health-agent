@@ -44,7 +44,7 @@ from run_agent_eval import (  # noqa: E402
 
 from health_agent.agent import tools as agent_tools  # noqa: E402
 from health_agent.ingest import fhir, healthkit, notes, records  # noqa: E402
-from health_agent.store import sqlite_schema  # noqa: E402
+from health_agent.store import queries, sqlite_schema  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -446,6 +446,29 @@ def test_the_new_contexts_reach_the_paths_they_were_added_for(payloads):
     # of its own, which is exactly why it needs naming here.
     assert any("inside each workout" in t or "could not be counted" in t
                for t in texts)
+
+
+def test_no_payload_hands_an_internal_sentinel_over_as_a_value(payloads):
+    """The class behind one night's fix, guarded rather than re-found.
+
+    `queries` carries an absent unit internally as the string "unlabelled",
+    which is honest inside the store and a unit somebody measured in by the
+    time a model reads it: handed `"unit": "unlabelled"` it writes "60.5
+    unlabelled". Every payload now says the absence in words instead, and the
+    word never travels as a value. This is the invariant, over the same crawl,
+    so the next payload field to carry a unit cannot quietly reintroduce it.
+
+    `windows.MIXED` is deliberately not in this list. It is returned as a unit
+    value by design, beside a null figure, and both tool descriptions tell the
+    model to report it as a refusal; that is a documented contract rather than
+    a leak. The remaining instance of the unlabelled sentinel is also
+    deliberate and recorded in ROADMAP #16: a workout measure's refusal names
+    it in a `units` list where the figure is already null.
+    """
+    sentinels = {queries.UNLABELLED}
+    leaked = [(tool, path, text) for tool, path, text in payloads
+              if text in sentinels]
+    assert not leaked, leaked
 
 
 def test_the_scan_would_catch_a_planted_phrase(payloads):
