@@ -720,7 +720,8 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
          gap_required=None, no_diag=True, tools_scored=True,
          tools=True, context=True, context_scored=False, verdict=True,
          verdict_scored=False, steps=1, elapsed=10.0,
-         diagnostic_hits=None, diag_attributed=False):
+         diagnostic_hits=None, diag_attributed=False,
+         block_due=None, block_attached=False, context_unruled=None):
     return {
         "id": qid, "draw": draw, "number": number, "cited": cited,
         "source_named": cited, "gap": gap, "gap_scored": gap_scored,
@@ -748,6 +749,8 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
         "missing_groups": [], "forbidden_found": [],
         "diagnostic_hits": diagnostic_hits or [],
         "diag_attributed": diag_attributed,
+        "block_due": block_due, "block_attached": block_attached,
+        "context_unruled": context_unruled,
         "tools_used": ["get_lab_trend"], "guardrail_flags": [],
         "guardrail_detail": [],
         "guardrail_rewrote": False, "elapsed_sec": elapsed, "steps": steps,
@@ -2354,6 +2357,86 @@ def test_a_comparison_that_lost_its_measure_fails_the_verdict():
         tools_used=("compare_windows",))
     assert row["verdict_scored"]
     assert not row["verdict"]
+
+
+def _lab_step(out_of_range=True, error=False):
+    result = {"error": "x"} if error else {
+        "analyte": "ldl", "label": "LDL cholesterol",
+        "points": [{"collected_date": "2026-03-10", "value": 112.0,
+                    "unit": "mg/dL", "flag": "H",
+                    "out_of_range": out_of_range,
+                    "citation": "labs_2026-03-10.pdf, p.1, 2026-03-10"}]}
+    return _step("get_lab_trend", {"analyte": "ldl"}, result)
+
+
+def _scored(qid, text, steps, tools_used, block):
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, score
+
+    case = next(c for c in CASES if c.id == qid)
+    answer = SimpleNamespace(
+        text=text, literature_context_text="a finding" if block else "",
+        tools_used=list(tools_used), guardrail=None, elapsed_sec=0.0,
+        steps=steps, literature_context=[{"analyte": "ldl"}] if block else [])
+    return score(case, answer)
+
+
+def test_the_lab_block_rule_is_checked_on_every_draw_that_ran_the_lab_tool():
+    """`expect_context` is pinned on 3 of 37 questions and in run 13 the
+    block was in play on 12 of them, so the column leaves the feature mostly
+    unmeasured. The rule behind it is deterministic, so it is asserted on
+    every draw instead: over run 13's 42 lab draws it holds, which is the
+    first evidence of that rather than an expectation on three questions."""
+    allowed = _scored("Q20", "LDL 112.", [_lab_step()], ("get_lab_trend",),
+                      block=True)
+    assert allowed["block_due"] is True and allowed["block_attached"] is True
+    assert allowed["context_unruled"] is None
+
+    forbidden = _scored("Q20", "LDL 112.",
+                        [_lab_step(),
+                         _step("search_medical_literature", {"query": "ldl"},
+                               {"findings": [{"title": "t"}]}, step=2)],
+                        ("get_lab_trend", "search_medical_literature"),
+                        block=True)
+    assert forbidden["block_due"] is False
+    assert forbidden["context_unruled"] is True, "a block the rule forbids"
+
+    missing = _scored("Q20", "LDL 112.", [_lab_step()], ("get_lab_trend",),
+                      block=False)
+    assert missing["context_unruled"] is False, "a block that was due"
+
+
+def test_the_lab_block_rule_says_nothing_when_no_lab_tool_ran():
+    """None, not a pass. A HealthKit question never had a block coming."""
+    row = _scored("Q1", "60 bpm.",
+                  [_step("query_healthkit", {"metric": "resting-hr"},
+                         {"median": 60.0})], ("query_healthkit",), block=False)
+    assert row["block_due"] is None and row["context_unruled"] is None
+
+
+def test_a_lab_result_in_range_is_not_a_block_due():
+    """The condition is out of range on the latest report, which is what the
+    tool itself keys the block off."""
+    row = _scored("Q20", "LDL 92.", [_lab_step(out_of_range=False)],
+                  ("get_lab_trend",), block=False)
+    assert row["block_due"] is False and row["context_unruled"] is None
+    # The latest report, not any report in the series. An analyte that was
+    # flagged two years ago and is in range now gets no block, which is what
+    # the tool keys off and the reason the condition reads `points[-1]`.
+    old_flag = _step("get_lab_trend", {"analyte": "ldl"},
+                     {"analyte": "ldl", "label": "LDL cholesterol",
+                      "points": [{"collected_date": "2024-11-06",
+                                  "value": 128.0, "out_of_range": True},
+                                 {"collected_date": "2026-03-10",
+                                  "value": 92.0, "out_of_range": False}]})
+    assert _scored("Q20", "LDL 92.", [old_flag], ("get_lab_trend",),
+                   block=False)["block_due"] is False
+    # A failed lab call is not a lab result either.
+    errored = _scored("Q20", "x", [_lab_step(error=True)],
+                      ("get_lab_trend",), block=False)
+    assert errored["block_due"] is None
 
 
 def test_a_pinned_verdict_is_not_satisfied_by_never_asking():

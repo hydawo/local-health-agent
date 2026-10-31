@@ -1154,7 +1154,17 @@ report prints prose. These are the columns that depended on them.
   from 3 of 111 draws to 12. Re-scored that way, Q35's third draw fails it
   and names `missing_measure_on_one_side` as the reason.
 - **`context` measured Q28, Q29 and Q30 and passed**, including the Q29 draw
-  that run 11 failed.
+  that run 11 failed. The block was in play on 12 of the 37 questions, so the
+  column was leaving most of the feature unmeasured. The rule behind it is
+  deterministic, so it is now asserted on every draw rather than expected on
+  three questions: a block appears for an analyte the lab tool flagged out of
+  range on its latest report, and never when the model searched the
+  literature itself, because it would duplicate its own answer. Re-scored
+  that way, the rule holds on all 42 of run 13's draws that called the lab
+  tool. The check is written out in the scorer rather than imported from the
+  agent, for the reason a scorer never reuses a tool's own phrases: a check
+  that calls the implementation agrees with it by construction, including
+  where the implementation is wrong.
 
 ### The clean cell is mostly reporting eligibility
 

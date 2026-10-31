@@ -896,6 +896,37 @@ def _any(patterns: list[str], text: str) -> bool:
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
 
+def _block_was_due(steps) -> bool | None:
+    """Whether the lab literature block was due on this turn.
+
+    The rule, as `health_agent.agent.context.flagged_analytes` states it: the
+    block appears for an analyte the lab tool flagged out of range on its
+    latest report, and never when the model searched the literature itself,
+    because the block would duplicate its own answer.
+
+    Written out here rather than imported, for the reason a scorer never
+    reuses a tool's own phrases: a check that calls the implementation agrees
+    with the implementation by construction, including where the
+    implementation is wrong. None when no lab tool ran, so there is nothing to
+    say either way.
+    """
+    lab = [step for step in steps
+           if step.name == "get_lab_trend" and isinstance(step.result, dict)
+           and "error" not in step.result]
+    if not lab:
+        return None
+    if any(step.name == "search_medical_literature" for step in steps):
+        return False
+    for step in lab:
+        batch = step.result.get("out_of_range_on_latest_report")
+        if batch:
+            return True
+        points = step.result.get("points")
+        if points and points[-1].get("out_of_range"):
+            return True
+    return False
+
+
 def score(case: Case, answer) -> dict:
     text = answer.text
     lowered = text.lower()
@@ -1009,6 +1040,18 @@ def score(case: Case, answer) -> dict:
 
     context_ok = (True if case.expect_context is None
                  else (bool(answer.literature_context) == case.expect_context))
+    # `expect_context` is pinned on 3 of the 37 questions and the block was in
+    # play on 12 of them in run 13, so the feature is mostly unmeasured by the
+    # column. The rule behind it is deterministic, which means it can be
+    # asserted on every draw rather than expected on a few. True when a block
+    # arrived that the rule does not allow; False when one was due and did not
+    # arrive, which the rule alone cannot condemn because an analyte may have
+    # no citable finding; None when no lab tool ran.
+    due = _block_was_due(answer.steps)
+    attached = bool(answer.literature_context)
+    context_unruled = None if due is None else (
+        True if attached and not due else (False if due and not attached
+                                           else None))
 
     # The guardrail runs in front of the user, so it runs here too: scoring
     # unguarded output would measure something nobody sees. Whether it fired is
@@ -1059,6 +1102,9 @@ def score(case: Case, answer) -> dict:
         "verdicts_seen": verdicts,
         "context": context_ok,
         "context_scored": case.expect_context is not None,
+        "block_due": due,
+        "block_attached": attached,
+        "context_unruled": context_unruled,
         "missing_groups": [g[0] for g in missing],
         "forbidden_found": forbidden,
         "diagnostic_hits": diagnostic_hits,
@@ -1502,6 +1548,22 @@ def render(results: list[dict], elapsed: float, args) -> str:
                      f"({names}), on: {patterns}")
         lines.append(f"- of those, relaying a diagnosis the answer cited a "
                      f"record for, in the same sentence: {attributed}")
+
+    ruled = [r for r in results if r["block_due"] is not None]
+    if ruled:
+        broke = sorted({r["id"] for r in ruled if r["context_unruled"] is True})
+        quiet = sorted({r["id"] for r in ruled
+                        if r["context_unruled"] is False})
+        lines.append(f"- the lab literature block followed its own rule on "
+                     f"{sum(1 for r in ruled if r['context_unruled'] is None)}"
+                     f"/{len(ruled)} draws that called the lab tool")
+        if broke:
+            lines.append(f"- a block arrived where the rule forbids one: "
+                         f"{', '.join(broke)}")
+        if quiet:
+            lines.append(f"- a block was due and did not arrive, which may be "
+                         f"an analyte with no citable finding: "
+                         f"{', '.join(quiet)}")
 
     scored_pmid = [r for r in results if r["pmid_scored"]]
     if scored_pmid:

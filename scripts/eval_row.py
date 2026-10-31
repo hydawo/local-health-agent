@@ -124,6 +124,17 @@ def main() -> int:
     echoed = sorted({r["id"] for r in rows if r.get("cited_echo")})
     print("- cited on nothing but the date the question supplied: "
           + (", ".join(echoed) if echoed else "nothing"))
+    ruled = [r for r in rows if r.get("block_due") is not None]
+    if ruled:
+        held = sum(1 for r in ruled if r["context_unruled"] is None)
+        print(f"- the lab literature block followed its own rule on "
+              f"{held}/{len(ruled)} draws that called the lab tool")
+        for state, label in ((True, "arrived where the rule forbids one"),
+                             (False, "was due and did not arrive")):
+            bad = sorted({r["id"] for r in ruled
+                          if r["context_unruled"] is state})
+            if bad:
+                print(f"    - a block {label}: {', '.join(bad)}")
     diag = [r for r in rows if not r["no_diag"]]
     if diag:
         names = ", ".join(sorted({r["id"] for r in diag}))
