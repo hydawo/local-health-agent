@@ -26,6 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
+from run_agent_eval import _commit as rescored_by  # noqa: E402
 from run_agent_eval import rescore  # noqa: E402
 
 # The table's columns, in the order it prints them. `Clean` is every scored
@@ -74,6 +75,11 @@ def main() -> int:
           + f" | {clean}/{len(groups)} | {minutes:.1f} min |")
     print()
     print(f"- draws per question: {repeat}")
+    # Provenance, because a row printed from an old capture is a re-score and
+    # the two commits are what say so.
+    answered_at = meta.get("commit") or "not recorded"
+    print(f"- answers produced at: {answered_at}; scored by: "
+          f"{rescored_by() or 'unknown'}")
     for label, key in (("number", "number"), ("tools", "tools"),
                        ("gap", "gap"), ("pmid", "pmid")):
         # The gap column's denominator is draws of a gap question. Counted

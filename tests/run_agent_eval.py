@@ -1020,6 +1020,28 @@ def score(case: Case, answer) -> dict:
 # as the index it came from: against a real export it holds that person's
 # values, so it belongs beside the scratch index and not in the repo.
 
+def _commit() -> str:
+    """The working tree's commit, with a marker when it has uncommitted edits.
+
+    Empty where git cannot answer, because a run must not fail over its own
+    provenance line.
+    """
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    try:
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "--short",
+                               "HEAD"], capture_output=True, text=True,
+                              timeout=10)
+        if head.returncode != 0:
+            return ""
+        dirty = subprocess.run(["git", "-C", str(root), "status",
+                                "--porcelain"], capture_output=True,
+                               text=True, timeout=10)
+        return head.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "")
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def capture_row(case: Case, answer, row: dict) -> dict:
     """One draw, with everything `score` reads and nothing it does not."""
     return {
@@ -1220,6 +1242,11 @@ def main() -> int:
                     "index": str(args.index),
                     "window_index": str(args.window_index or ""),
                     "started": started_at,
+                    # Which code produced these answers. Run 12 had to be
+                    # written up with its scorer commit reconstructed from
+                    # the shell history, and a capture that cannot say what
+                    # made it is a re-score waiting to be misread.
+                    "commit": _commit(),
                     "elapsed_sec": total_elapsed},
             "draws": captured,
         }, indent=1, default=str))

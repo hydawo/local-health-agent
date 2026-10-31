@@ -2327,3 +2327,59 @@ def test_that_figure_stays_out_of_a_run_with_no_document_question():
     args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
     report = render([_row("Q1")], 60.0, args)
     assert "of the draws on a question that has one" not in report
+
+
+def test_a_capture_records_the_commit_that_produced_it():
+    """Run 12 had to be written up with its scorer commit reconstructed from
+    the shell history. A capture that cannot say what made it is a re-score
+    waiting to be misread."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import _commit
+
+    commit = _commit()
+    assert commit, "this repository is a git checkout"
+    assert re.fullmatch(r"[0-9a-f]{7,}(-dirty)?", commit), commit
+
+
+def test_the_row_script_prints_both_commits():
+    """One for the answers, one for the scorer that read them."""
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    script = Path(__file__).parent.parent / "scripts" / "eval_row.py"
+    row = _capture_payload()
+    row["draw"] = 1
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({
+            "run": {"model": "m", "repeat": 1, "elapsed_sec": 1.0,
+                    "commit": "abc1234"},
+            "draws": [row]}))
+        out = subprocess.run([sys.executable, str(script), str(path)],
+                             capture_output=True, text=True,
+                             check=True).stdout
+    assert "answers produced at: abc1234" in out
+    assert "scored by: " in out
+
+
+def test_a_capture_with_no_commit_says_so_rather_than_guessing():
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    script = Path(__file__).parent.parent / "scripts" / "eval_row.py"
+    row = _capture_payload()
+    row["draw"] = 1
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({
+            "run": {"model": "m", "repeat": 1, "elapsed_sec": 1.0},
+            "draws": [row]}))
+        out = subprocess.run([sys.executable, str(script), str(path)],
+                             capture_output=True, text=True,
+                             check=True).stdout
+    assert "answers produced at: not recorded" in out
