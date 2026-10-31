@@ -68,6 +68,7 @@ break comparison with every row below.
 | 9 | Event windows, 37 questions | qwen3.6:27b | 36/37 | 31/37 | 27/37 | 36/37 | 35/37 | **37/37** | 28/37 | 67.0 min |
 | 10 | Run 9's scorer fixes, same bed | qwen3.6:27b | 36/37 | 30/37 | 23/37 | **37/37** | **37/37** | **37/37** | 29/37 | 49.6 min |
 | 11 | Three draws per question, after the citation fix | qwen3.6:27b | 34/37 | 35/37 | 30/37 | 36/37 | 36/37 | **37/37** | n/a | 190.4 min |
+| 12 | Same bed, same model, three draws, scorer at `6ce8ce5` | qwen3.6:27b | 34/37 | 34/37 | 26/37 | **37/37** | **37/37** | 35/37 | n/a | 192.5 min |
 
 Thinking mode off for every run. Run 7 adds three questions (Q28 to Q30) and a `context` column, scored 3/3 and not shown in this table; run 8 adds Q31 to Q33 and scored 3/3 on the same column. Run 11 is the first row scored over more than one draw, so its cells count questions that held on **all three** draws, which is a stricter reading than every row above it. Its per-draw rates are in the narrative, and "clean" is not reported because the multi-draw renderer does not compute it. "Clean" means all five checks passed. The
 guardrail fired on 0/20 in runs 2 and 3 — worth stating explicitly, because a
@@ -946,3 +947,67 @@ The scorer changed too, in `72d1109`: four questions score differently
 (Q17, Q36, Q37 and anything the dose pattern would have caught). Those are
 scoring fixes, so a question that moves there is the scorer being right where
 it was wrong, not the model changing.
+
+## Run 12: the same questions, and a gap column that measured nothing
+
+Run 12 is the closest thing this table has to a repeat of run 11: same bed,
+same model, same three draws, 192.5 minutes against run 11's 190.4. The row
+above was scored by the scorer at commit `6ce8ce5`, which is the state of the
+checks when the run launched and not the state they are in now. Four things
+changed in the scorer afterwards, so the row and today's code do not agree,
+and the narrative rather than the cell is where that belongs.
+
+The run has no capture file, because `--capture` did not exist when it
+started. That is the limitation it demonstrated twice in one night and the
+reason the flag now exists: a markdown report cannot be re-scored, since
+scoring reads payloads and a report prints prose.
+
+### The gap column scored nothing, and said so
+
+The summary line reads `gap coverage actually scored: 0/0 draws that reported
+an absence`. Both gap questions ran three draws each and not one produced a
+claim, so all 37 of those cells are passes with nothing behind them.
+
+Q19 is reasonable: the activity window it asks about has data, so there is no
+absence to report and nothing to carry. Q23 is the defect. The semantic
+literature search always hands back its best matches, so a corpus holding
+nothing on hip replacement recovery does not report an absence at all. It
+returned five articles on vascular surgery and tendon rehabilitation with no
+`no_matches` flag, because the tool cannot tell they are off topic.
+`_is_absence` never fired.
+
+All three draws answered it well, each in a different way: two named the
+subjects that came back in prose, one listed the PMIDs. None of that was
+measured. `_off_topic_claims` now scores it, and run 13's capture will say
+whether the three draws that read as right actually are.
+
+### What the citation split did to the same answers
+
+`source_named` is the one column that moved, from 30/37 in run 11 to 26/37
+here, and none of that is the model. The column is labelled "named a source
+file" and used to accept "apple health", so an answer saying "your Apple
+Health data shows an LDL of 112" counted as citing a lab report. Splitting
+file patterns from origin patterns landed in `a9d8ee5`, after this run
+launched.
+
+Re-scoring run 12's own answers with the split in place puts the figure at
+20/37 questions and 68/111 draws, against the 26/37 and 94/111 the run
+reported for itself. Those are the same answers scored twice, so the 6-question
+difference is the split and nothing else. The text-only columns are the only
+ones that can be re-scored this way, and `gap`, `pmid`, `verdict` and
+`context` are left out rather than approximated: they read payloads the report
+does not carry.
+
+### The four draws that failed, and the two questions behind them
+
+`number` missed on Q1 (one draw gave the average without the figure), Q14 (one
+draw) and Q37 (two of three draws). `cited` missed single draws on Q20, Q23
+and Q26. `tools` missed Q24 and Q37, both of which wander between two and four
+calls. Q37 is the one question that is worse than a coin here, and it is the
+comparison question whose own history is a record of the scorer being wrong
+about it twice.
+
+14 of 37 questions varied between draws, against run 11's nine. The guardrail
+fired once in 111 draws, on Q22, and rewrote nothing, which is the expected
+shape of the `SAME_SENTENCE_RULE` change: the rule moved where a citation has
+to sit, and the guard itself is byte-for-byte what it was.
