@@ -982,6 +982,8 @@ def score(case: Case, answer) -> dict:
         "gap_case": case.needs_gap,
         "cited_echo": cited_echo,
         "cited_uncitable": cited_uncitable,
+        # Whether a file exists for this question to name at all.
+        "needs_source": case.needs_source,
         "no_diag": no_diag_ok,
         "tools": tools_ok,
         "tools_scored": tools_scored,
@@ -1310,6 +1312,16 @@ def render(results: list[dict], elapsed: float, args) -> str:
                          f"{every}/{len(groups)} questions on every draw")
         else:
             lines.append(f"- {label}: {count}/{len(results)}")
+
+    # `source_named` is printed over every question, and 14 of them are
+    # HealthKit questions with no file in existence to name. The figure is
+    # kept as it is, because twelve runs of that row are read against each
+    # other, and the denominator that means something is printed beside it.
+    document_backed = [r for r in results if r["needs_source"]]
+    if document_backed:
+        count = sum(1 for r in document_backed if r["source_named"])
+        lines.append(f"- named a source file, of the draws on a question that "
+                     f"has one: {count}/{len(document_backed)}")
 
     scored_context = [r for r in results if r["context_scored"]]
     if scored_context:

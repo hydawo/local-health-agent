@@ -998,6 +998,13 @@ ones that can be re-scored this way, and `gap`, `pmid`, `verdict` and
 `context` are left out rather than approximated: they read payloads the report
 does not carry.
 
+And the figure that row carries is mostly a count of how many questions have a
+document behind them. 14 of the 37 are HealthKit questions where no file
+exists to name, and the column is counted over all 37. Over the 18 that do
+have one, run 12's answers named the file on 53 of 54 draws and 17 of 18
+questions. The cell stays as it is, for comparability, and the run now prints
+the second figure beside it.
+
 ### Four of the five `cited` failures had nothing to cite
 
 Reading them rather than counting them: Q23 draws 1 and 2 and Q26 draws 2 and

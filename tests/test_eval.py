@@ -714,6 +714,7 @@ def test_q37_scores_the_decline_not_the_vocabulary():
 
 
 def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
+         needs_source=False,
          gap=True, gap_scored=False, gap_case=None, pmid=True,
          pmid_scored=False, pmid_unreturned=None,
          gap_required=None, no_diag=True, tools_scored=True,
@@ -735,6 +736,7 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
                            or bool(gap_required))),
         "cited_echo": False,
         "cited_uncitable": False,
+        "needs_source": needs_source,
         "number_scored": number_scored, "pmid": pmid,
         "pmid_scored": pmid_scored,
         "pmid_unreturned": pmid_unreturned or [],
@@ -2292,3 +2294,36 @@ def test_an_empty_locator_field_is_not_a_locator():
         "Q23", "The corpus holds nothing on hip replacement recovery.",
         [blank], tools_used=("search_medical_literature",))
     assert not row["cited"] and row["cited_uncitable"]
+
+
+def test_the_source_file_figure_is_also_printed_over_questions_with_a_file():
+    """14 of the 37 questions are HealthKit questions with no file in
+    existence to name, and the column is printed over all 37. The cell stays
+    as it is, because twelve runs of that row are read against each other,
+    and the denominator that means something is printed beside it."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q18", cited=True, needs_source=True),
+            _row("Q20", cited=False, needs_source=True),
+            # A HealthKit question: no file exists, so it is out of the
+            # second figure entirely rather than counted as a miss.
+            _row("Q1", cited=False)]
+    report = render(rows, 60.0, args)
+    assert "- named a source file: 1/3" in report
+    assert ("named a source file, of the draws on a question that has one: "
+            "1/2") in report
+
+
+def test_that_figure_stays_out_of_a_run_with_no_document_question():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    report = render([_row("Q1")], 60.0, args)
+    assert "of the draws on a question that has one" not in report

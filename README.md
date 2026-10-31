@@ -789,19 +789,21 @@ prompt's doing rather than the guard's, which is why they are measured
 separately.
 
 Two of those cells should be read with their own caveat, and both are the
-scorer rather than the model. `source file named` was scored here before the
-column stopped accepting "apple health" as a named file; re-scoring the same
-answers with that split in place gives 20/37. `gap named` measured nothing at
-all in this run, because the only question that could have exercised it runs
-through a literature search that returns its best off-topic matches rather
-than reporting an absence. Both are fixed, and the next run is the one that
-reports them.
+scorer rather than the model. `gap named` measured nothing at all in this run,
+because the only question that could have exercised it runs through a
+literature search that returns its best off-topic matches rather than
+reporting an absence. That is fixed, and the next run is the one that reports
+it.
 
-Answers that miss `source file named` cite the note title or the report date
-instead of the filename, which the tool did supply. That is a locator the
-reader can still follow, and it is left unfixed on purpose: prompting until
-this exact phrasing passes would be fitting the model to the scorer. Full
-history, and what each run caught, in
+`source file named` needs its denominator said out loud. 14 of the 37
+questions are HealthKit questions, where no file exists to name, and the
+column is counted over all 37, so the cell is mostly measuring how many
+questions have a document behind them. Over the 18 that do, the same run's
+answers named the file on 53 of 54 draws and on 17 of the 18 questions. The
+cell itself is kept as it is because twelve runs of that row are read against
+each other, and the run now prints both figures.
+
+Full history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
 
 The unit suite (more than 1,200 tests, `pytest`) and the eval set measure different things,
