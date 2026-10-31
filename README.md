@@ -774,34 +774,43 @@ number is right, a source is cited, the coverage behind a gap is named when
 there is one, nothing diagnostic was said, every cited PMID is one the
 literature tool actually returned, and the expected tools were called.
 `--capture` keeps each answer with the tool payloads behind it, so a later
-scorer change can be applied to answers already given. Latest run, run 12
-(`qwen3.6:27b`, thinking off, three draws per question, 192.5 min):
+scorer change can be applied to answers already given. Latest run, run 13
+(`qwen3.6:27b`, thinking off, three draws per question, 186.1 min):
 
 | Correct number | Cited | Source file named | Gap named | No diagnosis | Right tools |
 | --- | --- | --- | --- | --- | --- |
-| 34/37 | 34/37 | 26/37 | 37/37 | 37/37 | 35/37 |
+| 34/37 | 30/37 | 18/37 | 36/37 | 36/37 | 35/37 |
 
 Each cell counts questions that held on **all three** draws, which is stricter
-than a single-draw row: 14 of the 37 varied between draws. Questions 34 to 37
+than a single-draw row: 9 of the 37 varied between draws. Questions 34 to 37
 cover the window path and need `--window-index`. The medical guardrail fired on
 1 of the 111 draws and rewrote nothing, so the no-diagnosis score is the
 prompt's doing rather than the guard's, which is why they are measured
 separately.
 
-Two of those cells should be read with their own caveat, and both are the
-scorer rather than the model. `gap named` measured nothing at all in this run,
-because the only question that could have exercised it runs through a
-literature search that returns its best off-topic matches rather than
-reporting an absence. That is fixed, and the next run is the one that reports
-it.
-
 `source file named` needs its denominator said out loud. 14 of the 37
 questions are HealthKit questions, where no file exists to name, and the
 column is counted over all 37, so the cell is mostly measuring how many
-questions have a document behind them. Over the 18 that do, the same run's
-answers named the file on 53 of 54 draws and on 17 of the 18 questions. The
-cell itself is kept as it is because twelve runs of that row are read against
-each other, and the run now prints both figures.
+questions have a document behind them. Over the 18 that do, this run's
+answers named the file on 50 of 54 draws and on 14 of the 18 questions. The
+cell itself is kept as it is because thirteen runs of that row are read
+against each other, and the run now prints both figures.
+
+Run 13 is the first run whose `gap named` cell measured anything. Run 12's
+measured nothing at all: every one of its 111 cells was a pass with no claim
+behind it, which the run reported as `0/0` and which is why the column was
+rebuilt to read the payloads rather than the absence vocabulary the tools
+write. Run 13 measures all 6 of its gap draws and one question fails, for
+giving back the window it asked about as though it were the span the index
+holds.
+
+Run 13's other cells are not a regression against run 12's. Same bed, same
+model, same questions, and a scorer that moved underneath them, so the only
+honest comparison is run 12's own answers re-scored by run 13's checks:
+`number` 35/37, `cited` 34/37, `source file named` 20/37. The two or four
+question gap between those and the row above is what three draws of this
+model vary by, which is worth knowing before reading any single run as
+progress.
 
 Full history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
