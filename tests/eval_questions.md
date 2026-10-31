@@ -564,6 +564,13 @@ report the records and defer.
   something the tool, or the data, can say.
 - tool: `compare_windows(metric="resting-hr", anchor_fact="cruciate",
   before_days=7, after_days=6)`
+- the decline is matched in the forms ordinary prose uses, and the list was
+  widened on 2026-10-31 to the ones whose subject is the evidence rather than
+  the speaker: a run-12 draw wrote "the data is too sparse to determine
+  whether the change is permanent" and failed for the wording. Widening a
+  required list can only admit answers, so each addition is checked against
+  what the tools write, because an answer relaying a tool's note must not be
+  able to satisfy it.
 - checked here against: the anchor resolves to the dated condition and its
   citation, and the payload carries both windows. The payload test also
   asserts two phrases absent from the tool's own text (`caused by`,

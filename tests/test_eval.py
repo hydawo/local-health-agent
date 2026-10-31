@@ -2196,3 +2196,27 @@ def test_the_wrong_average_still_fails_whatever_unit_it_wears():
                  "Your average was 59.7 bpm."):
         row = _score_with_steps("Q1", text, [])
         assert not row["number"], text
+
+
+def test_a_decline_whose_subject_is_the_evidence_counts_as_one():
+    """Run 12's Q37, draw 2. "The data is too sparse to determine whether the
+    change is permanent" is the decline this question asks for, and the list
+    only had the forms where the speaker is the subject."""
+    for hedge in ("the data is too sparse to determine whether this is "
+                  "permanent",
+                  "three scattered months are too few to say",
+                  "there are not enough readings here to establish that",
+                  "I cannot say whether this is permanent"):
+        row = _score_with_steps(
+            "Q37", "Your resting heart rate was 59.0 before and 71.0 after "
+            f"2023-02-18. {hedge}.", [],
+            tools_used=("compare_windows",))
+        assert row["number"], hedge
+
+
+def test_an_answer_that_asserts_the_cause_still_has_no_decline_to_match():
+    row = _score_with_steps(
+        "Q37", "Yes. Tearing your ACL on 2023-02-18 permanently raised your "
+        "resting heart rate, from 59.0 to 71.0.", [],
+        tools_used=("compare_windows",))
+    assert not row["number"]

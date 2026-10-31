@@ -1029,10 +1029,27 @@ unchanged and the run now reports the count instead.
 
 ### The four draws that failed, and the two questions behind them
 
-`number` missed on Q1, Q14 and Q37. Q1 is the scorer: the draw answered "60
-count/min", which is right and is the unit the index stores, against a group
-written around bpm. Fixed, and re-scoring that same answer passes, which takes
-the column to 35/37. Q14 (one draw) and Q37 (two of three) are the model. `cited` missed single draws on Q20, Q23
+`number` missed four draws, across Q1, Q14 and Q37, and reading them put all
+four somewhere other than the model's arithmetic.
+
+- **Q1** is the scorer. The draw answered "60 count/min", which is right and
+  is the unit the index stores, against a group written around bpm. Fixed,
+  and the same answer re-scored passes.
+- **Q37 draw 2** is the scorer too. It wrote "the data is too sparse to
+  determine whether the change is permanent", which is exactly the decline
+  the question asks for, and the hedge list only held the forms where the
+  speaker is the subject rather than the evidence. Widened, and that answer
+  re-scored passes.
+- **Q37 draw 1** is a tool gap. The model asked `get_clinical_history` for
+  procedures, was told conditions are held, reported no procedure records and
+  then asked the person when the ACL tear happened, which a condition record
+  dated. The tool now hands the other kinds over rather than naming them.
+- **Q14** is the capability gap above: one draw found one note of two,
+  because a tag question has no tool behind it.
+
+Re-scored on the same answers, `number` is 109/111 draws and 35/37 questions.
+Three of the four failures were things to fix elsewhere, which is the argument
+for reading the answers rather than only the table. `cited` missed single draws on Q20, Q23
 and Q26. `tools` missed Q24 and Q37, both of which wander between two and four
 calls. Q37 is the one question that is worse than a coin here, and it is the
 comparison question whose own history is a record of the scorer being wrong
