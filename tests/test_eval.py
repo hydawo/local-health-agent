@@ -1852,3 +1852,19 @@ def test_the_row_script_computes_the_table_cells_from_a_capture_file():
     assert "draws per question: 2" in body
     assert "gap measured on 2/2 draws" in body
     assert "varied between draws: 1/1 (Q19)" in body
+
+
+def test_two_absences_with_nothing_to_require_are_reported_once():
+    """They cannot affect the score, since only a claim with something to
+    require is scorable, but a report that says the same thing twice reads as
+    two findings."""
+    nothing = _step("get_lab_trend", {"analyte": "crp"},
+                    {"points": [], "total_results_for_analyte": 0,
+                     "available_from": None, "available_to": None})
+    again = _step("get_lab_trend", {"analyte": "crp"},
+                  {"points": [], "total_results_for_analyte": 0,
+                   "available_from": None, "available_to": None}, step=2)
+    row = _score_with_steps("Q19", _Q19_TEXT + "No data for that date.",
+                            [nothing, again], tools_used=("get_lab_trend",))
+    assert row["gap_required"] == ["an absence with no figure to carry"]
+    assert row["gap_scored"] is False

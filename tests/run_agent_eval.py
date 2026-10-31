@@ -212,6 +212,14 @@ def _coverage_claims(steps) -> list[_Coverage]:
     Deduped because a model that called one tool twice over the same empty
     window was told one thing, not two.
     """
+    # A known limit, since coverage here is a floor like everywhere else:
+    # `compare_windows` reports an empty side through `left_points: []` and a
+    # `coverage` block inside the side, neither of which `_is_absence` reads,
+    # so a comparison that found nothing yields no claim and the question
+    # reads as unscorable rather than failing. No case currently needs it:
+    # Q19 goes through `query_healthkit` and Q23 through the literature tool.
+    # A gap question built on a comparison would need `_is_absence` taught
+    # that shape, and `gap_scored` is what would show it had not been.
     claims: list[_Coverage] = []
     for node in _absence_nodes(step.result for step in steps):
         first, last = node.get("available_from"), node.get("available_to")
@@ -256,8 +264,14 @@ def _coverage_claims(steps) -> list[_Coverage]:
         claims.append(_Coverage(label="an absence with no figure to carry"))
     seen, out = set(), []
     for claim in claims:
-        if claim.groups not in seen or not claim.groups:
-            seen.add(claim.groups)
+        # Deduped on the label as well as the groups, so two absences with
+        # nothing to require do not print the same line twice. They cannot
+        # affect the score either way, since only a claim with groups is
+        # scorable, but a report that says the same thing twice reads as two
+        # findings.
+        key = (claim.label, claim.groups)
+        if key not in seen:
+            seen.add(key)
             out.append(claim)
     return out
 
