@@ -1392,6 +1392,46 @@ def test_compare_windows_unheld_measure_names_the_measures_held(workoutbox):
     assert "records of this figure" not in because
 
 
+def test_an_unheld_measure_says_the_duration_is_still_there(workoutbox):
+    """Run 13's third draw of Q35 told the person none of their 21 cycling
+    workouts had a duration recorded, while the other two draws computed that
+    duration from the same index. The model had read `measures_held`, which
+    lists the keys the index carries and said nothing about the figure a
+    measure-free call reports."""
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
+        "before_days": 7, "after_days": 7})
+    held = result["comparable"]
+    because = held["because"]
+    assert "duration of each workout is held" in because
+    assert "no measure" in because
+    side = result["left"] if result["left"]["coverage"].get("held") \
+        else result["right"]
+    assert side["coverage"]["held"]["duration_held"] >= 1
+    # The field named for the request echoes the request, so a null beside it
+    # reads as "the index does not hold this key" and never as "no key was
+    # asked for", which is how the same payload's `measure_asked: null` read
+    # to the model in run 13.
+    assert side["coverage"]["held"]["measure_asked_for"] == "nope"
+    assert side["coverage"]["held"]["measure_asked"] is None
+
+
+def test_an_unheld_measure_on_a_duration_free_index_claims_nothing(workoutbox):
+    """The clause is a claim about the index, so it has to come off the index.
+    A measure asked for where no workout carries a duration either must not
+    offer one."""
+    workoutbox.conn.execute("UPDATE workout SET duration = NULL, "
+                            "duration_unit = NULL")
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
+        "before_days": 7, "after_days": 7})
+    because = result["comparable"]["because"]
+    assert "duration of each workout is held" not in because
+    side = result["left"] if result["left"]["coverage"].get("held") \
+        else result["right"]
+    assert "duration_held" not in side["coverage"]["held"]
+
+
 def test_compare_windows_surfaces_a_category_metric_refusal_readably(workoutbox):
     result = tools.dispatch(workoutbox, "compare_windows", {**_RANGES,
                                                             "metric": "sleep"})

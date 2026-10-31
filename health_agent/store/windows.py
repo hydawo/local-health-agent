@@ -390,6 +390,21 @@ def _held(conn, spec: SeriesSpec, series) -> dict:
         held["measures_held"] = [
             {"key": key, "workouts": n}
             for key, n in list(others.items())[:_HELD_LISTED]]
+        # The field named for the request echoes the request. `measure_asked`
+        # is None when the index holds nothing under the key, and in run 13
+        # that null read to the model as though no key had been asked for.
+        held["measure_asked_for"] = spec.measure
+        if not mine:
+            # A key the index does not hold is not the same as a figure the
+            # index cannot report. Run 13's third draw of Q35 read
+            # `measures_held`, found only a heart rate, and told the person
+            # none of their 21 cycling workouts carried a duration, while
+            # the other two draws of the same question computed that duration
+            # from the same index, because a call with no measure reports it.
+            durations = sum(1 for point in series.points
+                            if point.duration is not None)
+            if durations:
+                held["duration_held"] = durations
     if spec.activity or spec.indoor is not None:
         rows = queries.workout_summary(conn, limit=50)
         needle = (spec.activity or "").lower()
@@ -626,7 +641,10 @@ def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
             out.append(f"no workout carries {measure}"
                        + (f", and the measures held are {others}" if others
                           else ", and the index holds no workout measures "
-                               "at all"))
+                               "at all")
+                       + (", while the duration of each workout is held and a "
+                          "call with no measure reports it"
+                          if held.get("duration_held") else ""))
         else:
             out.append(f"{asked['key']} is carried by "
                        f"{_count(asked['workouts'], 'workouts')} in the "
