@@ -107,7 +107,7 @@ produces confusing failures against an existing index.
 
 ## The eval set
 
-`tests/eval_questions.md` holds 27 questions with hand-verified answers, and
+`tests/eval_questions.md` holds 37 questions with hand-verified answers, and
 `tests/test_eval.py` executes them against the tool layer. This is the accuracy
 signal, as distinct from the unit tests' correctness signal: a prompt change, a
 retrieval change, or a model swap can leave every unit test green while making
@@ -117,6 +117,18 @@ Run it at the end of every milestone, not only at the end of the project:
 
 ```bash
 pytest tests/test_eval.py -v
+```
+
+For anything touching prompts, tools or the scorer, run it through the model
+too, and pass `--capture`: without a capture file a later scorer change cannot
+be applied to the answers that run already produced, and twice on 2026-10-31
+that cost a measurement.
+
+```bash
+./scripts/build-eval-bed.sh --yes /tmp/eval-bed
+python3 tests/run_agent_eval.py --index /tmp/eval-bed/.index/health.db \
+    --window-index /tmp/eval-bed/window-eval.db --capture /tmp/run.json
+python3 scripts/eval_row.py /tmp/run.json --run N --label "what changed"
 ```
 
 If you change a fixture, update the expected values in **both** files — a test

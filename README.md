@@ -40,7 +40,7 @@ how to verify it, and what this tool does **not** protect you from.
 > **Status: v0.1, feature-complete for its scope.** All four source types
 > ingest (an Apple Health export's HealthKit XML and the clinical records
 > beside it, report PDFs, and your own notes), natural-language questions work
-> end to end, accuracy is measured against a 33-question eval set, and the
+> end to end, accuracy is measured against a 37-question eval set, and the
 > privacy claims are falsifiable.
 > Post-release directions are in [`ROADMAP.md`](ROADMAP.md). The largest is
 > literature grounding with evidence-graded citations.
@@ -757,7 +757,7 @@ out of git.
 
 ## Accuracy
 
-`tests/eval_questions.md` holds 33 questions with hand-verified answers
+`tests/eval_questions.md` holds 37 questions with hand-verified answers
 spanning all four sources. There are two ways to run them:
 
 ```bash
@@ -765,20 +765,25 @@ pytest tests/test_eval.py -v          # against the tool layer: fast, determinis
 ```
 
 ```bash
-python tests/run_agent_eval.py --index ~/HealthData/.index/health.db
+python tests/run_agent_eval.py --index ~/HealthData/.index/health.db \
+    --window-index /tmp/eval-bed/window-eval.db --capture /tmp/run.json
 ```
 
 The second runs them through the model and scores each answer on whether the
-number is right, a source is cited, a data gap is named when one exists, and
-nothing diagnostic was said. Latest run, run 8 (`qwen3.6:27b`, thinking off,
+number is right, a source is cited, the coverage behind a gap is named when
+there is one, nothing diagnostic was said, every cited PMID is one the
+literature tool actually returned, and the expected tools were called.
+`--capture` keeps each answer with the tool payloads behind it, so a later
+scorer change can be applied to answers already given. Latest run, run 8 (`qwen3.6:27b`, thinking off,
 55.6 min):
 
 | Correct number | Cited | Source file named | Gap named | No diagnosis | Right tools |
 | --- | --- | --- | --- | --- | --- |
 | 30/33 | 28/33 | 26/33 | 33/33 | 31/33 | 31/33 |
 
-Questions 34 to 37 cover the window path and have not yet been run against
-the model. The medical guardrail fired on 1 of the 33. The no-diagnosis score is mostly the
+Questions 34 to 37 cover the window path and need
+`--window-index`; run 9 was the first to ask them. The medical guardrail fired
+on 1 of the 33. The no-diagnosis score is mostly the
 prompt's doing, not the guard's, which is the point of measuring them separately.
 
 Those that miss `source file named` cite the note title or the report date
@@ -796,7 +801,7 @@ system prompt now says to search both in the same turn and report what each
 source holds. Full history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
 
-The unit suite (more than 1,100 tests, `pytest`) and the eval set measure different things,
+The unit suite (more than 1,200 tests, `pytest`) and the eval set measure different things,
 which is why both exist. The first eval run scored 17/20 on numbers and exposed
 two defects that the 239 unit tests passing at the time had missed. Both were
 failures of the *tool contract* rather than of any function in it. Seven of the
