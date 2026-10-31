@@ -259,3 +259,31 @@ def test_workout_stat_coverage_counts_workouts_not_rows(box):
     box.commit()
     assert queries.workout_stat_coverage(box) == {
         "workouts": 2, "with_statistics": 1, "with_metadata": 1}
+
+
+def test_a_metadata_key_carrying_a_separator_is_not_read_as_a_statistic(box):
+    """The disagreement the three copies of the key rule left open.
+
+    They agreed on every real export, because Apple's statistic keys carry an
+    aggregate suffix and its metadata keys do not. A metadata key with a colon
+    in it was read as `type:aggregate` anyway, so a key named for itself was
+    labelled as an aggregate of something else. The stored `kind` is the
+    authority wherever the row is in hand.
+    """
+    cur = box.execute(
+        "INSERT INTO workout(activity_type, duration, duration_unit, "
+        "total_distance, total_distance_unit, source_name, start_date, "
+        "start_epoch, local_date, dedup_key) VALUES("
+        "'HKWorkoutActivityTypeRunning', 30.0, 'min', 3.0, 'mi', 'Watch', "
+        "'2026-03-06T09:00:00-05:00', 1772830800.0, '2026-03-06', ?)",
+        (b"\x01",))
+    box.execute(
+        "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+        "VALUES(?, 'metadata', ?, 1, NULL)",
+        (cur.lastrowid, f"{HR}:vendor"))
+    box.commit()
+
+    (row,) = [r for r in queries.workout_measures(box)
+              if r["kind"] == "metadata"]
+    assert row["label"] == f"{HR}:vendor"
+    assert "average" not in row["label"] and "(" not in row["label"]

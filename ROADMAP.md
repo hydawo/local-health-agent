@@ -567,6 +567,27 @@ than a fix.
   whether the key carries an aggregate suffix. They agree on every real export,
   because statistic keys carry a suffix and metadata keys do not. They are
   three rules for one fact.
+
+  **Fixed, and the entry had the shape of it slightly wrong.** The ingest does
+  not infer anything: it mints `{type}:{aggregate}` and writes `kind` beside
+  it. What was duplicated was the inference, in three readers that each looked
+  for a colon themselves: the sample-depth base types, the `workouts
+  --samples` guard, and the measure labels. The grammar now lives once, in
+  `store/workout_stats.py`, which is the module that mints the keys:
+  `stat_key`, `is_stat_key`, `base_type`, `aggregate_of`. `stat_rows` composes
+  through `stat_key`, so the minting and the reading cannot drift apart, and
+  `aggregate_of` splits on the first separator only, where a copy splitting on
+  every one would silently truncate a type that carried a separator of its own.
+
+  The window layer's "every row whatever its kind" is not a fourth rule and
+  was left alone: it answers a different question, which is what the index
+  holds under a key, and its own comment says why filtering to statistics made
+  the absence machinery blind. One rule did change behaviour, and the
+  disagreement it closes is now pinned: where a row is in hand its stored
+  `kind` is the authority, so a metadata key that happens to contain a colon
+  is its own base and names no aggregate, rather than being labelled an
+  aggregate of something else. That is the case the three copies agreed on
+  only because no real export produces it.
 - Every per-question eval result in this repository is a single draw, and the
   width of that distribution has never been measured. Asked five times on one
   unchanged commit, Q27 called `search_records` three times out of five, so

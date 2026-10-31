@@ -17,6 +17,43 @@ import math
 # the order rows come back in, so a reader sees average before maximum.
 STAT_AGGS = ("average", "minimum", "maximum", "sum")
 INDOOR_KEY = "HKIndoorWorkout"
+
+# The key grammar, owned here because this module mints the keys. A statistic
+# is `{type}{SEPARATOR}{aggregate}`; a metadata key is whatever Apple wrote and
+# carries no aggregate. Three readers used to infer which was which by looking
+# for a colon themselves, each with its own copy of the rule: the sample-depth
+# base types, the `workouts --samples` guard, and the measure labels. They
+# agreed on every real export and were still three rules for one fact.
+SEPARATOR = ":"
+
+
+def stat_key(type_name: str, aggregate: str) -> str:
+    """The key a statistic is stored under."""
+    return f"{type_name}{SEPARATOR}{aggregate}"
+
+
+def is_stat_key(key: str) -> bool:
+    """Whether a key names an aggregate, which only a statistic's does.
+
+    For a key with no row in hand. Where the row is there, its stored `kind`
+    is the answer and this is not asked.
+    """
+    return SEPARATOR in key
+
+
+def base_type(key: str) -> str:
+    """The record type a key is about, which is the key itself for metadata."""
+    return key.split(SEPARATOR, 1)[0]
+
+
+def aggregate_of(key: str) -> str:
+    """The aggregate a statistic key names, or "" for a key that names none.
+
+    Split on the first separator only: a type carrying a separator of its own
+    would otherwise lose everything after the second, which is a silent
+    truncation rather than a refusal.
+    """
+    return key.partition(SEPARATOR)[2]
 _TRUTHY = {"1", "true", "yes"}
 _FALSY = {"0", "false", "no"}
 
@@ -67,7 +104,7 @@ def stat_rows(statistics_json: str | None, metadata_json: str | None
                 continue
             raw = entry[agg]
             value = _num(raw)
-            rows.append(("statistic", f"{type_name}:{agg}", value,
+            rows.append(("statistic", stat_key(type_name, agg), value,
                          None if value is not None or raw is None else str(raw),
                          unit))
     for key, raw in sorted((_loads(metadata_json, dict) or {}).items()):

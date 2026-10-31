@@ -29,6 +29,7 @@ from ..labs import slug as _labs_slug
 from .. import metrics
 from ..metrics import Kind, Metric
 from . import derive
+from . import workout_stats
 
 PERIODS = ("day", "week", "month")
 AGGREGATIONS = ("sum", "avg", "min", "max", "count", "duration")
@@ -435,7 +436,8 @@ def workout_detail(conn, *, activity=None, start=None, end=None, indoor=None,
             # are counted in the time window whether or not the workout
             # carries a statistic for the type. A statistic key has a colon;
             # Apple's metadata keys carry none.
-            bases = sorted({k.split(":")[0] for k in wanted if ":" in k})
+            bases = sorted({workout_stats.base_type(k) for k in wanted
+                            if workout_stats.is_stat_key(k)})
             depth = {b: _sample_depth(conn, r, b) for b in bases}
         activity_name = r["activity_type"] or "workout"
         out.append(WorkoutRow(
@@ -527,10 +529,14 @@ def workout_measures(conn) -> list[dict]:
     ).fetchall()
     out = []
     for row in rows:
-        base = row["key"].split(":")[0]
+        # The stored `kind` is the authority where a row is in hand: a
+        # metadata key is its own base and names no aggregate, whatever
+        # characters it happens to contain.
+        statistic = row["kind"] == "statistic"
+        base = workout_stats.base_type(row["key"]) if statistic else row["key"]
         metric = metrics.lookup(base)          # None for an unregistered type
         item = dict(row)
-        suffix = row["key"].partition(":")[2]
+        suffix = workout_stats.aggregate_of(row["key"]) if statistic else ""
         if metric:
             item["label"] = (f"{metric.label} ({suffix})" if suffix
                              else metric.label)

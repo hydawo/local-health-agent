@@ -32,7 +32,8 @@ from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
 from .literature import store as literature_store
-from .store import queries, sqlite_schema, vector_store, windows
+from .store import (queries, sqlite_schema, vector_store, windows,
+                     workout_stats)
 
 log = get_logger("cli")
 
@@ -1059,7 +1060,7 @@ def _workouts_validate(args: argparse.Namespace) -> str | None:
             return (f"{', '.join(used)} need --detail or --period; without "
                     "either, `workouts` lists totals by activity type")
     if args.samples and not (args.detail and any(
-            ":" in m for m in (args.measure or ()))):
+            workout_stats.is_stat_key(m) for m in (args.measure or ()))):
         return ("--samples counts the records inside each workout, so it "
                 "needs --detail and a statistic named with --measure, such "
                 "as HKQuantityTypeIdentifierHeartRate:average")
@@ -1146,7 +1147,7 @@ def _workouts_detail(conn, args: argparse.Namespace) -> int:
 
 
 def _sample_cell(row, key: str, footnotes: list[str]) -> str:
-    base = key.split(":")[0]
+    base = workout_stats.base_type(key)
     depth = (row.sample_depth or {}).get(base)
     if depth is None:
         return "-"        # a metadata key has no records behind it

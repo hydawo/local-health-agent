@@ -102,3 +102,38 @@ def test_a_non_string_type_yields_no_rows():
         '[{"type": 5, "average": "1", "unit": "u"}]', None) == []
     assert workout_stats.stat_rows(
         '[{"type": ["a"], "average": "1", "unit": "u"}]', None) == []
+
+
+# --------------------------------------------------------------------------- #
+# The key grammar, in one place
+# --------------------------------------------------------------------------- #
+#
+# A statistic key is `{type}:{aggregate}` and a metadata key is whatever Apple
+# wrote. This module mints both; three readers then inferred which was which by
+# looking for a colon, each with its own copy of that rule. They agreed on
+# every real export and were still three rules for one fact.
+
+def test_a_statistic_key_is_minted_and_read_by_the_same_rule():
+    key = workout_stats.stat_key("HKQuantityTypeIdentifierHeartRate", "average")
+    assert key == "HKQuantityTypeIdentifierHeartRate:average"
+    assert workout_stats.is_stat_key(key)
+    assert workout_stats.base_type(key) == "HKQuantityTypeIdentifierHeartRate"
+    assert workout_stats.aggregate_of(key) == "average"
+
+
+def test_stat_rows_mints_its_keys_through_that_rule():
+    (row,) = workout_stats.stat_rows('[{"type": "T", "average": 1}]', None)
+    assert row[1] == workout_stats.stat_key("T", "average")
+
+
+def test_a_metadata_key_names_no_aggregate_and_is_its_own_base():
+    assert not workout_stats.is_stat_key("HKIndoorWorkout")
+    assert workout_stats.base_type("HKIndoorWorkout") == "HKIndoorWorkout"
+    assert workout_stats.aggregate_of("HKIndoorWorkout") == ""
+
+
+def test_the_grammar_reads_only_the_first_separator():
+    """A type with a colon in it would otherwise lose everything after the
+    second one, which is a silent truncation rather than a refusal."""
+    assert workout_stats.base_type("A:B:average") == "A"
+    assert workout_stats.aggregate_of("A:B:average") == "B:average"
