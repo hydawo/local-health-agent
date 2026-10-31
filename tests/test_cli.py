@@ -2354,3 +2354,37 @@ def test_compare_anchor_day_is_said_once(workout_index, capsys):
     _, out, _ = _run(workout_index, capsys, "compare", "resting-hr",
                      "--anchor", "2023-01-15", "--before", "7", "--after", "7")
     assert out.count("is in neither side") == 1 and "own day" not in out
+
+
+# --------------------------------------------------------------------------- #
+# A metric whose rows name no unit
+# --------------------------------------------------------------------------- #
+
+def _no_unit_index(path):
+    """An index holding one metric whose rows carry no unit at all."""
+    from health_agent.store import sqlite_schema
+
+    conn = sqlite_schema.connect(path, create=True)
+    sqlite_schema.initialize(conn)
+    for date in ("2026-03-01", "2026-03-02"):
+        conn.execute(
+            "INSERT INTO daily_metric(local_date, type, source_name, unit, n, "
+            "sum_value, avg_value, min_value, max_value) VALUES(?, "
+            "'HKQuantityTypeIdentifierRestingHeartRate', 'Watch', NULL, 1, "
+            "60, 60, 60, 60)", (date,))
+    conn.commit()
+    conn.close()
+    return path
+
+
+def test_the_title_does_not_print_the_unlabelled_sentinel_as_a_unit(tmp_path, capsys):
+    """`queries` reports an absent unit as "unlabelled" rather than borrowing a
+    neighbour's, which is honest. Printing it in the title is not: "avg per day
+    (unlabelled)" reads as a unit somebody measured in."""
+    code, out, _ = _run(_no_unit_index(tmp_path / "health.db"), capsys,
+                        "metric", "resting-hr")
+    assert code == 0
+    assert "unlabelled" not in out
+    assert "(none)" not in out
+    assert "avg per day" in out and "60" in out
+    assert "name no unit" in out

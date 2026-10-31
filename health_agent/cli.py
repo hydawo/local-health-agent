@@ -676,7 +676,10 @@ def cmd_metric(args: argparse.Namespace, cfg: config.Config) -> int:
         else:
             truncated = 0
 
-        unit = result.unit or ""
+        # The unlabelled sentinel is not a unit and must not sit in a title as
+        # though it were: "avg per day (unlabelled)" reads as something
+        # somebody measured in. `_print_caveats` says it in words instead.
+        unit = "" if result.unit == queries.UNLABELLED else (result.unit or "")
         title = f"{metric.label} — {result.agg} per {result.period}"
         if unit and result.agg != "duration":
             title += f" ({unit})"
@@ -736,9 +739,16 @@ def _print_caveats(result: queries.SeriesResult, args: argparse.Namespace) -> No
             f"{', '.join(result.sources_seen)}. {fix}"
         )
     if len(result.units_seen) > 1:
+        named = ", ".join(queries.unit_in_words(u) for u in result.units_seen)
         notes.append(
-            f"Mixed units in this range ({', '.join(result.units_seen)}); values "
+            f"Mixed units in this range ({named}); values "
             f"are not converted. Filter by source or narrow the window."
+        )
+    elif result.unit == queries.UNLABELLED:
+        notes.append(
+            "These records name no unit: the export did not carry one for "
+            "them, so the figures above are unitless. No unit has been "
+            "supplied for them."
         )
     for note in notes:
         print(f"\nNote: {note}")

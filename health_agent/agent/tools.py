@@ -196,10 +196,23 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
             f"total matters."
         )
     if len(result.units_seen) > 1:
+        # Said in words, because one of these can be the unlabelled sentinel
+        # and "Mixed units: count/min, unlabelled" offers the model a unit to
+        # report.
+        named = ", ".join(queries.unit_in_words(u) for u in result.units_seen)
         payload["unit_warning"] = (
-            f"Mixed units in this range: {', '.join(result.units_seen)}. Values "
-            f"are not converted."
+            f"Mixed units in this range: {named}. Values are not converted."
         )
+    # The sentinel never leaves this function as a unit. `queries` reports an
+    # absent unit as the string "unlabelled" rather than borrowing a
+    # neighbour's, which is the honest choice; handing that string to the model
+    # as `unit` is not, because it writes "60.5 unlabelled". `windows` had
+    # already learned this for its rendered text. The note rather than the
+    # tool's description does the work, which is where every instruction in
+    # this project that had to hold every time ended up.
+    if payload.get("unit") == queries.UNLABELLED:
+        payload["unit"] = None
+        payload["unit_note"] = UNIT_NOTE
     return payload
 
 
@@ -230,6 +243,16 @@ SAME_SENTENCE_RULE = (
     "sentence. A citation in a neighbouring sentence does not vouch for it. "
     "In a table, the row is the sentence."
 )
+
+# Said once, because both tools that can hand back a unitless figure have to
+# say the same thing about it. The honest report of an absent unit is words,
+# never the sentinel `queries` carries it as internally.
+UNIT_NOTE = (
+    "These records name no unit: the export did not carry one for them. The "
+    "figures above are therefore unitless. Say that the records name no unit, "
+    "and never supply one."
+)
+
 
 CITATION_NOTE = (
     "Every result above carries a `citation`. Reproduce it verbatim at least "
@@ -597,14 +620,44 @@ def _workout_point(p) -> dict:
 # compare_windows
 # --------------------------------------------------------------------------- #
 
+def _unit_for_the_model(unit: str | None) -> str | None:
+    """A unit field with `queries.UNLABELLED` taken out of it.
+
+    The sentinel is the absence of a unit. `windows` says that in words in its
+    rendered text and in `because`; the raw `unit` fields beside them handed
+    the word itself to the model, which then writes "median 60 unlabelled".
+    None is what no unit looks like in a payload, and `unit_note` says why.
+    """
+    return None if unit == queries.UNLABELLED else unit
+
+
+def _comparable_payload(comparable: dict) -> dict:
+    """The verdict block, with the sentinel out of its unit fields.
+
+    The verdict itself was decided before this, inside `windows`, and `because`
+    already reads "units differ: no unit named and count/min". Only the raw
+    fields beside it needed the same treatment.
+    """
+    out = dict(comparable)
+    for key in ("left_unit", "right_unit"):
+        if key in out:
+            out[key] = _unit_for_the_model(out[key])
+    for key in ("left_units_seen", "right_units_seen"):
+        if key in out:
+            out[key] = [queries.unit_in_words(u) for u in out[key]]
+    return out
+
+
 def _side_payload(summary, *, sample_counts: bool = False) -> dict:
     out = {
         "periods": summary.n,
         "periods_with_no_data": summary.empty_periods,
         "periods_with_a_value": summary.value_periods,
         "min": summary.min, "max": summary.max, "median": summary.median,
-        "mean": summary.mean, "unit": summary.unit,
-        "units_seen": list(summary.units_seen),
+        "mean": summary.mean, "unit": _unit_for_the_model(summary.unit),
+        # A list of the units seen may name the absence, since a list is not a
+        # figure's unit, but it names it in words like everything else.
+        "units_seen": [queries.unit_in_words(u) for u in summary.units_seen],
         "unit_mixed": summary.unit_mixed,
         "from": summary.first, "to": summary.last,
         "window": [summary.window_start, summary.window_end],
@@ -749,10 +802,12 @@ def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
         "right": _side_payload(comparison.right, sample_counts=sample_counts),
         "left_points": left_points,
         "right_points": right_points,
-        "comparable": comparison.comparable,
+        "comparable": _comparable_payload(comparison.comparable),
         "rendered": windows.render(comparison),
         "note": comparison.note,
     }
+    if queries.UNLABELLED in (comparison.left.unit, comparison.right.unit):
+        payload["unit_note"] = UNIT_NOTE
     if left_cut or right_cut:
         payload["points_truncated"] = {
             "left": left_cut, "right": right_cut,
@@ -1433,7 +1488,9 @@ TOOLS: tuple[Tool, ...] = (
             "Aggregate a metric from the user's Apple Health export over time "
             "(heart rate, steps, sleep, HRV, weight, and similar). Use for "
             "anything a watch or phone recorded. Returns one value per day, "
-            "week, or month with the units."
+            "week, or month with the units. A null `unit` beside a "
+            "`unit_note` means those records name no unit at all; report "
+            "that, never a unit of your own."
         ),
         parameters={
             "type": "object",
@@ -1579,7 +1636,9 @@ TOOLS: tuple[Tool, ...] = (
             "compared at all; it never returns a gap between them. A unit of "
             "\"mixed\" beside a null figure means the records for that period "
             "were in more than one unit and nothing was added up; report it "
-            "as a refusal, never as a unit."
+            "as a refusal, never as a unit. A null `unit` beside a "
+            "`unit_note` means those records name no unit at all; report "
+            "that, never a unit of your own."
         ),
         parameters={
             "type": "object",

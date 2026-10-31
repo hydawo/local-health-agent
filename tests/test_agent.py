@@ -9,6 +9,7 @@ records provenance, and survives a model behaving badly. Whether the model gives
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 from pathlib import Path
 
@@ -1396,3 +1397,118 @@ def test_bad_arguments_get_a_readable_expectation(workoutbox):
     limit = tools.dispatch(workoutbox, "get_workouts", {
         "detail": True, "limit": "x"})
     assert "limit is a whole number" in limit["note"]
+
+
+# --------------------------------------------------------------------------- #
+# A metric whose rows name no unit
+# --------------------------------------------------------------------------- #
+#
+# `queries` reports an absent unit as the string "unlabelled" rather than
+# dropping the rows into a neighbour's unit, which is the honest choice and was
+# made deliberately. But a sentinel is a word to the model: handed `"unit":
+# "unlabelled"` it writes "60.5 unlabelled", which reads as a unit somebody
+# measured in. `windows._unit_phrase` already says the absence in words for the
+# comparison text; these are the same fix for the tool payload the model is
+# actually given, and for the CLI title (see tests/test_cli.py).
+
+def _unitless(tmp_path, *, labelled: bool):
+    """An index whose resting-hr rows carry no unit, or only one that does."""
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    for date, unit in (("2026-03-01", "count/min" if labelled else None),
+                       ("2026-03-02", None)):
+        conn.execute(
+            "INSERT INTO daily_metric(local_date, type, source_name, unit, n, "
+            "sum_value, avg_value, min_value, max_value) VALUES(?, "
+            "'HKQuantityTypeIdentifierRestingHeartRate', 'Watch', ?, 1, "
+            "60, 60, 60, 60)", (date, unit))
+    conn.commit()
+    return tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+
+
+def test_a_metric_whose_rows_name_no_unit_reports_that_in_words(tmp_path):
+    result = tools.dispatch(_unitless(tmp_path, labelled=False),
+                            "query_healthkit", {"metric": "resting-hr"})
+    assert result["unit"] is None
+    assert "unlabelled" not in json.dumps(result)
+    assert "name no unit" in result["unit_note"]
+
+
+def test_one_unlabelled_unit_among_several_is_named_as_an_absence(tmp_path):
+    result = tools.dispatch(_unitless(tmp_path, labelled=True),
+                            "query_healthkit", {"metric": "resting-hr"})
+    assert "unlabelled" not in json.dumps(result)
+    warning = result["unit_warning"]
+    assert "count/min" in warning and "no unit named" in warning
+
+
+def _unitless_series(tmp_path, *, labelled_after: str | None = None):
+    """Sixty days of one metric, the rows before `labelled_after` unitless."""
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    day = _dt.date(2026, 1, 1)
+    for i in range(60):
+        date = (day + _dt.timedelta(days=i)).isoformat()
+        unit = labelled_after if labelled_after and date >= "2026-02-01" else None
+        conn.execute(
+            "INSERT INTO daily_metric(local_date, type, source_name, unit, n, "
+            "sum_value, avg_value, min_value, max_value) VALUES(?, "
+            "'HKQuantityTypeIdentifierRestingHeartRate', 'Watch', ?, 1, "
+            "60, 60, 60, 60)", (date, unit))
+    conn.commit()
+    return tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+
+
+_ANCHORED = {"metric": "resting-hr", "anchor_date": "2026-02-01",
+             "before_days": 20, "after_days": 20}
+
+
+def test_a_comparison_of_unitless_windows_hands_over_no_sentinel(tmp_path):
+    """The same defect as `query_healthkit`'s, in six more fields.
+
+    `windows` says the absence in words in `rendered` and in `because`, which
+    is what it was fixed for; the raw `unit` and `units_seen` fields beside
+    them still carried "unlabelled", and those are what a model reads when it
+    writes a figure with a unit after it.
+    """
+    result = tools.dispatch(_unitless_series(tmp_path), "compare_windows",
+                            _ANCHORED)
+    assert "unlabelled" not in json.dumps(result)
+    assert result["left"]["unit"] is None and result["right"]["unit"] is None
+    assert result["comparable"]["left_unit"] is None
+    assert result["left"]["units_seen"] == ["no unit named"]
+    assert "name no unit" in result["unit_note"]
+
+
+def test_a_unit_mismatch_against_an_unlabelled_side_still_reads_as_one(tmp_path):
+    result = tools.dispatch(_unitless_series(tmp_path, labelled_after="count/min"),
+                            "compare_windows", _ANCHORED)
+    assert "unlabelled" not in json.dumps(result)
+    assert result["comparable"]["verdict"] == "unit_mismatch"
+    assert "no unit named" in result["comparable"]["because"]
+    assert result["comparable"]["right_unit"] == "count/min"
+    assert result["comparable"]["left_unit"] is None
+
+
+def test_a_comparison_in_one_real_unit_says_nothing_about_units(tmp_path):
+    """The note is for the sentinel, not for every comparison."""
+    result = tools.dispatch(_labelled_series(tmp_path / "labelled"),
+                            "compare_windows", _ANCHORED)
+    assert "unit_note" not in result
+    assert result["left"]["unit"] == "count/min"
+    assert result["left"]["units_seen"] == ["count/min"]
+
+
+def _labelled_series(tmp_path):
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    day = _dt.date(2026, 1, 1)
+    for i in range(60):
+        conn.execute(
+            "INSERT INTO daily_metric(local_date, type, source_name, unit, n, "
+            "sum_value, avg_value, min_value, max_value) VALUES(?, "
+            "'HKQuantityTypeIdentifierRestingHeartRate', 'Watch', 'count/min', "
+            "1, 60, 60, 60, 60)", ((day + _dt.timedelta(days=i)).isoformat(),))
+    conn.commit()
+    return tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")

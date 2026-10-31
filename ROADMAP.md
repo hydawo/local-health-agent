@@ -514,6 +514,29 @@ than a fix.
   neighbour's unit. But that sentinel reaches `metric`'s printed title and the
   `query_healthkit` payload, and that tool's description did not get the "never
   report a sentinel as a unit" sentence its neighbours did.
+
+  **Fixed, and the scope was wider than this entry said.** `compare_windows`
+  had the same defect in six fields (`left.unit`, `right.unit`, both
+  `units_seen` lists and the two unit fields inside `comparable`), which
+  matters more than the title did: those are what a model reads when it writes
+  a figure with a unit after it, and `windows` had already learned to say the
+  absence in words in `rendered` and in `because`, so the raw fields beside
+  them read as a unit somebody measured in. The wording now lives once, in
+  `queries.unit_in_words`, which the CLI, the window text and both tool
+  payloads share, and `windows.UNLABELLED` is `queries.UNLABELLED` rather than
+  a second literal of the same word. No payload hands the sentinel over as a
+  figure's unit: the field is null and a shared `UNIT_NOTE` says the records
+  name no unit, which is the mechanism rather than the instruction, though
+  both tool descriptions got the sentence too. Four mutation tests, one per
+  site, and the new strings were scanned against every scorer family.
+
+  One instance is left, deliberately. `queries._median_in_one_unit` names the
+  sentinel in a workout measure's `units` list and in the `reason` beside it,
+  where the figure is already null and the unit is `mixed`: the word appears
+  as a member of a list explaining a refusal rather than as the unit of a
+  number, and the unit-equality tests in `windows` compare against that same
+  constant. Changing it is a semantic change to a refusal path, not a
+  rewording, so it is recorded instead of made.
 - Three layers classify a measure key by three different rules: the store by
   its stored `kind`, the window layer by summing both kinds, and the ingest by
   whether the key carries an aggregate suffix. They agree on every real export,

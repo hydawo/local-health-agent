@@ -578,7 +578,26 @@ def _summed(rows, value_attr: str, unit_attr: str):
 
 
 _MIXED = "mixed"
-_UNLABELLED = "unlabelled"
+
+# An absent unit, named. Public because three layers print it and none of them
+# may print it as it stands: `windows` said it in words already, the CLI title
+# and the `query_healthkit` payload did not. One literal, so there is one fact.
+UNLABELLED = "unlabelled"
+_UNLABELLED = UNLABELLED
+
+
+def unit_in_words(unit: str | None) -> str:
+    """A unit for a reader or a model, with the sentinel said rather than shown.
+
+    `UNLABELLED` is the absence of a unit, not a unit, and printed as it stands
+    it reads as one: "median 120 unlabelled", "avg per day (unlabelled)". `None`
+    is the stronger case, where there were no rows to carry a unit at all.
+    """
+    if unit is None:
+        return "no unit at all"
+    if unit == UNLABELLED:
+        return "no unit named"
+    return unit
 
 
 def _median_in_one_unit(pairs, name: str) -> dict:

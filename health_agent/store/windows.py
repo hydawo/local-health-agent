@@ -31,11 +31,13 @@ from health_agent.store import derive, queries
 # unit, so it never takes part in the unit equality test.
 MIXED = "mixed"
 
-# An absent unit is a unit of its own, and the same word `queries` uses for it
-# (`_UNLABELLED`). Folding it into a named unit relabels the values it came
-# with, and leaving it out of the set lets a side with no unit past the
-# cross-side unit test with "the same unit" as its stated reason.
-UNLABELLED = "unlabelled"
+# An absent unit is a unit of its own. Folding it into a named unit relabels
+# the values it came with, and leaving it out of the set lets a side with no
+# unit past the cross-side unit test with "the same unit" as its stated reason.
+# Taken from `queries` rather than spelled again: it was two literals for one
+# fact, and a sentinel that drifts in one layer is a sentinel printed in the
+# other.
+UNLABELLED = queries.UNLABELLED
 
 VERDICTS = ("ok", "no_overlap", "thin_on_one_side",
             "missing_measure_on_one_side", "unit_mismatch",
@@ -240,12 +242,12 @@ def _shift(date: str, days: int) -> str:
 
 def _unit_phrase(side: SideSummary) -> str:
     """A side's unit, in words. An absent unit is named as absent rather
-    than printed as though "unlabelled" were a unit somebody measured in."""
-    if side.unit is None:
-        return "no unit at all"
-    if side.unit == UNLABELLED:
-        return "no unit named"
-    return side.unit
+    than printed as though "unlabelled" were a unit somebody measured in.
+
+    The wording lives in `queries.unit_in_words`, which the CLI and the tool
+    payload now share: the same sentinel reached all three.
+    """
+    return queries.unit_in_words(side.unit)
 
 
 def _count(n: int, plural: str) -> str:
