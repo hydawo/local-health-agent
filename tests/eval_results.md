@@ -843,8 +843,18 @@ reworded, so the diagnosis cannot quietly stop applying.
 
 That accounts for Q22 going from 0/37 in run 10 to 3/3 here, for the rewrite,
 and most likely for the Q24 and Q29 fires during the citation verification
-run. The fix is a decision about the guardrail rather than a defect with one
-right answer, and ROADMAP #16 carries the three options.
+run.
+
+**Fixed by moving the instruction, not the guard.** The guard is byte for byte
+what it was, and `tools.SAME_SENTENCE_RULE` now says a sentence stating a
+general rule rather than this person's own value carries its citation inside
+that same sentence, that a citation in a neighbouring sentence does not vouch
+for it, and that in a table the row is the sentence. It rides in both payload
+notes and in prompt rule 1b. Widening the guard was the alternative and
+ROADMAP #16 records why not: one real citation would then license every
+recalled claim beside it, which is the hazard the unit split exists for. This
+is an instruction, so it will hold only sometimes; the next full run measures
+how often, and the three shapes that flag stay pinned either way.
 
 One thing is fixed regardless. This run reported `uncited_medical_claim
 (rewritten)` and nothing more, so which of the four rules fired and on what

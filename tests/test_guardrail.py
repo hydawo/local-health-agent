@@ -511,19 +511,23 @@ def test_a_citation_vouches_for_the_claim_in_its_own_sentence_only():
 
     It had fired 0/37 in run 10 and 0/20 in runs 2 and 3. The only change
     between those runs and run 11 is the citation work, whose payload note
-    tells the model to reproduce a citation "at least once for each report you
-    draw on". The guard asks for it in the same unit as the claim. So the
-    instruction and the guard disagree about where a citation has to sit, and
-    an answer that follows the instruction can be flagged for an uncited
-    claim while carrying the citation one sentence away.
+    told the model to reproduce a citation "at least once for each report you
+    draw on" and said nothing about where. The guard asks for it in the same
+    unit as the claim, so an answer that followed the instruction could be
+    flagged for an uncited claim while carrying its citation one sentence
+    away.
 
     Every shape below is faithful and sourced from a PMID the tool returned
-    this turn. The last one passes only because a table row is one unit, which
-    is also the one shape the payload note happens to recommend.
+    this turn, and three of the four flag. The guard was left exactly as it
+    was and the instruction moved to meet it: `SAME_SENTENCE_RULE` now rides
+    in both payload notes and in prompt rule 1b, so the three shapes that flag
+    are also the three the model is now told not to write. This test still
+    pins the guard's own behaviour, which is what that instruction is written
+    against.
 
-    This test records the behaviour rather than endorsing it. Widening the
-    guard is a decision about the guardrail, and ROADMAP #16 carries the
-    options.
+    The alternative was widening the guard, and ROADMAP #16 records why not:
+    one real citation would then license every recalled claim beside it, which
+    is the hazard the unit split exists for.
     """
     same_unit = ("A systematic review reports that an HbA1c above 6.5% is "
                  "considered diagnostic (Diabetes Care, 2026, PMID 42609254).")
@@ -548,14 +552,41 @@ def test_a_citation_vouches_for_the_claim_in_its_own_sentence_only():
     assert not _uncited_threshold_flags(table_row)
 
 
-def test_the_citation_note_and_the_guard_still_disagree():
-    """Couples the diagnosis to the string that causes it.
+def test_every_instruction_about_citations_agrees_with_the_guard():
+    """Couples the fix to the guard it was written for.
 
-    If the note is ever changed to ask for the citation in the same sentence
-    as a general claim, this fails and the test above should be revisited: the
-    conflict it documents would be gone.
+    The rule has to reach the model everywhere citation placement is taught,
+    not only where the diagnosis happened to look. Two payload notes and one
+    prompt rule, each of which has been the only one a model obeyed at some
+    point in this project's history.
     """
-    from health_agent.agent.tools import CITATION_NOTE
+    from health_agent.agent.orchestrator import SYSTEM_PROMPT
+    from health_agent.agent.tools import (
+        CITATION_NOTE, LITERATURE_NOTE, SAME_SENTENCE_RULE)
 
+    assert "same sentence" in SAME_SENTENCE_RULE
+    assert SAME_SENTENCE_RULE in CITATION_NOTE
+    assert SAME_SENTENCE_RULE in LITERATURE_NOTE
+
+    # The per-report rule run 11's citation fix added is still there: the new
+    # rule says where a citation sits, not whether to give one.
     assert "at least once for each report" in CITATION_NOTE
-    assert "same sentence" not in CITATION_NOTE
+
+    # The prompt states it in its own words, beside the threshold rule it
+    # governs, because the prompt is wrapped prose rather than a constant.
+    rule_1b = SYSTEM_PROMPT.split("1b.")[1].split("1c.")[0]
+    assert "same sentence" in " ".join(rule_1b.split())
+
+
+def test_the_rule_the_model_is_given_does_not_itself_trip_the_guard():
+    """A note the model relays verbatim must not read as an uncited claim.
+
+    The standing lesson from the scorer work, applied to the guardrail: this
+    rule names thresholds, diagnostic criteria and "normal" ranges, which is
+    the vocabulary `UNCITED_PATTERNS` reads.
+    """
+    from health_agent.agent.tools import (
+        CITATION_NOTE, LITERATURE_NOTE, SAME_SENTENCE_RULE)
+
+    for text in (SAME_SENTENCE_RULE, CITATION_NOTE, LITERATURE_NOTE):
+        assert not guardrail.check(text, used_tools=True), text

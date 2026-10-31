@@ -586,20 +586,30 @@ than a fix.
   That is why Q22 went from 0/37 in run 10 to 3/3 in run 11, why it rewrote,
   and most likely why Q24 and Q29 fired during the citation verification run.
 
-  Not fixed, because the fix is a decision about the guardrail rather than a
-  defect with one right answer. Three options. Let a returned PMID anywhere in
-  the answer vouch for every threshold sentence, which the guard's own
-  docstring argues against: it is the hazard that made unit splitting
-  deliberate, since one real citation would then license every recalled claim
-  beside it. Let an adjacent unit vouch, which is bounded but still loosens
-  the guard, and does not actually prevent misattribution, because a model
-  can put a real PMID in the same sentence as a wrong claim just as easily.
-  Or change the citation note to ask for the citation in the same sentence as
-  any general claim, which makes the two agree without weakening the guard,
-  and which the standing lesson says a prompt rule will satisfy only
-  sometimes. Instrumentation is fixed either way: the eval now records each
-  flag's rule and excerpt, not just its category, so the next run that fires
-  says which rule and on what sentence.
+  **Fixed by moving the instruction, not the guard.** Three options were on
+  the table. Letting a returned PMID anywhere in the answer vouch for every
+  threshold sentence is what the guard's own docstring argues against: it is
+  the hazard that made unit splitting deliberate, since one real citation
+  would then license every recalled claim beside it. Letting an adjacent unit
+  vouch is bounded but still loosens the guard, and does not actually prevent
+  misattribution, because a model can put a real PMID in the same sentence as
+  a wrong claim just as easily. The third was taken: the guard is byte for
+  byte what it was, and `tools.SAME_SENTENCE_RULE` now tells the model that a
+  sentence stating a general rule rather than this person's own value carries
+  its citation inside that same sentence, that a citation in a neighbouring
+  sentence does not vouch for it, and that in a table the row is the sentence.
+
+  It rides in three places, because citation placement is taught in three and
+  each has at some point been the only one a model obeyed: `CITATION_NOTE`,
+  the literature tool's note (extracted to `LITERATURE_NOTE` so the rule can
+  be asserted in it), and prompt rule 1b beside the threshold rule it governs.
+  `tests/test_guardrail.py` pins all three and fails if any one drops it, and
+  pins that the rule's own text does not trip the guard that a model relaying
+  it would be judged by. The standing lesson still applies and is the one
+  thing not fixed: this is an instruction, so it will hold only sometimes, and
+  the next full run is what measures how often. Instrumentation is in place
+  for that: the eval records each flag's rule and excerpt, not just its
+  category, so a run that fires says which rule and on what sentence.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while

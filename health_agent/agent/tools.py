@@ -211,10 +211,44 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
 # has held where a prompt rule alone has not: the `no_data` note, the unit
 # warning and the OCR warning all ride with the data, and `gap named` is a
 # full column. This puts the citation rule where those live.
+
+# Where a citation sits, which the note above left open and the guardrail did
+# not. Run 11's guardrail fired on all three draws of Q22, having fired 0/37 in
+# run 10: this note asks for a citation "at least once for each report", while
+# `guardrail._uncited_flags` wants the PMID in the same unit as the claim. An
+# answer that followed the note carried its citation one sentence away and was
+# flagged for an uncited claim. Three faithful shapes flagged and only a table
+# row passed, because a row is one unit. Widening the guard was the
+# alternative and was rejected: one real citation would then license every
+# recalled claim beside it, which is the hazard the unit split exists for. So
+# the instruction moved to meet the guard. See ROADMAP #16 and
+# tests/test_guardrail.py.
+SAME_SENTENCE_RULE = (
+    "A sentence that states a general rule rather than this person's own "
+    "value, such as a threshold, a diagnostic criterion, a \"normal\" range, "
+    "or what the research found, carries its citation inside that same "
+    "sentence. A citation in a neighbouring sentence does not vouch for it. "
+    "In a table, the row is the sentence."
+)
+
 CITATION_NOTE = (
     "Every result above carries a `citation`. Reproduce it verbatim at least "
     "once for each report you draw on; in a table, give it a column. A date "
-    "on its own is not a citation."
+    "on its own is not a citation. " + SAME_SENTENCE_RULE
+)
+
+# The literature tool's own note. A module-level constant rather than a literal
+# inside the payload so that the one rule about where a citation sits can be
+# asserted in every place that teaches it; the guardrail reads PMIDs, so this
+# is the note that governs the sentences it flags.
+LITERATURE_NOTE = (
+    "These are findings about populations from published research, not "
+    "facts about this person. State each one separately with its "
+    "evidence tier and its year \u2014 'a 2019 meta-analysis found...' \u2014 and "
+    "cite it with its PMID, so the reader can check it at the source. "
+    "Do not merge several findings into a single conclusion, "
+    "and do not turn any of them into a recommendation about what this "
+    "person should do. " + SAME_SENTENCE_RULE
 )
 
 
@@ -1127,15 +1161,7 @@ def _search_medical_literature(ctx: ToolContext, args: dict) -> dict:
             }
             for f in findings
         ],
-        "note": (
-            "These are findings about populations from published research, not "
-            "facts about this person. State each one separately with its "
-            "evidence tier and its year — 'a 2019 meta-analysis found...' — and "
-            "cite it with its PMID, so the reader can check it at the source. "
-            "Do not merge several findings into a single conclusion, "
-            "and do not turn any of them into a recommendation about what this "
-            "person should do."
-        ),
+        "note": LITERATURE_NOTE,
     }
     if any(f.retracted for f in findings):
         payload["retraction_warning"] = (
