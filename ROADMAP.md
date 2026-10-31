@@ -518,6 +518,15 @@ list with no right answer written down yet.
   nobody prunes is where the next instance hides. Coverage is a floor, not a
   proof: only the listed calls are scanned.
 
+  The floor was raised once already, which is the pattern to expect. Tonight's
+  payload changes added strings no existing context could reach, so a fourth
+  index was added whose rows name no unit, along with a comparison asking for
+  sample depth. Both were needed for the same reason the empty index was:
+  three indexes all carrying units cannot reach the words a tool says when a
+  unit is absent. A new test names the paths each context was added for, since
+  a call that does not raise is not evidence that it returned what was wanted,
+  and a context reaching nothing proves nothing while still costing runtime.
+
   It found the collision it was built for on its first run. `get_clinical_history`'s
   populated note ended "do not say whether a regimen or a diagnosis is
   correct", which matches the decline pattern, so a model relaying the

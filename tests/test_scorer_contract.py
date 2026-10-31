@@ -27,6 +27,7 @@ many words.
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
 import sys
 from dataclasses import dataclass
@@ -176,6 +177,8 @@ EXEMPTIONS: tuple[Exemption, ...] = (
 
 # (tool name, arguments, which index). Error paths are as much the point as
 # successful ones: a refusal note is model-facing text too.
+HR_AVERAGE = "HKQuantityTypeIdentifierHeartRate:average"
+
 CALLS: tuple[tuple[str, dict, str], ...] = (
     ("query_healthkit", {"metric": "resting-hr", "period": "day"}, "main"),
     ("query_healthkit", {"metric": "steps", "period": "month"}, "main"),
@@ -230,6 +233,26 @@ CALLS: tuple[tuple[str, dict, str], ...] = (
     ("compare_windows", {"metric": "resting-hr", "anchor_date": "2023-02-18",
                          "before_days": 7, "after_days": 7,
                          "left_start": "2022-01-01"}, "window"),
+    # Sample depth, which the window index can reach now that
+    # `compare_windows` reports it: a measure nothing carries a count for
+    # still produces the clause, and the clause is model-facing text.
+    ("compare_windows", {"activity": "Cycling", "measure": HR_AVERAGE,
+                         "period": "month", "sample_counts": True,
+                         "left_start": "2025-03-01", "left_end": "2025-08-31",
+                         "right_start": "2025-09-01",
+                         "right_end": "2026-03-31"}, "window"),
+    # A fourth index, whose rows name no unit. Two payload paths exist only
+    # here: `unit_note`, and the mixed-unit warning with the absence named in
+    # words. The other three indexes all carry units, so without this context
+    # the strings added for the sentinel would ship unscanned, which is the
+    # same hole the empty index was added to close.
+    ("query_healthkit", {"metric": "resting-hr"}, "unitless"),
+    ("query_healthkit", {"metric": "steps"}, "unitless"),
+    ("compare_windows", {"metric": "resting-hr", "period": "week",
+                         "sample_counts": True,
+                         "left_start": "2026-01-01", "left_end": "2026-01-31",
+                         "right_start": "2026-02-01",
+                         "right_end": "2026-02-28"}, "unitless"),
 )
 
 
@@ -275,6 +298,8 @@ def payloads(tmp_path_factory) -> list[tuple[str, str, str]]:
     empty = sqlite_schema.connect(tmp / "empty.db", create=True)
     sqlite_schema.initialize(empty)
 
+    unitless = _unitless_index(tmp / "unitless.db")
+
     contexts = {
         "main": agent_tools.ToolContext(conn=main,
                                         vector_path=tmp / "vectors"),
@@ -282,6 +307,8 @@ def payloads(tmp_path_factory) -> list[tuple[str, str, str]]:
                                           vector_path=tmp / "window_vectors"),
         "empty": agent_tools.ToolContext(conn=empty,
                                          vector_path=tmp / "empty_vectors"),
+        "unitless": agent_tools.ToolContext(
+            conn=unitless, vector_path=tmp / "unitless_vectors"),
     }
     by_name = {tool.name: tool for tool in agent_tools.TOOLS}
 
@@ -295,6 +322,33 @@ def payloads(tmp_path_factory) -> list[tuple[str, str, str]]:
     main.close()
     window.close()
     empty.close()
+    unitless.close()
+
+
+def _unitless_index(path: Path):
+    """Two months of one metric whose rows carry no unit, and one that mixes.
+
+    `queries` reports an absent unit as the sentinel "unlabelled", and the
+    tools say that in words instead of handing the word over. Those words are
+    model-facing text and are scanned here like any other.
+    """
+    conn = sqlite_schema.connect(path, create=True)
+    sqlite_schema.initialize(conn)
+    day = _dt.date(2026, 1, 1)
+    for i in range(59):
+        date = (day + _dt.timedelta(days=i)).isoformat()
+        for metric_type, unit in (
+                ("HKQuantityTypeIdentifierRestingHeartRate", None),
+                # Mixed, so the unit warning is reached as well as the note.
+                ("HKQuantityTypeIdentifierStepCount",
+                 "count" if i % 2 else None)):
+            conn.execute(
+                "INSERT INTO daily_metric(local_date, type, source_name, "
+                "unit, n, sum_value, avg_value, min_value, max_value) "
+                "VALUES(?, ?, 'Watch', ?, 1, 60, 60, 60, 60)",
+                (date, metric_type, unit))
+    conn.commit()
+    return conn
 
 
 def _strings(value, path: str = ""):
@@ -371,6 +425,27 @@ def test_the_scan_actually_reaches_payload_prose(payloads):
     assert len(sentences) > 10, len(sentences)
     tools_seen = {tool for tool, _, _ in payloads}
     assert tools_seen == {name for name, _, _ in CALLS}
+
+
+def test_the_new_contexts_reach_the_paths_they_were_added_for(payloads):
+    """A context that reaches nothing is a context that proves nothing.
+
+    The empty index was added because the populated bed could not reach any
+    tool's empty-state note; the unitless index for the same reason, one layer
+    along. Both are only worth their runtime if the strings they exist for are
+    in the crawl, so this names them rather than trusting that a call which
+    did not raise also returned what was wanted.
+    """
+    paths = {(tool, path) for tool, path, _ in payloads}
+    texts = {text for _, _, text in payloads}
+
+    assert ("query_healthkit", "unit_note") in paths
+    assert any("no unit named" in t and "Mixed units" in t for t in texts)
+    assert ("compare_windows", "unit_note") in paths
+    # The depth clause rides inside the rendered text rather than in a field
+    # of its own, which is exactly why it needs naming here.
+    assert any("inside each workout" in t or "could not be counted" in t
+               for t in texts)
 
 
 def test_the_scan_would_catch_a_planted_phrase(payloads):
