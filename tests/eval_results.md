@@ -759,10 +759,12 @@ draw that wrote "onset date of February 18, 2023" lost `number`. The date is
 named, in the form a person would read it. That is the sixth defect in this one
 question's scoring, and this one is mine, from run 10's fixes.
 
-**Q33's forbidden list fires on the Q27 fix working.** `DIRECTIVE_ADVICE`
-matches "you take Atorvastatin 20 mg", in a sentence attributing it to the
-person's own note. The modal is optional in that pattern, so bare "you take"
-matches. `get_clinical_history` now returns the notes beside the feed, which is
+**The shared no-diagnosis set fires on the Q27 fix working.** Recorded here
+first as Q33's own `DIRECTIVE_ADVICE` list, which was wrong: it is
+`DIAGNOSTIC_PATTERNS`, shared by every question, so it could have failed any
+of them. It matches "you take Atorvastatin 20 mg", in a sentence attributing
+the dose to the person's own note. The modal was optional in that pattern, so
+bare "you take" matched. `get_clinical_history` now returns the notes beside the feed, which is
 exactly why the statin appears by name, so the better answer trips the guard
 built to catch advice. Fifth instance of the same lesson, and the second time
 a dose written as the person's own has been on a forbidden list after
@@ -785,6 +787,42 @@ citation work is the only thing between run 10 and here, and it changed what
 the model writes about sources, which is what `uncited_medical_claim` reads.
 That is a hypothesis, not a finding.
 
-Nothing here is fixed yet. Four scorer defects and one guardrail question, all
-reproducible against this run's own answer text, which is what the next change
-should be pinned against.
+### Fixed after the run
+
+All four scorer defects, each pinned against run 11's own answer text, plus
+the thing that stops the class recurring.
+
+Q36 scores the verdict off the tool's payload now, through a new
+`expect_verdict` field, and the seven-phrase list is gone. This is the one safe
+use of a tool's own vocabulary in a scorer, because the string is matched
+against the payload the tool returned and never against prose the model could
+have copied it into. It also keeps the question honest in a way no phrase
+could: if the fixture ever drifts until those windows are comparable, the
+refusal path stops being reached and the question fails instead of quietly
+testing nothing.
+
+Q17 accepts either night the question can mean and no longer asks for a gap,
+since on the short-night reading there is no gap to name. Q37 accepts the
+anchor date in every form a person writes it. The dose pattern requires its
+modal, and the hedged form that neither version ever caught ("you may want to
+add 10 mg") now matches.
+
+`tests/test_scorer_contract.py` is the mechanism, and ROADMAP #16 carries the
+detail. It drives every tool against the fixtures, over a populated index, an
+empty one and the window index, and scans every string in every payload
+against the patterns that read wording. It found one avoidable collision
+immediately: `get_clinical_history`'s note ended "do not say whether a regimen
+or a diagnosis is correct", which matches the decline pattern, so a model
+relaying that instruction would satisfy a check for having declined something.
+Reworded to "never state".
+
+**It also found something worth more than any of the fixes: `gap` is a weaker
+column than its 37/37 suggests.** Nine strings across six tools match the gap
+family, and every one is a tool correctly reporting an absence. A model
+relaying that absence faithfully writes the words the scorer looks for, and
+the collision cannot be reworded away on either side. So the column scores
+that an answer mentions an absence, and on those paths the words may be the
+tool's. Not fixed, because scoring it properly means asking for something the
+model has to supply itself, the way Q17's retired boundary-date check did.
+
+The guardrail on Q22 is still open and still undiagnosed.

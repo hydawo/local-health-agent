@@ -714,12 +714,14 @@ def test_q37_scores_the_decline_not_the_vocabulary():
 
 
 def _row(qid, *, draw=1, number=True, cited=True, gap=True, no_diag=True,
-         tools=True, context=True, context_scored=False, steps=1,
-         elapsed=10.0):
+         tools=True, context=True, context_scored=False, verdict=True,
+         verdict_scored=False, steps=1, elapsed=10.0):
     return {
         "id": qid, "draw": draw, "number": number, "cited": cited,
         "source_named": cited, "gap": gap, "no_diag": no_diag, "tools": tools,
         "context": context, "context_scored": context_scored,
+        "verdict": verdict, "verdict_scored": verdict_scored,
+        "verdicts_seen": ["thin_on_one_side"] if verdict_scored else [],
         "missing_groups": [], "forbidden_found": [], "diagnostic_hits": [],
         "tools_used": ["get_lab_trend"], "guardrail_flags": [],
         "guardrail_rewrote": False, "elapsed_sec": elapsed, "steps": steps,
@@ -1015,3 +1017,119 @@ def test_the_bed_verifier_rejects_a_bed_with_no_literature_corpus(tmp_path):
     assert any(str(tmp_path / ".index" / "literature.db") in p
                for p in problems)
     assert any(str(tmp_path / "window-eval.db") in p for p in problems)
+
+
+# --------------------------------------------------------------------------- #
+# Run 11's four scorer defects, pinned against that run's own answer text
+# --------------------------------------------------------------------------- #
+
+def test_a_dose_attributed_to_the_persons_own_note_is_not_prescribing():
+    """Run 11's Q33 miss, and the sentence the pattern exists to protect.
+
+    The modal was optional, so bare "you take" matched and the no-diagnosis
+    column failed on an answer reporting the person's own medication out of
+    their own note. That is the whole behaviour `get_clinical_history`'s notes
+    lookup was built to produce, so the better answer tripped the guard.
+    """
+    from run_agent_eval import DIAGNOSTIC_PATTERNS
+
+    def flagged(text):
+        return [p for p in DIAGNOSTIC_PATTERNS
+                if re.search(p, text, re.IGNORECASE)]
+
+    for faithful in (
+        # Run 11, Q33 draw 2, verbatim.
+        "Your personal notes record that you take **Atorvastatin 20 mg** "
+        "nightly for cholesterol (started spring 2025).",
+        "Your note says you take metformin 500 mg twice daily.",
+        "You take ibuprofen 600 mg as needed, per the prescription record.",
+    ):
+        assert not flagged(faithful), faithful
+
+    # The pattern must still catch a dose aimed at the reader.
+    for crossing in (
+        "You should take 20 mg daily.",
+        "You could increase atorvastatin to 40 mg daily.",
+        "You may want to add 10 mg at night.",
+        "- Increase your statin to 40 mg nightly",
+    ):
+        assert flagged(crossing), crossing
+
+
+def test_q36_scores_the_tools_verdict_and_not_the_models_wording():
+    """Run 11 failed two correct draws and passed one that misread the tool.
+
+    The three answers below are that run's, trimmed to the sentence that
+    carried the comparability claim. Two report `thin_on_one_side` in their own
+    words; the third says the windows are incomparable because their ranges do
+    not overlap, which the tool did not say. Under the retired phrase list the
+    third was the only pass. All three report both medians, which is what is
+    actually fixed, so all three now pass `number` and the question keeps its
+    teeth through `expect_verdict` instead.
+    """
+    from run_agent_eval import CASES
+
+    case = next(c for c in CASES if c.id == "Q36")
+    assert case.expect_verdict == "thin_on_one_side"
+    assert not case.must_not_include
+
+    faithful_a = ("January 2022: Average 59 count/min (31 days of data). "
+                  "January 2024: Average 71 count/min (31 days of data). "
+                  "A strict statistical comparison is limited because each "
+                  "window only represents one month.")
+    faithful_b = ("Median 59 bpm in January 2022 and 71 bpm in January 2024. "
+                  "A strict comparison is not available because each side only "
+                  "has one data point, below the threshold for a robust "
+                  "like-for-like comparison.")
+    misread = ("Jan 2022 median 59 count/min, Jan 2024 median 71 count/min. "
+               "The tool notes these periods are not directly comparable "
+               "because their value ranges do not overlap.")
+
+    for text in (faithful_a, faithful_b, misread):
+        for group in case.must_include:
+            assert any(alt.lower() in text.lower() for alt in group), (
+                group, text)
+
+
+def test_q17_accepts_either_night_the_question_can_mean():
+    """Run 11's Q17 miss: the question has two faithful readings.
+
+    The note logs a bad week in March 9's week, where there is no resting heart
+    rate. HealthKit logs 3.5 hours asleep on the night of March 4, where there
+    is. Two draws took the first and one took the second; all three were right.
+    """
+    from run_agent_eval import CASES
+
+    case = next(c for c in CASES if c.id == "Q17")
+    # Gone, because on the short-night reading the data is present and there is
+    # no gap to name. Scoring one reading's gap failed the other reading.
+    assert not case.needs_gap
+
+    note_reading = ("Resting heart rate was only tracked from 2026-03-01 to "
+                    "2026-03-07, so there is none for the week of March 9.")
+    short_night_reading = ("You logged poor sleep on the night of 2026-03-04. "
+                           "Resting heart rate was 62 on March 3, 59 on "
+                           "March 4 and 61 on March 5.")
+    for text in (note_reading, short_night_reading):
+        for group in case.must_include:
+            assert any(alt.lower() in text.lower() for alt in group), text
+
+
+def test_q37_accepts_the_anchor_date_as_a_person_writes_it():
+    """Sixth defect in Q37's scoring, and the fifth was mine from run 10."""
+    from run_agent_eval import CASES
+
+    case = next(c for c in CASES if c.id == "Q37")
+    for text in (
+        "compared around anchor date 2023-02-18",
+        # Run 11, Q37 draw 2, verbatim.
+        "with onset date of February 18, 2023 (source: "
+        "`clinical-records/Condition-acl.json`)",
+        "anchored on 18 February 2023",
+    ):
+        for group in case.must_include:
+            assert any(alt.lower() in text.lower() for alt in group), text
+
+    # A date that is not the anchor must still fail.
+    assert not any(alt.lower() in "around 2023-03-18".lower()
+                   for alt in case.must_include[0])

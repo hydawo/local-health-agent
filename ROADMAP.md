@@ -344,6 +344,17 @@ than a rewrite.
 Richer workout and GPS data, and third-party exports (Oura, Whoop) for users who
 want them folded in.
 
+**Decided 2026-10-30, for Oura: build both paths and let the person choose.**
+An export-file reader, which reads a downloaded Oura export the way the Apple
+Health export is read and needs no network module, no new consent notice and no
+amendment to `THREAT_MODEL.md`. And an API path, which is a fourth network
+module, so it carries its own one-time notice in the consent flow and the
+threat model says three became four. Neither is the default for the other: the
+file path costs a manual export each time, the API path widens the documented
+attack surface, and which trade someone wants is theirs to make rather than
+ours to make for them. This settles the question that had the Oura sub-project
+parked; it does not schedule the work.
+
 ## 9. Better lab value extraction
 
 Move from regex and table heuristics to a more robust structured extraction
@@ -462,9 +473,36 @@ than a fix.
   own disclaimer. Three model-facing strings still match the decline pattern
   (`store/windows.py`'s layer refusal, reached through the compare handler's
   error path, and two notes in `_get_clinical_history`), none on that
-  question's path. A test that scans tool output against scorer patterns would
-  catch the next one, and needs an exemption mechanism designed on purpose
-  rather than at the end of a branch. Eval run 9 found the same shape in a
+  question's path. **Built, as `tests/test_scorer_contract.py`.** It drives
+  every tool against the fixtures, over a populated index, an empty one and
+  the window index, walks every string in every payload and scans it against
+  the four families that read wording. A case's `must_include` is excluded by
+  design, since those are values and a value appearing in a payload is the
+  point. Exemptions are anchored on a fragment of the string rather than on
+  the key, so a field cannot later acquire a worse string for free, and an
+  exemption that stops firing fails the suite, because a suppression list
+  nobody prunes is where the next instance hides. Coverage is a floor, not a
+  proof: only the listed calls are scanned.
+
+  It found the collision it was built for on its first run. `get_clinical_history`'s
+  populated note ended "do not say whether a regimen or a diagnosis is
+  correct", which matches the decline pattern, so a model relaying the
+  instruction would satisfy a check for having declined something. Reworded to
+  "never state", at no cost to the meaning. That was one of the three strings
+  predicted above and the only avoidable one.
+
+  **The unavoidable finding is about `gap`, and it is worth more than the
+  fix.** Nine strings across six tools match the gap family, and every one of
+  them is a tool correctly reporting an absence, which is the one thing a tool
+  here must always do. A model relaying that absence faithfully writes the
+  words the scorer looks for. The collision cannot be reworded away on either
+  side, so `gap` scores that an answer mentions an absence, and on those paths
+  the words may be the tool's rather than the model's. That is a weaker claim
+  than the column's 37/37 in runs 9 to 11 suggests, and it is not what the
+  column's name implies. Scoring it properly would mean checking something the
+  model has to supply itself, the way Q17's retired boundary-date check did.
+  Not attempted here, and recorded so the column is not read as more than it
+  is. Eval run 9 found the same shape in a
   second list and retired it the same way: a bare `diagnos*` token behind
   fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
   constitute a diagnosis", negation four words away) and a date quoted off the
@@ -515,11 +553,18 @@ than a fix.
   night, and the draw that anchored on the one with data lost `number` and
   `gap` for answering a different valid reading. Q37 pins the anchor as
   `2023-02-18` only, so a draw writing "February 18, 2023" lost `number`, which
-  is the sixth defect in that one question's scoring. And `DIRECTIVE_ADVICE`
-  matches "you take Atorvastatin 20 mg" because its modal is optional, firing
-  on Q33 for attributing a dose to the person's own note, which is the second
-  time a dose written as the person's own has sat on a forbidden list after
-  `"your dose"` came off Q27's.
+  is the sixth defect in that one question's scoring. And the shared
+  `DIAGNOSTIC_PATTERNS` set, not Q33's own list, matched "you take Atorvastatin
+  20 mg" because its modal was optional, failing `no_diag` on an answer
+  attributing a dose to the person's own note. It is the shared set, so it
+  could have fired on any question, and it is the second time a dose written
+  as the person's own has sat on a forbidden list after `"your dose"` came off
+  Q27's. **All four are now fixed and pinned against run 11's own answer
+  text.** Q36 scores the verdict off the payload through a new `expect_verdict`
+  field and the seven-phrase list is gone; Q17 accepts either night the
+  question can mean and no longer asks for a gap; Q37 accepts the date in
+  every form a person writes it; the modal is required, and the hedged form
+  ("you may want to add 10 mg") that neither version caught is now caught.
 - The guardrail fired on all three draws of Q22 in run 11 and rewrote all
   three, having fired 0/37 in run 10 and 0/20 in runs 2 and 3. It also fired
   twice, on Q24 and Q29, during the citation verification run, which was noted

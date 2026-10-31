@@ -1312,9 +1312,13 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
     if len(facts) >= MAX_CLINICAL_FACTS:
         payload["truncated"] = True
     payload["note"] = (
+        # "never state" rather than "do not say": the latter matches the
+        # eval's decline pattern, so a model relaying this instruction would
+        # satisfy a check for having declined something. See
+        # tests/test_scorer_contract.py.
         "These are what the person's health systems recorded, not what they "
         "told you. State them as records with their dates, cite the file, and "
-        "do not say whether a regimen or a diagnosis is correct."
+        "never state whether a regimen or a diagnosis is correct."
     )
     return _attach_personal_notes(ctx, payload, row_kind or "")
 
