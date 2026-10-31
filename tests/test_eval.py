@@ -1583,3 +1583,25 @@ def test_the_four_tools_added_are_each_the_only_route_to_the_answer():
         case = next(c for c in CASES if c.id == qid)
         assert case.expect_tools == [tool], qid
         assert tool in names, tool
+
+
+def test_a_question_whose_scorability_moved_between_draws_is_named():
+    """Separate from "varied between draws", which counts questions whose
+    result moved. A question that was scorable on one draw and not on another
+    did not change its result; the model called a different tool, so a
+    different check applied. Lumping the two together would make run 11's
+    count of flaky questions incomparable with later runs."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=2, out=None)
+    rows = [_row("Q19", draw=1, gap=True, gap_scored=True),
+            _row("Q19", draw=2, gap=True, gap_scored=False,
+                 gap_required=["an absence with no figure to carry"]),
+            _row("Q20", draw=1), _row("Q20", draw=2)]
+    report = render(rows, 60.0, args)
+    assert "scored a different set of checks between draws: 1/2 (Q19)" in report
+    # And it is not counted as a result that varied, because none did.
+    assert "varied between draws: 0/2" in report

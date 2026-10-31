@@ -1108,6 +1108,17 @@ def render(results: list[dict], elapsed: float, args) -> str:
                   if any(len({d[k] for d in draws}) > 1 for k in checked)]
         lines.append(f"- varied between draws: {len(varied)}/{len(groups)}"
                      + (f" ({', '.join(varied)})" if varied else ""))
+        # Separate from the line above on purpose. A question scorable on one
+        # draw and not on another did not change its result: the model called
+        # a different tool, so a different check applied. Counting that as
+        # variance would make run 11's figure incomparable with later runs.
+        scored_keys = ("number_scored", "tools_scored", "gap_scored",
+                       "context_scored", "verdict_scored")
+        moved = [qid for qid, draws in groups
+                 if any(len({d[k] for d in draws}) > 1 for k in scored_keys)]
+        lines.append(f"- scored a different set of checks between draws: "
+                     f"{len(moved)}/{len(groups)}"
+                     + (f" ({', '.join(moved)})" if moved else ""))
 
     fired = [r["id"] for r in results if r["guardrail_flags"]]
     rewrote = [r["id"] for r in results if r["guardrail_rewrote"]]
