@@ -1713,3 +1713,33 @@ def test_a_case_that_only_forbids_a_phrase_counts_as_measured():
     failed = _score_with_steps("Q22", "You have diabetes.", [],
                                tools_used=("search_medical_literature",))
     assert failed["number_scored"] is True and failed["number"] is False
+
+
+def test_every_expected_tool_is_a_registered_tool():
+    """A typo in `expect_tools` is a cell that fails on every draw forever,
+    and reads as the model never calling a tool it was in fact calling. The
+    same mistake in the scorer-contract test's CALLS table named a
+    `query_sleep` tool that does not exist, which is how this class of bug
+    announces itself: not at all, until someone reads the table."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+    from health_agent.agent.tools import TOOLS
+
+    registered = {tool.name for tool in TOOLS}
+    for case in CASES:
+        for name in case.expect_tools:
+            assert name in registered, f"{case.id} expects unknown {name}"
+
+
+def test_every_case_id_is_unique_and_the_set_is_the_documented_size():
+    """Two cases sharing an id would collapse into one question in every
+    grouped figure, and the per-question table would print one row for two
+    questions' draws."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    ids = [case.id for case in CASES]
+    assert len(ids) == len(set(ids))
+    assert len(ids) == 37
