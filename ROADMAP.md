@@ -545,7 +545,53 @@ list with no right answer written down yet.
   column's name implies. Scoring it properly would mean checking something the
   model has to supply itself, the way Q17's retired boundary-date check did.
   Not attempted here, and recorded so the column is not read as more than it
-  is. Eval run 9 found the same shape in a
+  is.
+
+  **Three designs, none chosen.** Written down so the choice is a pick rather
+  than a design session, and in the order of how much they claim.
+
+  The first, and the recommendation: score the coverage figures the tool
+  reported, derived at scoring time from the recorded payload rather than
+  written into the case. Every absence path in this project reports coverage,
+  which is the doctrine the clinical-records work broke four times: a tool
+  saying "not in this window" also says what window it does hold and how many
+  records it holds in all. Those are values, so the check becomes the same
+  shape as `number` and as Q36's verdict fix: pull `available_from`,
+  `available_to` and the total out of `step.result`, and require the answer to
+  carry them. A model relaying the tool's absence sentence without its figures
+  then fails, which is the behaviour the column is named for. It also avoids
+  the standing lesson about pinning dates, because nothing is pinned in the
+  case: the expectation comes from what the tool actually returned on that
+  draw, so it cannot go stale against the bed and cannot be read off the
+  question's own phrasing.
+
+  One caveat, checked against the real payloads rather than assumed. Two
+  shapes of absence exist and only one carries figures. `query_healthkit` on
+  an empty window returns `available_from` 2026-03-01, `available_to`
+  2026-03-07 and 7 records held, and `get_workouts` the same shape; but
+  `get_lab_trend` for an analyte the reports do not hold at all returns both
+  dates as null and a total of 0, because there is no range to state. So the
+  check has to split on that: where the tool reports a range, require it;
+  where the index holds none of the figure at all, there is no number for the
+  model to carry and the question needs its own expectation. Any question
+  whose answer the bed can satisfy either way would be measuring the bed.
+
+  The second: score the absence of a wrong claim rather than the presence of a
+  right one, by requiring that the answer attribute no figure to the window
+  the tool reported empty. It is the thing that actually matters and it is the
+  hardest to check mechanically, since it needs to know which figures in an
+  answer belong to which window. Worth revisiting only if the first design
+  turns out to pass answers that still mislead.
+
+  The third: keep the word check and add the first design beside it, so a
+  question passes only if it both mentions the absence and carries the
+  coverage. The least work and the least honest, since the word half still
+  scores the tool's vocabulary; its one merit is that no question's result
+  moves for a reason unrelated to the model.
+
+  Whichever is chosen, expect the column to drop from 37/37. That is
+  information rather than a regression: the current figure is partly measuring
+  the tools. Eval run 9 found the same shape in a
   second list and retired it the same way: a bare `diagnos*` token behind
   fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
   constitute a diagnosis", negation four words away) and a date quoted off the
