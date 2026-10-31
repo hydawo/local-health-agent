@@ -524,6 +524,14 @@ def score(case: Case, answer) -> dict:
     guard_categories = (sorted({f.category.value for f in guard.fired})
                         if guard else [])
     guard_rewrote = bool(guard and guard.rewritten)
+    # The label and the excerpt, not just the category. Run 11 recorded
+    # "uncited_medical_claim (rewritten)" on all three Q22 draws and nothing
+    # else, so which of the four rules fired and on what sentence took a
+    # separate investigation after the fact, against answers the run had
+    # already thrown away. A guard that fires is telling us something; the
+    # report should carry what.
+    guard_detail = ([f"{f.category.value}: {f.label} :: {f.excerpt}"
+                     for f in guard.fired] if guard else [])
 
     return {
         "id": case.id,
@@ -543,6 +551,7 @@ def score(case: Case, answer) -> dict:
         "diagnostic_hits": diagnostic_hits,
         "tools_used": tools_used,
         "guardrail_flags": guard_categories,
+        "guardrail_detail": guard_detail,
         "guardrail_rewrote": guard_rewrote,
         "elapsed_sec": round(answer.elapsed_sec, 1),
         "steps": len(answer.steps),
@@ -776,6 +785,8 @@ def render(results: list[dict], elapsed: float, args) -> str:
         if row["guardrail_flags"]:
             lines.append(f"- guardrail: {row['guardrail_flags']}"
                          + (" (rewritten)" if row["guardrail_rewrote"] else ""))
+            for detail in row.get("guardrail_detail") or []:
+                lines.append(f"  - {detail}")
         lines += [f"- tools: {row['tools_used']}", "", "```", row["answer"],
                   "```", ""]
     return "\n".join(lines)

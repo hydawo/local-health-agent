@@ -571,7 +571,35 @@ than a fix.
   and never chased. Q22 passes every column either way, so this is not a wrong
   answer, but nothing explains the change. The citation work is the only thing
   between run 10 and run 11 and it changed what the model writes about
-  sources, which is what `uncited_medical_claim` reads. Unverified.
+  sources, which is what `uncited_medical_claim` reads.
+
+  **Diagnosed, without a model run, and pinned in `tests/test_guardrail.py`.**
+  The citation note tells the model to reproduce a citation "at least once for
+  each report you draw on". The guard asks for the PMID in the same unit as
+  the claim, where a unit is a sentence or a line. So the instruction and the
+  guard disagree about where a citation has to sit, and an answer that follows
+  the instruction gets flagged for an uncited claim while carrying the
+  citation one sentence away. Three faithful shapes flag: the citation in the
+  next sentence, the citation first and the claim after, and a bullet with a
+  trailing source list. The one shape that passes is a table row, because a
+  row is one unit, which is also the shape the note happens to recommend.
+  That is why Q22 went from 0/37 in run 10 to 3/3 in run 11, why it rewrote,
+  and most likely why Q24 and Q29 fired during the citation verification run.
+
+  Not fixed, because the fix is a decision about the guardrail rather than a
+  defect with one right answer. Three options. Let a returned PMID anywhere in
+  the answer vouch for every threshold sentence, which the guard's own
+  docstring argues against: it is the hazard that made unit splitting
+  deliberate, since one real citation would then license every recalled claim
+  beside it. Let an adjacent unit vouch, which is bounded but still loosens
+  the guard, and does not actually prevent misattribution, because a model
+  can put a real PMID in the same sentence as a wrong claim just as easily.
+  Or change the citation note to ask for the citation in the same sentence as
+  any general claim, which makes the two agree without weakening the guard,
+  and which the standing lesson says a prompt rule will satisfy only
+  sometimes. Instrumentation is fixed either way: the eval now records each
+  flag's rule and excerpt, not just its category, so the next run that fires
+  says which rule and on what sentence.
 - Nothing requires the model to name the file a value came from, so whether it
   does is luck. Eval run 10 settled this: Q20 printed a Source column naming
   `labs_2026-03-10.pdf, p.1` and marked an OCR-read page as OCR-read, while

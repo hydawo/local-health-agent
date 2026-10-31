@@ -724,6 +724,7 @@ def _row(qid, *, draw=1, number=True, cited=True, gap=True, no_diag=True,
         "verdicts_seen": ["thin_on_one_side"] if verdict_scored else [],
         "missing_groups": [], "forbidden_found": [], "diagnostic_hits": [],
         "tools_used": ["get_lab_trend"], "guardrail_flags": [],
+        "guardrail_detail": [],
         "guardrail_rewrote": False, "elapsed_sec": elapsed, "steps": steps,
         "answer": f"answer for {qid} draw {draw}",
     }

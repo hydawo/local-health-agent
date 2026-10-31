@@ -491,3 +491,71 @@ def test_plural_pmid_label_with_no_returned_pmid_is_still_flagged():
                                      returned_pmids=RETURNED))
     assert flags
     assert flags[0].label == "cites a PMID the literature tool did not return"
+
+
+# --------------------------------------------------------------------------- #
+# Run 11's Q22 guardrail, diagnosed
+# --------------------------------------------------------------------------- #
+
+_RETURNED = frozenset({"42609254", "42613609"})
+
+
+def _uncited_threshold_flags(text):
+    return [f for f in guardrail.check(text, used_tools=True,
+                                       returned_pmids=_RETURNED)
+            if f.category is guardrail.Category.UNCITED]
+
+
+def test_a_citation_vouches_for_the_claim_in_its_own_sentence_only():
+    """Why the guard fired on all three Q22 draws of run 11.
+
+    It had fired 0/37 in run 10 and 0/20 in runs 2 and 3. The only change
+    between those runs and run 11 is the citation work, whose payload note
+    tells the model to reproduce a citation "at least once for each report you
+    draw on". The guard asks for it in the same unit as the claim. So the
+    instruction and the guard disagree about where a citation has to sit, and
+    an answer that follows the instruction can be flagged for an uncited
+    claim while carrying the citation one sentence away.
+
+    Every shape below is faithful and sourced from a PMID the tool returned
+    this turn. The last one passes only because a table row is one unit, which
+    is also the one shape the payload note happens to recommend.
+
+    This test records the behaviour rather than endorsing it. Widening the
+    guard is a decision about the guardrail, and ROADMAP #16 carries the
+    options.
+    """
+    same_unit = ("A systematic review reports that an HbA1c above 6.5% is "
+                 "considered diagnostic (Diabetes Care, 2026, PMID 42609254).")
+    assert not _uncited_threshold_flags(same_unit)
+
+    next_sentence = ("A systematic review reports that an HbA1c above 6.5% "
+                     "is considered diagnostic. That review is Diabetes "
+                     "Care, 2026, PMID 42609254.")
+    citation_first = ("Diabetes Care, 2026, PMID 42609254 was the most "
+                      "relevant result. It reports an HbA1c above 6.5% is "
+                      "considered diagnostic.")
+    trailing_sources = ("- An HbA1c above 6.5% is considered diagnostic for "
+                        "type 2 diabetes\nSources: Diabetes Care, 2026, "
+                        "PMID 42609254")
+    for text in (next_sentence, citation_first, trailing_sources):
+        flags = _uncited_threshold_flags(text)
+        assert flags, text
+        assert flags[0].label == "states a general clinical threshold"
+
+    table_row = ("| HbA1c | above 6.5% is considered diagnostic | "
+                 "Diabetes Care, 2026, PMID 42609254 |")
+    assert not _uncited_threshold_flags(table_row)
+
+
+def test_the_citation_note_and_the_guard_still_disagree():
+    """Couples the diagnosis to the string that causes it.
+
+    If the note is ever changed to ask for the citation in the same sentence
+    as a general claim, this fails and the test above should be revisited: the
+    conflict it documents would be gone.
+    """
+    from health_agent.agent.tools import CITATION_NOTE
+
+    assert "at least once for each report" in CITATION_NOTE
+    assert "same sentence" not in CITATION_NOTE

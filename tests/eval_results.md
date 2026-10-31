@@ -825,4 +825,28 @@ that an answer mentions an absence, and on those paths the words may be the
 tool's. Not fixed, because scoring it properly means asking for something the
 model has to supply itself, the way Q17's retired boundary-date check did.
 
-The guardrail on Q22 is still open and still undiagnosed.
+### The guardrail on Q22, diagnosed
+
+No model run was needed. The citation note tells the model to reproduce a
+citation "at least once for each report you draw on". The guard asks for the
+PMID in the same unit as the claim, where a unit is a sentence or a line. The
+two disagree about where a citation has to sit, so an answer that follows the
+instruction is flagged for an uncited claim while carrying its citation one
+sentence away.
+
+Three faithful shapes flag: the citation in the next sentence, the citation
+first with the claim after, and a bullet with a trailing source list. The one
+shape that passes is a table row, since a row is a single unit, and that is
+also the shape the note recommends. All four are pinned in
+`tests/test_guardrail.py`, along with a test that fails if the note is ever
+reworded, so the diagnosis cannot quietly stop applying.
+
+That accounts for Q22 going from 0/37 in run 10 to 3/3 here, for the rewrite,
+and most likely for the Q24 and Q29 fires during the citation verification
+run. The fix is a decision about the guardrail rather than a defect with one
+right answer, and ROADMAP #16 carries the three options.
+
+One thing is fixed regardless. This run reported `uncited_medical_claim
+(rewritten)` and nothing more, so which of the four rules fired and on what
+sentence took a separate investigation, against answers the run had already
+discarded. The eval now records each flag's rule and excerpt.
