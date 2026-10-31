@@ -1154,8 +1154,9 @@ def render(results: list[dict], elapsed: float, args) -> str:
     # a win that nothing checked.
     scored_gap = [r for r in results if r["gap_scored"]]
     needed_gap = [r for r in results if r["gap_required"]]
-    lines.append(f"- gap coverage actually scored: {len(scored_gap)}/"
-                 f"{len(needed_gap)} draws that reported an absence")
+    if needed_gap:
+        lines.append(f"- gap coverage actually scored: {len(scored_gap)}/"
+                     f"{len(needed_gap)} draws that reported an absence")
 
     scored_pmid = [r for r in results if r["pmid_scored"]]
     if scored_pmid:

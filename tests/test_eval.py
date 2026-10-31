@@ -1926,3 +1926,16 @@ def test_the_runner_still_requires_an_index_for_a_real_run():
                           capture_output=True, text=True)
     assert done.returncode != 0
     assert "--index is required" in done.stderr
+
+
+def test_a_run_where_no_tool_reported_an_absence_omits_the_gap_line():
+    """"0/0 draws that reported an absence" is noise. A single-question run
+    with no absence in it should not print a denominator of nothing."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    report = render([_row("Q1", gap_required=[])], 60.0, args)
+    assert "gap coverage actually scored" not in report
