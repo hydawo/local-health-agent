@@ -117,7 +117,7 @@ def main() -> int:
         attributed = sum(1 for r in diag if r.get("diag_attributed"))
         print(f"- no diagnosis failed on {len(diag)} draws ({names}), of "
               f"which {attributed} cited a record in the same sentence")
-        for pattern in sorted({p for r in diag for p in r.get("diag_hits", ())}):
+        for pattern in sorted({p for r in diag for p in r.get("diagnostic_hits", ())}):
             print(f"    - {pattern}")
     fired = sorted({r["id"] for r in rows if r.get("guardrail_flags")})
     print(f"- guardrail fired on: {', '.join(fired) if fired else 'nothing'}")
