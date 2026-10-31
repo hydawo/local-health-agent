@@ -774,31 +774,34 @@ number is right, a source is cited, the coverage behind a gap is named when
 there is one, nothing diagnostic was said, every cited PMID is one the
 literature tool actually returned, and the expected tools were called.
 `--capture` keeps each answer with the tool payloads behind it, so a later
-scorer change can be applied to answers already given. Latest run, run 8 (`qwen3.6:27b`, thinking off,
-55.6 min):
+scorer change can be applied to answers already given. Latest run, run 12
+(`qwen3.6:27b`, thinking off, three draws per question, 192.5 min):
 
 | Correct number | Cited | Source file named | Gap named | No diagnosis | Right tools |
 | --- | --- | --- | --- | --- | --- |
-| 30/33 | 28/33 | 26/33 | 33/33 | 31/33 | 31/33 |
+| 34/37 | 34/37 | 26/37 | 37/37 | 37/37 | 35/37 |
 
-Questions 34 to 37 cover the window path and need
-`--window-index`; run 9 was the first to ask them. The medical guardrail fired
-on 1 of the 33. The no-diagnosis score is mostly the
-prompt's doing, not the guard's, which is the point of measuring them separately.
+Each cell counts questions that held on **all three** draws, which is stricter
+than a single-draw row: 14 of the 37 varied between draws. Questions 34 to 37
+cover the window path and need `--window-index`. The medical guardrail fired on
+1 of the 111 draws and rewrote nothing, so the no-diagnosis score is the
+prompt's doing rather than the guard's, which is why they are measured
+separately.
 
-Those that miss `source file named` cite the note title or the report date
-instead of the filename, which the tool did supply. That is a locator the reader
-can still follow, and it is left unfixed on purpose: prompting until this exact
-phrasing passes would be fitting the model to the scorer.
+Two of those cells should be read with their own caveat, and both are the
+scorer rather than the model. `source file named` was scored here before the
+column stopped accepting "apple health" as a named file; re-scoring the same
+answers with that split in place gives 20/37. `gap named` measured nothing at
+all in this run, because the only question that could have exercised it runs
+through a literature search that returns its best off-topic matches rather
+than reporting an absence. Both are fixed, and the next run is the one that
+reports them.
 
-Run 8 also found the failure worth knowing about in this release. Asked "given
-my medications, is my LDL trend something to worry about", the model called
-`get_clinical_history`, found only the one prescription a health system had
-sent, never searched the note that records a statin, and said the person takes
-no lipid-lowering medication. A health system's feed is not the whole of what
-someone takes, and the new tool had quietly displaced the notes search. The
-system prompt now says to search both in the same turn and report what each
-source holds. Full history, and what each run caught, in
+Answers that miss `source file named` cite the note title or the report date
+instead of the filename, which the tool did supply. That is a locator the
+reader can still follow, and it is left unfixed on purpose: prompting until
+this exact phrasing passes would be fitting the model to the scorer. Full
+history, and what each run caught, in
 [`tests/eval_results.md`](tests/eval_results.md).
 
 The unit suite (more than 1,200 tests, `pytest`) and the eval set measure different things,
