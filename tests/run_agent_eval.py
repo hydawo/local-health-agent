@@ -717,6 +717,15 @@ def score(case: Case, answer) -> dict:
     # returned passes both. Same rule as the guard's, from the same two
     # functions, because a scorer with its own idea of which citations were
     # real would accept one the guard rejects.
+    #
+    # The returned set is the literature tool's findings only, which is the
+    # guard's rule too. On this bed that is exactly right: no fixture outside
+    # `tests/fixtures/literature/` contains a PMID, so a cited one either came
+    # from the corpus or was invented. On a real index a note or a report can
+    # quote a PMID, and then this column would fail an answer for repeating
+    # what a document says. The fix when that day comes is to say which it is,
+    # quoted or invented, by checking the other payloads, rather than to widen
+    # the set and lose the distinction.
     cited_pmids = guardrail_module.cited_pmids(text)
     pmid_unreturned = sorted(cited_pmids - returned_pmids(answer))
     pmid_scored = bool(cited_pmids)

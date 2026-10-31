@@ -716,7 +716,24 @@ list with no right answer written down yet.
   Not closed: the guard still only checks citations inside threshold
   sentences, so an invented citation on an ordinary sentence reaches the
   reader. The eval now fails it, which is how it will be noticed, but the
-  guardrail is where it should be stopped.
+  guardrail is where it should be stopped. Three ways, and it is a guardrail
+  change, so it is a decision rather than a fix:
+
+  - **Flag any PMID in the answer that no tool returned.** Strongest, and the
+    rule is exactly "this number was not in anything you were given". The
+    false positive is a note or report that quotes a PMID, which a real index
+    can hold and this bed cannot.
+  - **The same, but count a PMID appearing anywhere in the recorded payloads
+    as returned.** No false positive on a quoted citation, and it cannot tell
+    a fabrication from a repetition of something a document said.
+  - **Flag it, and say which it is** by checking the other payloads: invented,
+    or quoted from a document that is not the corpus. Most work, and it is the
+    only one that reports the difference rather than choosing which error to
+    make.
+
+  Recommended: the third. The first two are a trade between two kinds of
+  wrong, and the information needed to avoid the trade is already in the
+  recorded payloads.
 
 - **Three columns could read as a pass with nothing behind them, and two
   still can.** Found 2026-10-31 by taking the `gap` column's defect and
