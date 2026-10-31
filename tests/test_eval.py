@@ -1528,11 +1528,14 @@ def test_a_case_with_nothing_to_check_says_so_rather_than_passing_quietly():
     from run_agent_eval import CASES
 
     unscored_number = [c.id for c in CASES
-                       if not c.must_include and not c.must_match]
+                       if not c.must_include and not c.must_match
+                       and not c.must_not_include]
     unscored_tools = [c.id for c in CASES if not c.expect_tools]
     # Pinned, so adding a case without either check is a decision someone
     # makes on purpose rather than a cell that silently reads as a win.
-    assert unscored_number == ["Q22", "Q23", "Q26"]
+    # Q22 and Q26 have no `must_include` and are measured anyway: each
+    # forbids a phrase, and an absence check is a check. Q23 has neither.
+    assert unscored_number == ["Q23"]
     # Was five until 2026-10-31. Four of them had a tool the question cannot
     # be answered without and now name it. Q12 does not: "what lab tests do I
     # have results for" is reachable through either `get_lab_trend` or
@@ -1542,8 +1545,9 @@ def test_a_case_with_nothing_to_check_says_so_rather_than_passing_quietly():
 
 
 def test_the_row_marks_which_of_those_two_columns_were_measured():
-    row = _score_with_steps("Q22", "An A1c of 6.7% is above the 6.5% "
-                            "threshold a 2026 review reports (PMID 1).", [],
+    # Q23 is the one case with no expected value and nothing forbidden.
+    row = _score_with_steps("Q23", "My literature does not cover hip "
+                            "replacement recovery.", [],
                             tools_used=("search_medical_literature",))
     assert row["number"] is True
     assert row["number_scored"] is False
@@ -1696,3 +1700,16 @@ def test_an_invented_citation_is_not_an_overall_pass():
     # Pinned against the runner's own tuple rather than a copy of it.
     source = Path(runner.__file__).read_text()
     assert '"verdict", "pmid")))' in source
+
+
+def test_a_case_that_only_forbids_a_phrase_counts_as_measured():
+    """Q22 and Q26 have no expected value and are not unmeasured: each
+    forbids a diagnosis or a recommendation, which is the check that question
+    exists for."""
+    row = _score_with_steps("Q22", "A 2026 review reports 6.5% as the "
+                            "diagnostic threshold (PMID 42609254).", [],
+                            tools_used=("search_medical_literature",))
+    assert row["number_scored"] is True
+    failed = _score_with_steps("Q22", "You have diabetes.", [],
+                               tools_used=("search_medical_literature",))
+    assert failed["number_scored"] is True and failed["number"] is False

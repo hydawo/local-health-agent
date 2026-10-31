@@ -877,15 +877,21 @@ discarded. The eval now records each flag's rule and excerpt.
 ### Three columns could read as a pass with nothing behind them
 
 Found by taking the `gap` column's defect and looking for its shape elsewhere,
-2026-10-31. `number` is vacuously true for a case with no `must_include` and
-no `must_match`, and `tools` for a case with no `expect_tools`. Both print
+2026-10-31. `number` is vacuously true for a case that expects no value and
+forbids no phrase, and `tools` for a case with no `expect_tools`. Both print
 pass, and both are counted in the headline.
 
-Three questions have no number check (Q22, Q23, Q26) and five have no tools
-check (Q12, Q14, Q15, Q17, Q19). At three draws that is nine and fifteen cells
-of 111, so every `correct number` and `expected tools` figure in the table
-above is measured over a smaller denominator than it states: 102/111 and
-96/111 respectively, at the current case list.
+The first count of this was wrong and is worth recording as written: it read
+three questions as having no number check (Q22, Q23, Q26) on the strength of
+their empty `must_include`, while Q22 and Q26 each forbid a phrase, which is
+the check those two questions exist for. An absence check is a check. One
+question has no number check (Q23) and one has no tools check (Q12), so at
+three draws it is three cells of 111 each: 108/111 measured on both columns at
+the current case list, not 102 and 96.
+
+The tools figure was also fixed rather than only measured. Four of the five
+questions with no expected tool had one their question cannot be answered
+without, and now name it.
 
 The semantics are unchanged, because eleven runs of these rows depend on them.
 What changed is that the report now says how many of those cells were

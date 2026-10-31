@@ -674,7 +674,12 @@ def score(case: Case, answer) -> dict:
     # headline counts it. Recorded so a reader can tell those cells from the
     # ones the model earned; the semantics are unchanged, because eleven runs
     # of this row depend on them.
-    number_scored = bool(case.must_include or case.must_match)
+    # `must_not_include` counts: a case that forbids a phrase is checking
+    # something real, and the first version of this flag left Q22 and Q26 out
+    # on the strength of their empty `must_include`, which reported two
+    # questions as unmeasured while their forbidden lists were doing the work.
+    number_scored = bool(case.must_include or case.must_match
+                         or case.must_not_include)
 
     source_ok = _any(SOURCE_PATTERNS, text)
     dated_ok = _any(DATE_PATTERNS, text)
