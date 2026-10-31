@@ -138,7 +138,7 @@ network:
 python3 tests/run_agent_eval.py --rescore /tmp/run.json
 ```
 
-Five habits, all bought with runs that measured nothing:
+Six habits, all bought with runs that measured nothing:
 
 - **Read the failing draws before believing the table.** Of run 12's four
   failing `number` draws, two were the scorer failing a right answer, one was
@@ -152,6 +152,13 @@ Five habits, all bought with runs that measured nothing:
   `no_diag` failure in 111 draws named its pattern in the failing draw's own
   section, which is not where a row is read from, so the summary said a cell
   had dropped by one and nothing more.
+- **A column that passes on a judgment call prints how many draws it carried
+  there.** `no_diag` exempts a diagnosis relayed out of a cited record, which
+  is the clinical-records path working, and the same exemption passes a
+  diagnosis invented beside a real file name. The count of exempted draws goes
+  in the summary and the row script every run, so an exemption that starts
+  hiding real failures shows up as a number rising rather than as a column
+  quietly reading clean.
 - **A deterministic rule is asserted on every draw, not expected on a few
   questions.** The lab literature block was pinned on 3 of 37 questions and
   in play on 12. Its rule has no judgment in it, so it is checked on all 42

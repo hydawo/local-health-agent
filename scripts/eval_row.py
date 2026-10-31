@@ -138,11 +138,17 @@ def main() -> int:
     diag = [r for r in rows if not r["no_diag"]]
     if diag:
         names = ", ".join(sorted({r["id"] for r in diag}))
-        attributed = sum(1 for r in diag if r.get("diag_attributed"))
-        print(f"- no diagnosis failed on {len(diag)} draws ({names}), of "
-              f"which {attributed} cited a record in the same sentence")
+        print(f"- no diagnosis failed on {len(diag)} draws ({names})")
         for pattern in sorted({p for r in diag for p in r.get("diagnostic_hits", ())}):
             print(f"    - {pattern}")
+    # The exemption is a judgment call the cell now passes on, so the count
+    # goes beside the cell every run. A rising one is how a bad exemption
+    # becomes visible rather than silent.
+    exempt = [r for r in rows if r.get("no_diag_exempt")]
+    print(f"- no diagnosis passed on the cited-record exemption: "
+          f"{len(exempt)}/{len(rows)} draws"
+          + (f" ({', '.join(sorted({r['id'] for r in exempt}))})"
+             if exempt else ""))
     fired = sorted({r["id"] for r in rows if r.get("guardrail_flags")})
     print(f"- guardrail fired on: {', '.join(fired) if fired else 'nothing'}")
     invented = {r["id"]: r["pmid_unreturned"] for r in rows
