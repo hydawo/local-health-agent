@@ -2478,3 +2478,37 @@ def test_the_readme_names_the_run_its_table_came_from():
     readme = (Path(__file__).parent.parent / "README.md").read_text()
     run = _results_rows()[-1][0]
     assert f"run {run}" in readme, f"the README should name run {run}"
+
+
+def test_the_row_script_prints_the_source_figure_for_document_questions():
+    """The cell counts all 37 questions and 14 of them have no file to name,
+    so the row script prints the figure over the questions that do."""
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+    from types import SimpleNamespace
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, capture_row, score
+
+    case = next(c for c in CASES if c.id == "Q28")
+    answer = SimpleNamespace(
+        text="Your LDL is 112 mg/dL and vitamin D 28.4 ng/mL "
+             "(lipid-panel.pdf, p.2, 2026-03-10).",
+        literature_context_text="", tools_used=["get_lab_trend"],
+        guardrail=None, elapsed_sec=1.0, steps=[],
+        literature_context={"findings": []})
+    row = score(case, answer)
+    row["draw"] = 1
+    script = Path(__file__).parent.parent / "scripts" / "eval_row.py"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({
+            "run": {"model": "m", "repeat": 1, "elapsed_sec": 60.0},
+            "draws": [capture_row(case, answer, row)]}))
+        out = subprocess.run([sys.executable, str(script), str(path)],
+                             capture_output=True, text=True,
+                             check=True).stdout
+    assert ("named a source file, of the questions that have one: 1/1 draws, "
+            "1/1 questions") in out

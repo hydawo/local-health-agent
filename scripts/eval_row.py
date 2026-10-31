@@ -94,6 +94,17 @@ def main() -> int:
                     if any(len({d[k] for d in draws}) > 1 for k in CLEAN))
     print(f"- varied between draws: {len(varied)}/{len(groups)}"
           + (f" ({', '.join(varied)})" if varied else ""))
+    # The cell counts every question, and 14 of them have no file in
+    # existence to name, so the figure that means something goes beside it.
+    document = [r for r in rows if r.get("needs_source")]
+    if document:
+        named = sum(1 for r in document if r["source_named"])
+        doc_q = {r["id"] for r in document}
+        held = sum(1 for qid in doc_q
+                   if all(r["source_named"] for r in document
+                          if r["id"] == qid))
+        print(f"- named a source file, of the questions that have one: "
+              f"{named}/{len(document)} draws, {held}/{len(doc_q)} questions")
     uncitable = sorted({r["id"] for r in rows if r.get("cited_uncitable")})
     print("- cited failed with no locator in the payloads: "
           + (", ".join(uncitable) if uncitable else "nothing"))
