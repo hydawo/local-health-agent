@@ -88,6 +88,9 @@ def main() -> int:
                     if any(len({d[k] for d in draws}) > 1 for k in CLEAN))
     print(f"- varied between draws: {len(varied)}/{len(groups)}"
           + (f" ({', '.join(varied)})" if varied else ""))
+    echoed = sorted({r["id"] for r in rows if r.get("cited_echo")})
+    print("- cited on nothing but the date the question supplied: "
+          + (", ".join(echoed) if echoed else "nothing"))
     fired = sorted({r["id"] for r in rows if r.get("guardrail_flags")})
     print(f"- guardrail fired on: {', '.join(fired) if fired else 'nothing'}")
     invented = {r["id"]: r["pmid_unreturned"] for r in rows

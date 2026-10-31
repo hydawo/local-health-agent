@@ -405,6 +405,41 @@ DATE_PATTERNS = [
 ]
 
 
+def _question_dates(question: str) -> list[str]:
+    """Regexes for every date the question itself hands the model.
+
+    Both forms: the date as written, and, for an ISO date, every shape a
+    person writes it in, so "on 2026-03-03" and "on March 3" are recognised
+    as the same date the question already contained.
+    """
+    out: list[str] = []
+    for iso in re.findall(r"\b\d{4}-\d{2}-\d{2}\b", question):
+        out += _date_alternatives(iso)
+    for pattern in DATE_PATTERNS:
+        for found in re.findall(pattern, question, re.IGNORECASE):
+            out.append(re.escape(found).replace(r"\ ", r"\s+"))
+    return out
+
+
+def _cited_on_the_questions_own_date(question: str, text: str) -> bool:
+    """Whether the only attribution in the answer is a date it was handed.
+
+    `cited` accepts a date for a HealthKit answer, which has no file to name,
+    and seven of the questions name a date themselves. An answer that repeats
+    it has attributed nothing the question did not already say. This does not
+    change the score: eleven runs of that row read the same way, and the
+    column's floor was chosen on purpose. It is measured and reported, which
+    is what the same shape got everywhere else it was found.
+    """
+    found = [m for pattern in DATE_PATTERNS
+             for m in re.findall(pattern, text, re.IGNORECASE)]
+    if not found:
+        return False
+    asked = _question_dates(question)
+    return all(any(re.fullmatch(a, one, re.IGNORECASE) for a in asked)
+               for one in found)
+
+
 @dataclass
 class Case:
     id: str
@@ -796,6 +831,10 @@ def score(case: Case, answer) -> dict:
     # file to name, so the origin or the period is the citation.
     cited_ok = source_ok if case.needs_source else (source_ok or origin_ok
                                                     or dated_ok)
+    # Measured, not scored: a `cited` cell earned by nothing but the date the
+    # question handed over.
+    cited_echo = (cited_ok and not source_ok and not origin_ok
+                  and _cited_on_the_questions_own_date(case.question, text))
     # The coverage the tool reported beside the absence, which the model has
     # to carry itself. See `_coverage_claims`: the old check matched the
     # absence vocabulary that the tools themselves write.
@@ -887,6 +926,7 @@ def score(case: Case, answer) -> dict:
         # exists to report: run 12's gap column measured nothing, and a
         # denominator of claims would have printed nothing rather than 0/6.
         "gap_case": case.needs_gap,
+        "cited_echo": cited_echo,
         "no_diag": no_diag_ok,
         "tools": tools_ok,
         "tools_scored": tools_scored,
@@ -1252,6 +1292,12 @@ def render(results: list[dict], elapsed: float, args) -> str:
         if unscorable:
             lines.append(f"- nothing to score the gap against on: "
                          f"{', '.join(unscorable)}")
+
+    echoed = [r for r in results if r["cited_echo"]]
+    if echoed:
+        names = ", ".join(sorted({r["id"] for r in echoed}))
+        lines.append(f"- cited on nothing but the date the question supplied: "
+                     f"{len(echoed)}/{len(results)} draws ({names})")
 
     scored_pmid = [r for r in results if r["pmid_scored"]]
     if scored_pmid:

@@ -733,6 +733,7 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
         "gap_case": (gap_case if gap_case is not None
                      else (gap_scored or not gap
                            or bool(gap_required))),
+        "cited_echo": False,
         "number_scored": number_scored, "pmid": pmid,
         "pmid_scored": pmid_scored,
         "pmid_unreturned": pmid_unreturned or [],
@@ -2119,3 +2120,59 @@ def test_every_gap_case_in_the_list_is_scorable_on_some_real_payload():
             claims = (_coverage_claims(steps)
                       + _off_topic_claims(steps, case.question))
             assert any(c.groups for c in claims), (case.id, steps)
+
+
+def test_a_cited_cell_earned_only_on_the_questions_date_is_reported():
+    """`cited` accepts a date for a HealthKit answer, which has no file to
+    name, and seven questions name a date themselves. Repeating it attributes
+    nothing the question did not already say. The score is unchanged on
+    purpose, eleven runs of that row depend on it, and the report says how
+    many cells were earned that way."""
+    echo = _score_with_steps(
+        "Q2", "You took 9,412 steps on 2026-03-03.", [])
+    assert echo["cited"], "still a pass, deliberately"
+    assert echo["cited_echo"]
+
+    other_form = _score_with_steps(
+        "Q2", "You took 9,412 steps on March 3.", [])
+    assert other_form["cited_echo"], "the same date, written out"
+
+    named = _score_with_steps(
+        "Q2", "Apple Health recorded 9,412 steps on 2026-03-03.", [])
+    assert not named["cited_echo"], "named where the figure came from"
+
+    wider = _score_with_steps(
+        "Q2", "You took 9,412 steps on 2026-03-03; the week runs "
+        "2026-03-01 to 2026-03-07.", [])
+    assert not wider["cited_echo"], "named a date the question did not"
+
+
+def test_a_question_with_no_date_of_its_own_cannot_echo_one():
+    row = _score_with_steps("Q6", "You went from 82 kg on 2026-01-04 to "
+                            "79 kg on 2026-03-01.", [])
+    assert not row["cited_echo"]
+
+
+def test_the_report_names_the_questions_cited_on_their_own_date():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q2"), _row("Q3")]
+    rows[0]["cited_echo"] = True
+    report = render(rows, 60.0, args)
+    assert ("cited on nothing but the date the question supplied: 1/2 draws "
+            "(Q2)") in report
+
+
+def test_the_echo_line_stays_out_when_no_cell_was_earned_that_way():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    report = render([_row("Q2")], 60.0, args)
+    assert "cited on nothing but the date" not in report
