@@ -2316,6 +2316,59 @@ def test_a_comparison_with_values_on_both_sides_claims_nothing():
     assert not row["gap_scored"]
 
 
+def test_every_comparison_question_pins_the_verdict_it_expects():
+    """`verdict` was pinned on one question of 37 and reads the tool's own
+    answer off the payload, which is the one check in the suite that cannot
+    be satisfied by prose. Run 13's Q35 draw 3 is what it is for: the tool
+    came back `missing_measure_on_one_side` and the model faithfully told the
+    person none of their 21 cycling workouts had a duration recorded. Pinned,
+    the column names the tool; unpinned, it read as the model's mistake.
+
+    Q37 stays unpinned. It needs an anchor date the index does not carry, so
+    whether a comparison runs at all is the model's to decide."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    expected = {"Q19": "insufficient_data", "Q34": "ok", "Q35": "ok",
+                "Q36": "thin_on_one_side"}
+    by_id = {c.id: c for c in CASES}
+    for qid, verdict in expected.items():
+        assert by_id[qid].expect_verdict == verdict, qid
+    assert by_id["Q37"].expect_verdict is None
+    # Every pinned verdict has to be one the tool can actually return.
+    from health_agent.store.windows import VERDICTS
+    for qid, verdict in expected.items():
+        assert verdict in VERDICTS, f"{qid} pins an unknown verdict"
+
+
+def test_a_comparison_that_lost_its_measure_fails_the_verdict():
+    """The failing shape, scored rather than described: a run that comes back
+    with the wrong verdict fails the column even when the prose is a faithful
+    report of it."""
+    row = _score_with_steps(
+        "Q35", "None of your 21 cycling workouts have a duration recorded, "
+        "so I cannot give weekly minutes of 90 or 135 for either month.",
+        [_step("compare_windows", {"activity": "Cycling", "measure": "x"},
+               {"comparable": {"verdict": "missing_measure_on_one_side"}})],
+        tools_used=("compare_windows",))
+    assert row["verdict_scored"]
+    assert not row["verdict"]
+
+
+def test_a_pinned_verdict_is_not_satisfied_by_never_asking():
+    """Now that three more questions pin a verdict, a draw that never called
+    the comparison has to fail the column rather than pass it for want of
+    anything to compare. Run 13's Q37 draw 3 is that shape: it asked the
+    person for the anchor date and ran nothing."""
+    row = _score_with_steps("Q35", "I would need to know which measure you "
+                            "want before I can compare those months.", [],
+                            tools_used=("get_workouts",))
+    assert row["verdict_scored"]
+    assert not row["verdict"]
+    assert row["verdicts_seen"] == []
+
+
 def test_a_clean_question_says_how_many_checks_it_was_eligible_for():
     """"Clean" is every check passing, and a check with nothing to check
     passes. In run 13, 19 of the 26 clean questions were measured on 4 of the

@@ -721,6 +721,12 @@ CASES: list[Case] = [
          # a dated event, and in run 13 all three draws reached for it and
          # failed a column that named only its predecessor.
          expect_tools=[("query_healthkit", "compare_windows")],
+         # Pinned for the reason Q36's comment gives: a question that exists
+         # to test how a thwarted comparison is reported stops testing
+         # anything if the fixture drifts until the windows are comparable,
+         # and nothing in the answer would show it. There is no activity
+         # after the panel date, so the verdict is fixed by the index.
+         expect_verdict="insufficient_data",
          needs_gap=True),
     Case("Q20", "What do I know about my cholesterol overall?",
          must_include=[["186"], ["112"], ["52"]],
@@ -828,10 +834,17 @@ CASES: list[Case] = [
     Case("Q34", "What did my resting heart rate do in the week either side of "
                 "2023-02-18?",
          must_include=[["63"], ["66.5"]],
+         expect_verdict="ok",
          expect_tools=["compare_windows"], window_index=True),
     Case("Q35", "How did my weekly cycling minutes in March 2026 compare with "
                 "March 2025?",
          must_include=[["90"], ["135"]],
+         # Run 13's third draw asked for a measure key the index does not
+         # hold, got a refusal back, and told the person none of their 21
+         # cycling workouts had a duration recorded while the other two draws
+         # computed it. The prose was a faithful report of the payload, so
+         # only the verdict can catch it, and only off the payload.
+         expect_verdict="ok",
          expect_tools=["compare_windows"], window_index=True),
     # Q36 asks how a refusal gets reported, and run 11 showed a phrase list
     # cannot score that. Seven English paraphrases of "incomparable" failed two

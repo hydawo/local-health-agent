@@ -1149,7 +1149,10 @@ report prints prose. These are the columns that depended on them.
   a PMID the literature tool did not return.
 - **`verdict` measured Q36's three draws and passed all three**, so the tool
   returned the refusal the question exists to test. Run 12's row carried this
-  cell as a pass it had no way to check.
+  cell as a pass it had no way to check. Q19, Q34 and Q35 are pinned now too,
+  on the strength of what Q35 turned out to be hiding, which takes the column
+  from 3 of 111 draws to 12. Re-scored that way, Q35's third draw fails it
+  and names `missing_measure_on_one_side` as the reason.
 - **`context` measured Q28, Q29 and Q30 and passed**, including the Q29 draw
   that run 11 failed.
 
@@ -1161,11 +1164,15 @@ check passes. Of run 13's 26 clean questions, 19 were measured on 4 of those
 
 | checks measured | clean questions |
 | --- | --- |
-| 4 of 8 | 19 |
-| 5 of 8 | 6 |
+| 4 of 8 | 18 |
+| 5 of 8 | 7 |
 | 6 of 8 | 1 |
 
-`verdict` is pinned on one question of 37, `context` on three, and `pmid` is
+(19, 6 and 1 before Q19, Q34 and Q35 pinned their verdicts, which is the
+only lever this table has: a check is measured on a question because the
+question asked for it.)
+
+`verdict` was pinned on one question of 37, `context` on three, and `pmid` is
 only checkable on a draw that cited one, which is 16 of 111. Those are honest
 denominators for what each column asks, but their conjunction is the headline
 cell, and a reader takes 26/37 as 26 questions fully right. The definition is
