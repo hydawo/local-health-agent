@@ -651,6 +651,11 @@ def score(case: Case, answer) -> dict:
                 if not re.search(pattern, text, re.IGNORECASE)]
     forbidden = [bad for bad in case.must_not_include if bad.lower() in combined_lowered]
     number_ok = not missing and not forbidden
+    # A case with no value to check passes this column on every draw, and the
+    # headline counts it. Recorded so a reader can tell those cells from the
+    # ones the model earned; the semantics are unchanged, because eleven runs
+    # of this row depend on them.
+    number_scored = bool(case.must_include or case.must_match)
 
     source_ok = _any(SOURCE_PATTERNS, text)
     dated_ok = _any(DATE_PATTERNS, text)
@@ -677,6 +682,7 @@ def score(case: Case, answer) -> dict:
 
     tools_used = answer.tools_used
     tools_ok = all(t in tools_used for t in case.expect_tools)
+    tools_scored = bool(case.expect_tools)
 
     verdicts = [step.result.get("comparable", {}).get("verdict")
                 for step in answer.steps if step.name == "compare_windows"
@@ -708,6 +714,7 @@ def score(case: Case, answer) -> dict:
     return {
         "id": case.id,
         "number": number_ok,
+        "number_scored": number_scored,
         "cited": cited_ok,
         "source_named": source_ok,
         "gap": gap_ok,
@@ -716,6 +723,7 @@ def score(case: Case, answer) -> dict:
         "gap_required": [c.label for c in claims],
         "no_diag": no_diag_ok,
         "tools": tools_ok,
+        "tools_scored": tools_scored,
         "verdict": verdict_ok,
         "verdict_scored": case.expect_verdict is not None,
         "verdicts_seen": verdicts,
@@ -1042,6 +1050,20 @@ def render(results: list[dict], elapsed: float, args) -> str:
     if scored_context:
         count = sum(1 for r in scored_context if r["context"])
         lines.append(f"- literature block as expected: {count}/{len(scored_context)}")
+
+    # The two columns that can read as a pass with nothing behind them: a
+    # case with no expected value, and one with no expected tools. The gap
+    # column had the same shape and this is the same line for it, so the
+    # headline figures above can be read against what was actually checked.
+    for key, label in (("number", "correct number"),
+                       ("tools", "expected tools")):
+        scored = [r for r in results if r[f"{key}_scored"]]
+        if len(scored) == len(results):
+            continue
+        blank = sorted({r["id"] for r in results if not r[f"{key}_scored"]})
+        lines.append(f"- {label} actually scored: {len(scored)}/"
+                     f"{len(results)} draws (nothing to check on "
+                     f"{', '.join(blank)})")
 
     # How many of those gap cells were measured at all. The column reads True
     # when a question is not a gap question, and also when a tool reported an

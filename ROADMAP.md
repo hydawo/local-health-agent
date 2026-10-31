@@ -695,6 +695,24 @@ list with no right answer written down yet.
   is its own base and names no aggregate, rather than being labelled an
   aggregate of something else. That is the case the three copies agreed on
   only because no real export produces it.
+- **Three columns could read as a pass with nothing behind them, and two
+  still can.** Found 2026-10-31 by taking the `gap` column's defect and
+  looking for its shape elsewhere in the scorer. `number` is vacuously true
+  for a case with no `must_include` and no `must_match` (Q22, Q23, Q26), and
+  `tools` for a case with no `expect_tools` (Q12, Q14, Q15, Q17, Q19). Both
+  print pass and both are counted in the headline, so at three draws nine and
+  fifteen cells of 111 were wins nothing checked: `correct number` is measured
+  over 102 draws and `expected tools` over 96, neither of which the figure
+  said.
+
+  The report now says how many of each were measured and names the questions
+  with nothing to check, which is the line the `gap` column already carries.
+  The pass semantics are deliberately unchanged, because eleven runs of those
+  rows depend on them, and a test pins both lists so adding a case with
+  neither check is a decision rather than a quiet cell. Giving those eight
+  questions real expectations is the open work; Q22 and Q23 are the
+  interesting ones, since what a correct answer must carry there is a refusal
+  and a coverage statement rather than a value.
 - Every per-question eval result in this repository is a single draw, and the
   width of that distribution has never been measured. Asked five times on one
   unchanged commit, Q27 called `search_records` three times out of five, so

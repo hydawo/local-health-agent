@@ -874,6 +874,29 @@ One thing is fixed regardless. This run reported `uncited_medical_claim
 sentence took a separate investigation, against answers the run had already
 discarded. The eval now records each flag's rule and excerpt.
 
+### Three columns could read as a pass with nothing behind them
+
+Found by taking the `gap` column's defect and looking for its shape elsewhere,
+2026-10-31. `number` is vacuously true for a case with no `must_include` and
+no `must_match`, and `tools` for a case with no `expect_tools`. Both print
+pass, and both are counted in the headline.
+
+Three questions have no number check (Q22, Q23, Q26) and five have no tools
+check (Q12, Q14, Q15, Q17, Q19). At three draws that is nine and fifteen cells
+of 111, so every `correct number` and `expected tools` figure in the table
+above is measured over a smaller denominator than it states: 102/111 and
+96/111 respectively, at the current case list.
+
+The semantics are unchanged, because eleven runs of these rows depend on them.
+What changed is that the report now says how many of those cells were
+measured and names the questions that have nothing to check, the same line
+the gap column already carries. Pass rates in rows above this note should be
+read with that in mind; the rows are not wrong, they are over a denominator
+that was never stated.
+
+A test pins both lists, so adding a case with neither check is a decision
+someone makes on purpose.
+
 ### What the model sees differently since run 11
 
 Run 12 is not a like-for-like rerun of run 11, and the reason is written down

@@ -713,8 +713,9 @@ def test_q37_scores_the_decline_not_the_vocabulary():
         assert not _score_q37(text)["number"], text
 
 
-def _row(qid, *, draw=1, number=True, cited=True, gap=True, gap_scored=False,
-         gap_required=None, no_diag=True,
+def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
+         gap=True, gap_scored=False,
+         gap_required=None, no_diag=True, tools_scored=True,
          tools=True, context=True, context_scored=False, verdict=True,
          verdict_scored=False, steps=1, elapsed=10.0):
     return {
@@ -724,7 +725,8 @@ def _row(qid, *, draw=1, number=True, cited=True, gap=True, gap_scored=False,
         "gap_required": (gap_required if gap_required is not None
                          else (["coverage 2026-03-01 to 2026-03-09"]
                                if gap_scored or not gap else [])),
-        "no_diag": no_diag, "tools": tools,
+        "number_scored": number_scored,
+        "no_diag": no_diag, "tools": tools, "tools_scored": tools_scored,
         "context": context, "context_scored": context_scored,
         "verdict": verdict, "verdict_scored": verdict_scored,
         "verdicts_seen": ["thin_on_one_side"] if verdict_scored else [],
@@ -1503,3 +1505,58 @@ def test_a_capture_file_round_trips_through_json():
     reloaded = _json.loads(_json.dumps({"draws": [captured]}))
     row = rescore(reloaded["draws"])[0]
     assert row["gap"] and row["id"] == "Q19"
+
+
+# --------------------------------------------------------------------------- #
+# Columns that read as a pass while measuring nothing
+# --------------------------------------------------------------------------- #
+#
+# The gap column's defect, found in two more columns by looking for the same
+# shape. `number` is vacuously true for a case with no `must_include` and no
+# `must_match`, and `tools` for a case with no `expect_tools`. Both print
+# "pass" and both are counted in the headline, so the figure is inflated by
+# construction. Three questions have no number check and five have no tools
+# check, which at three draws is twenty-four cells a reader cannot tell from
+# cells the model earned.
+
+def test_a_case_with_nothing_to_check_says_so_rather_than_passing_quietly():
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    unscored_number = [c.id for c in CASES
+                       if not c.must_include and not c.must_match]
+    unscored_tools = [c.id for c in CASES if not c.expect_tools]
+    # Pinned, so adding a case without either check is a decision someone
+    # makes on purpose rather than a cell that silently reads as a win.
+    assert unscored_number == ["Q22", "Q23", "Q26"]
+    assert unscored_tools == ["Q12", "Q14", "Q15", "Q17", "Q19"]
+
+
+def test_the_row_marks_which_of_those_two_columns_were_measured():
+    row = _score_with_steps("Q22", "An A1c of 6.7% is above the 6.5% "
+                            "threshold a 2026 review reports (PMID 1).", [],
+                            tools_used=("search_medical_literature",))
+    assert row["number"] is True
+    assert row["number_scored"] is False
+    assert row["tools_scored"] is True
+
+    scored = _score_with_steps("Q20", "LDL 112, HDL 52, total 186 "
+                               "(labs_2026-03-10.pdf, p.1).", [],
+                               tools_used=("get_lab_trend",))
+    assert scored["number_scored"] is True and scored["tools_scored"] is True
+
+
+def test_the_report_names_the_questions_those_columns_do_not_measure():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q20"), _row("Q22", number_scored=False, tools_scored=False)]
+    report = render(rows, 60.0, args)
+    assert "correct number actually scored: 1/2 draws (Q22 has no value to "
+    assert "correct number actually scored: 1/2" in report
+    assert "expected tools actually scored: 1/2" in report
+    assert "Q22" in report
