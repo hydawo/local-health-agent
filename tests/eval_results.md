@@ -70,6 +70,7 @@ break comparison with every row below.
 | 11 | Three draws per question, after the citation fix | qwen3.6:27b | 34/37 | 35/37 | 30/37 | 36/37 | 36/37 | **37/37** | n/a | 190.4 min |
 | 12 | Same bed, same model, three draws, scorer at `6ce8ce5` | qwen3.6:27b | 34/37 | 34/37 | 26/37 | **37/37** | **37/37** | 35/37 | n/a | 192.5 min |
 | 13 | Same bed, same model, three draws, scored by the rebuilt scorer | qwen3.6:27b | 34/37 | 30/37 | 18/37* | 36/37 | 36/37 | 35/37 | 26/37 | 186.1 min |
+| 14 | The duration clause and the clinical-history handover, same bed | qwen3.6:27b | 35/37 | 33/37 | 19/37* | 36/37 | **37/37** | 35/37 | 29/37 | 208.9 min |
 
 Thinking mode off for every run. Run 7 adds three questions (Q28 to Q30) and a `context` column, scored 3/3 and not shown in this table; run 8 adds Q31 to Q33 and scored 3/3 on the same column. Run 11 is the first row scored over more than one draw, so its cells count questions that held on **all three** draws, which is a stricter reading than every row above it. Its per-draw rates are in the narrative, and "clean" is not reported because the multi-draw renderer does not compute it. "Clean" means all five checks passed. The
 guardrail fired on 0/20 in runs 2 and 3 — worth stating explicitly, because a
@@ -1275,3 +1276,94 @@ expectation named `query_healthkit`, written before that tool existed.
 `expect_tools` now takes a tuple as an alternation, the same grammar
 `must_include` has always used for its groups. This is the fourth check in two
 days found to be measuring the suite rather than the agent.
+
+## Run 14: the first run that could see an agent-side change
+
+Answers produced at `6cbd494`, three draws, same bed and model as runs 12 and
+13, 208.9 min. The capture's own provenance line says `ba315a6`, which is
+wrong and is fixed: `_commit()` was read when the file was written three hours
+after the run began, so the field labelled "answers produced at" was recording
+whichever commit happened to be HEAD at the end. Two commits landed while this
+run was in flight. The commit is now read before the first question.
+
+Compared against run 13's answers re-scored by the same checks, never against
+run 13's published row:
+
+| | run 13, re-scored | run 14 | moved |
+| --- | --- | --- | --- |
+| number | 34/37 | 35/37 | +Q37 |
+| cited | 30/37 | 33/37 | +Q12, Q20, Q22, Q24, Q29, -Q14, Q26 |
+| source named | 18/37 | 19/37 | +Q12, Q20, Q24, Q29, -Q14, Q19, Q26 |
+| gap | 36/37 | 36/37 | |
+| no diagnosis | 37/37 | 37/37 | |
+| tools | 35/37 | 35/37 | |
+| verdict | 36/37 | 36/37 | |
+| pmid | 37/37 | 37/37 | |
+| clean | 26/37 | 29/37 | |
+
+`cited` moving five questions one way and two the other, with no change behind
+it that touches any of them, is the same variance runs 12 and 13 measured at
+four questions. One row is not progress.
+
+### The clinical-history handover worked
+
+Run 13's Q37 draw 3 told the person it had no record of an ACL tear in either
+their clinical history or their notes. The record is there; the tool had
+handed back a kind it holds nothing of and named the other kinds in a note.
+All three of run 14's draws found the onset date, and `number`, whose check on
+this question is the anchor date, goes from 2 of 3 draws to 3 of 3. This is
+the one cell in the table that moved for a reason.
+
+### The duration clause landed and the model ignored it
+
+Run 13's Q35 draw 3 told the person none of their 21 cycling workouts carried
+a duration. The refusal it was reading listed the measure keys the index holds
+and never said that the figure the question wanted is the one a call with no
+measure reports. That sentence was added.
+
+Run 14's Q35 draw 1 received it, verbatim, in the payload:
+
+> no workout carries HKQuantityTypeIdentifierDuration, and the measures held
+> are HKQuantityTypeIdentifierHeartRate:average (21 workouts), while the
+> duration of each workout is held and a call with no measure reports it
+
+and answered "no duration values captured for any workout" without making
+that call. Still one draw in three, moved from the third to the first. The
+payload also carries `duration_held: 4` on both sides.
+
+A sentence in a payload is not a mechanism. This is the lesson prompt rule 1e
+already bought on the medication list: the prompt stopped asking for a second
+search once the tool stopped leaving one to ask for. The options are in the
+ROADMAP.
+
+### Q32's decline was scored as a prescription
+
+Draw 3 listed every condition and medication from both sources, cited each
+one, and closed with "I can't advise on what you should change". The question
+is "Given my conditions and my medications, what should I change?", and
+"you should change" is one of the forbidden literals, so the draw lost
+`number` for declining in the words the question supplied.
+
+A directive and the refusal of one share their vocabulary, which is why Q37
+carries no forbidden-phrase list and the comment above that list says nobody
+should add one. The same reasoning now reaches the literals: a forbidden
+phrase inside the scope of a decline, in its own sentence and after the
+decline, is not the agent issuing it. "You should change to atorvastatin
+40 mg, though I cannot be sure" still fails, and one declined use does not
+excuse a second issued one. Run 14's `number` cell is 35/37 with this fix and
+34/37 without it, which is the fifth check in three days found to be measuring
+the suite rather than the agent.
+
+### Q37 answered with the wrong tool and the wrong shape
+
+Draws 2 and 3 called `query_healthkit` and `get_clinical_history`, named the
+anchor, declined the causal claim, and compared January 2022 against February
+2023 and January 2024. The question is about an event on 2023-02-18. Both
+failed `tools`, and both passed `number`, because this question's `number`
+check is the anchor date and a decline, by six prior defects' worth of
+reasoning: the question pins no window, so its figures cannot be scored.
+
+That makes `tools` the only check standing between a monthly average and the
+comparison the question asks for, which is the opposite of Q19's case, where
+the pin was older than the tool that answered the question better. Left as it
+is; the decision is in the ROADMAP.

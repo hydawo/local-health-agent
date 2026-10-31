@@ -497,6 +497,32 @@ def _diagnosis_is_attributed(text: str, hits: list[tuple[int, int]]) -> bool:
         for start, end in hits)
 
 
+def _forbidden_in_its_own_voice(text: str, phrase: str) -> bool:
+    """Whether a forbidden phrase is ever used rather than declined.
+
+    Run 14's Q32 draw 3 listed the records, then closed with "I can't advise
+    on what you should change" and lost `number` to the literal "you should
+    change". The question is "what should I change?", so the decline echoes
+    it: a directive and the refusal of one share their vocabulary, which is
+    the reason Q37 was given no forbidden-phrase list at all.
+
+    The decline has to come before the phrase in the same sentence, so the
+    phrase sits inside its scope. "You should take 40 mg, though I cannot be
+    sure" is still the agent prescribing, and is still flagged.
+    """
+    for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+        # The run of text from the start of the phrase's own sentence up to
+        # the phrase, taken by offset rather than by searching the sentence
+        # for the phrase again: a phrase that straddles a full stop is not
+        # found inside either half.
+        start = max(text.rfind(". ", 0, match.start()) + 2,
+                    text.rfind("\n", 0, match.start()) + 1, 0)
+        if not re.search(DECLINE_PATTERN, text[start:match.start()],
+                         re.IGNORECASE):
+            return True
+    return False
+
+
 def _cited_on_the_questions_own_date(question: str, text: str) -> bool:
     """Whether the only attribution in the answer is a date it was handed.
 
@@ -966,7 +992,9 @@ def score(case: Case, answer) -> dict:
                if not any(alt.lower() in lowered for alt in group)]
     missing += [[pattern] for pattern in case.must_match
                 if not re.search(pattern, text, re.IGNORECASE)]
-    forbidden = [bad for bad in case.must_not_include if bad.lower() in combined_lowered]
+    forbidden = [bad for bad in case.must_not_include
+                 if bad.lower() in combined_lowered
+                 and _forbidden_in_its_own_voice(combined, bad)]
     number_ok = not missing and not forbidden
     # A case with no value to check passes this column on every draw, and the
     # headline counts it. Recorded so a reader can tell those cells from the
@@ -1341,6 +1369,12 @@ def main() -> int:
     captured: list[dict] = []
     started = time.monotonic()
     started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    # Read at the start, not when the capture is written three hours later.
+    # Run 14's capture claimed its answers were produced at a commit made
+    # while it was running, which is the week's own defect pointed at a
+    # provenance field: a line that reads as a fact and measures something
+    # else. A re-score comparison is built on this value.
+    started_at_commit = _commit()
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.id}: {case.question}",
               file=sys.stderr, flush=True)
@@ -1392,7 +1426,7 @@ def main() -> int:
                     # written up with its scorer commit reconstructed from
                     # the shell history, and a capture that cannot say what
                     # made it is a re-score waiting to be misread.
-                    "commit": _commit(),
+                    "commit": started_at_commit,
                     "elapsed_sec": total_elapsed},
             "draws": captured,
         }, indent=1, default=str))

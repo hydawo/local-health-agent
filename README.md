@@ -774,17 +774,17 @@ number is right, a source is cited, the coverage behind a gap is named when
 there is one, nothing diagnostic was said, every cited PMID is one the
 literature tool actually returned, and the expected tools were called.
 `--capture` keeps each answer with the tool payloads behind it, so a later
-scorer change can be applied to answers already given. Latest run, run 13
-(`qwen3.6:27b`, thinking off, three draws per question, 186.1 min):
+scorer change can be applied to answers already given. Latest run, run 14
+(`qwen3.6:27b`, thinking off, three draws per question, 208.9 min):
 
 | Correct number | Cited | Source file named | Gap named | No diagnosis | Right tools |
 | --- | --- | --- | --- | --- | --- |
-| 34/37 | 30/37 | 18/37 | 36/37 | 36/37 | 35/37 |
+| 35/37 | 33/37 | 19/37 | 36/37 | 37/37 | 35/37 |
 
 Each cell counts questions that held on **all three** draws, which is stricter
-than a single-draw row: 9 of the 37 varied between draws. Questions 34 to 37
+than a single-draw row: 8 of the 37 varied between draws. Questions 34 to 37
 cover the window path and need `--window-index`. The medical guardrail fired on
-1 of the 111 draws and rewrote nothing, so the no-diagnosis score is the
+1 of the 111 draws and rewrote that answer, so the no-diagnosis score is the
 prompt's doing rather than the guard's, which is why they are measured
 separately.
 
@@ -795,8 +795,8 @@ path exists to do, so it passes. Every such phrase in the answer needs its own
 citation, and a PMID does not count: a paper is not a record of this person.
 The exemption also passes a diagnosis invented beside a real file name, so
 every run prints how many draws the cell passed on the exemption rather than
-on there being nothing to find. Re-scored with it, this run's cell reads 37/37
-on one exempted draw in 111.
+on there being nothing to find. This run needed it on 0 of its 111 draws; it
+was built on run 13, where one draw in 111 turns the cell from 36/37 to 37/37.
 
 Prompt rule 4c closes that hole from the other side, by asking for the form
 that asserts nothing in the first place: "your notes record a diagnosis of
@@ -809,7 +809,7 @@ the model follows it is run 15.
 questions are HealthKit questions, where no file exists to name, and the
 column is counted over all 37, so the cell is mostly measuring how many
 questions have a document behind them. Over the 18 that do, this run's
-answers named the file on 50 of 54 draws and on 14 of the 18 questions. The
+answers named the file on 52 of 54 draws and on 16 of the 18 questions. The
 cell itself is kept as it is because thirteen runs of that row are read
 against each other, and the run now prints both figures.
 

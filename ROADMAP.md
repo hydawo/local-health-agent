@@ -24,6 +24,8 @@ choice.
 | Whether `cited` stays scored on an answer that declines for lack of coverage | §16's eval findings | leave it scored for now; the reporting half is built |
 | Whether Q23 needs a value check beyond its gap coverage | §16's eval findings | no |
 | Whether the agent should search when a question asks what the evidence says | §16's eval findings | yes, a prompt rule; it currently offers to |
+| What a comparison should do when the asked measure is absent and the figure is reachable another way | §16's eval findings | return the figure, rather than a refusal that explains how to get it |
+| Whether Q37 may answer with `query_healthkit` instead of `compare_windows` | §16's eval findings | no, keep the pin |
 | Oura: six questions, from scope to where a token lives | [`docs/oura-open-questions.md`](docs/oura-open-questions.md) | one per question, in the memo |
 | Strong and Slopes: six questions, from data-or-prose to the fixture | [`docs/strong-and-slopes-open-questions.md`](docs/strong-and-slopes-open-questions.md) | one per question, in the memo |
 
@@ -1157,6 +1159,78 @@ live guardrail is silent on both, because its patterns name the agent as the
 actor and neither sentence does, which is the reason the rule is worth having
 at all. Whether the model follows it is a question for run 15: run 14 was
 already in flight.
+
+### A refusal that explains how to get the answer is still a refusal
+
+Found 2026-10-31 in run 14's Q35, draw 1, and it is the second run in a row to
+find it in this question.
+
+Run 13's draw 3 asked `compare_windows` for a measure key the index does not
+hold, got a refusal listing the keys it does, and told the person none of
+their 21 cycling workouts had a duration recorded. The other two draws
+computed 90 and 135 minutes from the same index. The payload was fixed to say
+so: `duration_held` beside `measures_held`, and a clause in the refusal
+reading "while the duration of each workout is held and a call with no measure
+reports it".
+
+Run 14's draw 1 received that clause verbatim and answered "no duration values
+captured for any workout" without making the call. One draw in three, moved
+from the third to the first.
+
+- **a. Return the figure.** When the asked measure is absent and the duration
+  the question needs is held, the tool computes the duration series and
+  returns it, saying in the payload which measure was asked for and which one
+  answered.
+  *Trade:* a tool that answers a question other than the one it was asked, so
+  the substitution has to be stated in the payload and carried into the
+  answer, or the person is told a figure whose provenance they cannot see.
+- **b. A prompt rule.** When a refusal names another call that reports the
+  figure, make that call before answering.
+  *Trade:* this is the thing rule 1e stopped doing. The prompt no longer asks
+  for the medication-list search because the tool stopped leaving one to ask
+  for, and that change was made after five draws put compliance at three in
+  five. A rule here would be asking for a call the tool could make itself.
+- **c. Leave it, and count it.** The clause is in the payload and the draw is
+  in the capture.
+  *Trade:* one answer in three on this question tells the person a figure of
+  their own does not exist, and it is in the index.
+
+**Recommend a.** A sentence in a payload is not a mechanism, which is the
+whole of what rule 1e bought. (c) is not available on this one: the failure
+mode is the tool talking a faithful reader out of an answer it holds.
+
+### A pinned tool is the only check on a question whose numbers cannot be scored
+
+Found 2026-10-31 in run 14's Q37, draws 2 and 3. Both called `query_healthkit`
+and `get_clinical_history` rather than `compare_windows`, named the anchor,
+declined the causal claim, and compared January 2022 against February 2023 and
+January 2024 for an event on 2023-02-18.
+
+Both passed `number`, because this question's `number` check is the anchor
+date and a decline and nothing more: the question pins no window, so its
+figures are not derivable, and six prior defects in this one question's
+scoring are why. So `tools` is the only check between a monthly average and
+the comparison the question asks for.
+
+- **a. Keep the pin.** `compare_windows` is the tool built for an anchored
+  comparison, and the two draws that avoided it answered a different question.
+  *Trade:* the pin scores a route, which is the reasoning that made Q12 and
+  Q19 alternations rather than single tools.
+- **b. Allow the alternation**, as Q19 got.
+  *Trade:* Q19's pin was older than the tool that answered its question
+  better, and this is the reverse: the alternation would bless the weaker
+  shape. Nothing else on this question would catch it.
+- **c. Give the question a window check after all**, by pinning the comparison
+  the answer has to report.
+  *Trade:* the question says "permanently" and pins no window on purpose. Run
+  9 answered it over 60 days before against the year after, correctly, and
+  lost `number` to figures copied from Q34. Pinning a window here re-opens the
+  defect that comment exists to close.
+
+**Recommend a.** The two cases look alike and are not: Q19's pin named a tool
+that predated the question's own, and this pin names the tool the question was
+written for. Worth revisiting if a draw ever answers this question well
+without `compare_windows`.
 
 ### The agent offers to find the evidence instead of finding it
 
