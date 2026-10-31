@@ -998,6 +998,19 @@ ones that can be re-scored this way, and `gap`, `pmid`, `verdict` and
 `context` are left out rather than approximated: they read payloads the report
 does not carry.
 
+### A cited cell can be earned on the question's own date, 4 times in 111
+
+`cited` accepts a date as the attribution for a HealthKit answer, which has no
+file to name, and seven of the 37 questions name a date themselves. An answer
+that repeats it has cited nothing the question did not already supply, which
+is the gap column's defect in the column beside it.
+
+Measured on run 12's own answers, it happened 4 times in 111 draws, on Q3, Q5
+and Q35. Everywhere else the model named Apple Health, or named a window
+narrower than the one it was asked about. So the floor is weak in principle
+and almost never load-bearing in practice, which is why the score is
+unchanged and the run now reports the count instead.
+
 ### The four draws that failed, and the two questions behind them
 
 `number` missed on Q1 (one draw gave the average without the figure), Q14 (one

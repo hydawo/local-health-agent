@@ -482,9 +482,13 @@ literature corpus answers a question it does not cover with off-topic matches
 rather than an absence; the claim now comes off the findings instead, and the
 line that caught it is the unmeasured count the rebuild added.
 
-Auditing the rest of the columns for that same shape found four more, all
+Auditing the rest of the columns for that same shape found five more, all
 recorded below: two that passed with nothing behind them, one that credited an
-origin as a named file, and one that accepted an invented citation. What is
+origin as a named file, one that accepted an invented citation, and one that
+accepted the date the question itself supplied. The last of those is reported
+rather than rescored, because a date is the only locator a HealthKit figure
+has and, measured on run 12's answers, it was load-bearing in 4 of 111
+draws. What is
 still open and still a decision is where to stop an invented citation, which
 is a guardrail change with three options and a recommendation, and whether
 Q23's `number` cell needs anything beyond the coverage its `gap` cell now
