@@ -138,7 +138,7 @@ network:
 python3 tests/run_agent_eval.py --rescore /tmp/run.json
 ```
 
-Two habits, both bought with runs that measured nothing:
+Five habits, all bought with runs that measured nothing:
 
 - **Read the failing draws before believing the table.** Of run 12's four
   failing `number` draws, two were the scorer failing a right answer, one was
@@ -148,6 +148,28 @@ Two habits, both bought with runs that measured nothing:
   column that can read true with nothing behind it prints how many of its
   cells were measured, and names the questions that had nothing to check. If
   you add a column, add that line with it.
+- **A failing cell says what failed, where the cell is read.** Run 13's one
+  `no_diag` failure in 111 draws named its pattern in the failing draw's own
+  section, which is not where a row is read from, so the summary said a cell
+  had dropped by one and nothing more.
+- **A deterministic rule is asserted on every draw, not expected on a few
+  questions.** The lab literature block was pinned on 3 of 37 questions and
+  in play on 12. Its rule has no judgment in it, so it is checked on all 42
+  draws that called the lab tool instead, and written out in the scorer
+  rather than imported from the agent: a check that calls the implementation
+  agrees with the implementation, including where it is wrong.
+- **Ask whether a check is older than the tools.** Q19's expected tool named
+  `query_healthkit`, written before `compare_windows` existed, so three draws
+  that reached for the tool built for that question failed the column.
+  `expect_tools` takes a tuple as an alternation for a question two tools
+  answer equally well.
+
+Compare a new run against the previous run's answers re-scored by the same
+checks, never against the previous run's published row, which a different
+scorer wrote. Runs 12 and 13 are the same bed, model and scorer, and `cited`
+moved by four questions of 37 between them on nothing but temperature. A
+column has to move by more than that, or move the same way twice, before it
+is a result.
 
 If you change a fixture, update the expected values in **both** files — a test
 enforces that every documented question has a test and vice versa.

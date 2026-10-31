@@ -1605,12 +1605,13 @@ def test_a_case_with_nothing_to_check_says_so_rather_than_passing_quietly():
     # Q22 and Q26 have no `must_include` and are measured anyway: each
     # forbids a phrase, and an absence check is a check. Q23 has neither.
     assert unscored_number == ["Q23"]
-    # Was five until 2026-10-31. Four of them had a tool the question cannot
-    # be answered without and now name it. Q12 does not: "what lab tests do I
-    # have results for" is reachable through either `get_lab_trend` or
-    # `search_records`, and requiring one would score a route rather than an
-    # answer.
-    assert unscored_tools == ["Q12"]
+    # Was five until 2026-10-31, then one, then none. Four of them had a tool
+    # the question cannot be answered without and name it. Q12 does not:
+    # "what lab tests do I have results for" is reachable through either
+    # `get_lab_trend` or `search_records`, and requiring one would score a
+    # route rather than an answer. It names both as an alternation instead,
+    # which scores no route and still catches a turn that called nothing.
+    assert unscored_tools == []
 
 
 def test_the_row_marks_which_of_those_two_columns_were_measured():
@@ -2317,6 +2318,23 @@ def test_a_comparison_with_values_on_both_sides_claims_nothing():
     row = _score_with_steps("Q19", "Activity was much the same either side.",
                             [step], tools_used=("compare_windows",))
     assert not row["gap_scored"]
+
+
+def test_every_question_pins_a_tool():
+    """Q12 was the one question that pinned none, which left `tools`
+    unmeasured on exactly the draws where a question about what the index
+    holds could have been answered from the model's own memory. A tool pin is
+    the only check in the suite that catches a turn that called nothing."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    bare = [c.id for c in CASES if not c.expect_tools]
+    assert bare == [], f"{bare} pin no tool"
+    # And Q12's pin is an alternation, not a route: either tool reaches the
+    # answer, so requiring one of them would score how it was reached.
+    q12 = next(c for c in CASES if c.id == "Q12")
+    assert q12.expect_tools == [("get_lab_trend", "search_records")]
 
 
 def test_every_comparison_question_pins_the_verdict_it_expects():

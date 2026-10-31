@@ -664,7 +664,16 @@ CASES: list[Case] = [
          needs_source=True,
          expect_tools=["get_lab_trend"]),
     Case("Q12", "What lab tests do I have results for?",
-         must_include=[["a1c"], ["ldl"], ["tsh"]]),
+         must_include=[["a1c"], ["ldl"], ["tsh"]],
+         # The one question in the suite that pinned no tool, so `tools` was
+         # measured on 108 of run 13's 111 draws and the three it missed were
+         # this. It stayed unpinned because either `get_lab_trend` or
+         # `search_records` reaches the answer and requiring one would score a
+         # route. The alternation keeps that true and still catches the thing
+         # a tool pin is for: a turn that called nothing and answered from the
+         # model's own memory, which on a question about what the index holds
+         # is the worst failure available.
+         expect_tools=[("get_lab_trend", "search_records")]),
     Case("Q13", "What did I write about coffee and sleep?",
          must_include=[["coffee"], ["sleep-log", "sleep log"]],
          needs_source=True,
