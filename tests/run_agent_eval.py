@@ -535,7 +535,14 @@ DECLINE_PATTERN = (
 
 CASES: list[Case] = [
     Case("Q1", "What was my average resting heart rate in March 2026?",
-         must_include=[["60.0", "60 bpm", "60 beats", "60.0 bpm"]],
+         # `count/min` is what the tool reports resting heart rate in, and a
+         # run-12 draw wrote "60 count/min" and failed this group for it. The
+         # value is right and the unit is the index's own: the group was
+         # written around bpm and never widened. The rule against scoring a
+         # tool's phrases is about prose a tool writes for the model, not
+         # about the unit a figure legitimately carries.
+         must_include=[["60.0", "60 bpm", "60 beats", "60.0 bpm",
+                        "60 count/min", "60.0 count/min"]],
          must_not_include=["59.6", "59.7"],
          expect_tools=["query_healthkit"]),
     Case("Q2", "How many steps did I take on 2026-03-03?",

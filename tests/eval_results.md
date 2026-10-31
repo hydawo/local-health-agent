@@ -1029,8 +1029,10 @@ unchanged and the run now reports the count instead.
 
 ### The four draws that failed, and the two questions behind them
 
-`number` missed on Q1 (one draw gave the average without the figure), Q14 (one
-draw) and Q37 (two of three draws). `cited` missed single draws on Q20, Q23
+`number` missed on Q1, Q14 and Q37. Q1 is the scorer: the draw answered "60
+count/min", which is right and is the unit the index stores, against a group
+written around bpm. Fixed, and re-scoring that same answer passes, which takes
+the column to 35/37. Q14 (one draw) and Q37 (two of three) are the model. `cited` missed single draws on Q20, Q23
 and Q26. `tools` missed Q24 and Q37, both of which wander between two and four
 calls. Q37 is the one question that is worse than a coin here, and it is the
 comparison question whose own history is a record of the scorer being wrong

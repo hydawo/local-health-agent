@@ -43,6 +43,10 @@ corpus, `FHIR` = the clinical records beside an Apple Health export.
 - tool: `metric_series("resting-hr", period="month")`
 - why it's here: the mean is exactly 60.0 by construction, so an off-by-one in
   windowing or a switch from mean to sum is immediately visible.
+- scored on the figure in any of its units, as of 2026-10-31. The group was
+  written around bpm, and a run-12 draw answered "60 count/min", which is the
+  unit the index stores and the tool reports. Run 12 scored that draw as a
+  miss; it was right.
 
 **Q2. How many steps did I take on 2026-03-03?**
 - sources: HK

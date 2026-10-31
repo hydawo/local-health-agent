@@ -2176,3 +2176,23 @@ def test_the_echo_line_stays_out_when_no_cell_was_earned_that_way():
     args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
     report = render([_row("Q2")], 60.0, args)
     assert "cited on nothing but the date" not in report
+
+
+def test_the_unit_the_tool_reports_counts_as_the_number():
+    """Run 12's Q1, draw 1. The answer was right and said so in the unit the
+    index stores, `count/min`, and the group had only ever been written
+    around bpm. Scoring the figure and refusing the tool's own unit for it is
+    the scorer failing a correct answer."""
+    for unit in ("60 count/min", "60.0 count/min", "60 bpm", "60.0"):
+        row = _score_with_steps(
+            "Q1", f"Your average resting heart rate was {unit} across the "
+            "seven days with data.", [])
+        assert row["number"], unit
+
+
+def test_the_wrong_average_still_fails_whatever_unit_it_wears():
+    """The group exists because an off-by-one in the window gives 59.6."""
+    for text in ("Your average was 59.6 count/min.",
+                 "Your average was 59.7 bpm."):
+        row = _score_with_steps("Q1", text, [])
+        assert not row["number"], text
