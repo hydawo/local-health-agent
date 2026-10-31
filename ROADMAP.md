@@ -490,9 +490,60 @@ rather than rescored, because a date is the only locator a HealthKit figure
 has and, measured on run 12's answers, it was load-bearing in 4 of 111
 draws. What is
 still open and still a decision is where to stop an invented citation, which
-is a guardrail change with three options and a recommendation, and whether
+is a guardrail change with three options and a recommendation, whether
 Q23's `number` cell needs anything beyond the coverage its `gap` cell now
-requires.
+requires, and how a tag question should be answered at all, which is the
+entry below.
+
+### A tag question has no tool behind it, and Q14 has been passing on luck
+
+Found 2026-10-31 in run 12's Q14, which asks "which notes did I flag to follow
+up on?" and failed one draw of three. `tests/eval_questions.md` has named the
+tool for that question since the suite was written: `notes_by_tag("followup")`.
+The agent has no such tool. `queries.notes_by_tag` exists and the CLI uses it;
+nothing reaches it from a turn.
+
+So the model answers with `search_records`, which searches chunk text, and a
+tag lives in a note's frontmatter. Of the two notes the question wants, the
+sleep log also writes `#followup` in its body and is therefore findable; the
+symptoms note carries `followup` in frontmatter only and is not. The two
+passing draws found it by searching for its content instead, and one of them
+said out loud that the note "does not use that tag", which is wrong and is
+the tool's fault rather than the model's. The failing draw reported one note
+and stopped.
+
+This is a capability gap, not a scoring one, and the fix is a decision because
+the shapes differ in what the model has to learn:
+
+- **a. A `tag` argument on `search_records`.** One retrieval tool keeps its
+  single name and the prompt already teaches it.
+  *Trade:* `query` is required today, and a tag question has no query. Making
+  one of two arguments optional is the shape small models get wrong most
+  often, and a tag used as a filter on a text search does not fix recall at
+  all: it narrows results that already came back.
+- **b. A ninth tool, `get_notes_by_tag(tag)`.** One required argument, a
+  listing rather than a search, which is the shape `get_clinical_history`
+  already has. Returns the tagged documents with a snippet and a citation
+  each, and on no match the tags that do exist, which is the absence-as-
+  coverage rule.
+  *Trade:* a ninth tool name in every turn's tool list, README's "seven of
+  the eight tools" sentence, and a model that now has two ways to reach a
+  note.
+- **c. Put the tags in the chunk text at ingest.** Nothing new to learn and
+  every existing search finds them.
+  *Trade:* it changes what a citation quotes, since the snippet would carry
+  frontmatter the person did not write as prose, and it would need a
+  reingest of every note to take effect.
+
+**Recommend b**, and say in the tool's own description that a tag is how a
+note was filed rather than what it says, so a question about content still
+goes to `search_records`. (c) is the cheapest and quietly corrupts the one
+thing the notes path is strict about, which is that a citation reproduces
+what the note holds.
+
+Either way Q14's `expect_tools` is wrong today: it names `search_records`
+because that is what the model reaches for, which is the eval recording a
+workaround as the expectation.
 
 - The comparability block names a `sample_depth` check that is not implemented.
   Reaching it needs `workout_series` to propagate `workout_detail`'s own

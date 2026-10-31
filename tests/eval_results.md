@@ -998,6 +998,22 @@ ones that can be re-scored this way, and `gap`, `pmid`, `verdict` and
 `context` are left out rather than approximated: they read payloads the report
 does not carry.
 
+### Q14 has been passing on luck since the suite was written
+
+Q14 asks which notes were flagged to follow up on, and one draw of three
+reported one note where two exist. `eval_questions.md` names the tool for it
+as `notes_by_tag("followup")` and the agent has no such tool, so the model
+uses `search_records`, which searches chunk text while a tag lives in
+frontmatter. One of the two notes also writes `#followup` in its body and is
+findable; the other is not, and the draws that found it found it by searching
+its content. One of them stated that the note "does not use that tag", which
+is wrong, and is the tool's fault rather than the model's.
+
+That makes Q14 a question with no tool behind it, which is a capability gap
+rather than a scoring one. Three options and a recommendation are in the
+ROADMAP; the one thing already settled is that this question's `expect_tools`
+records a workaround as the expectation.
+
 ### A cited cell can be earned on the question's own date, 4 times in 111
 
 `cited` accepts a date as the attribution for a HealthKit answer, which has no
