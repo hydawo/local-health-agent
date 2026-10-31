@@ -39,6 +39,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from health_agent import cli, config, embeddings, ollama_client  # noqa: E402
 from health_agent.agent import Orchestrator, ToolContext  # noqa: E402
+from health_agent.agent.orchestrator import ToolCallRecord  # noqa: E402
 from health_agent.store import sqlite_schema  # noqa: E402
 
 # Phrasing that would mean the agent crossed from describing into diagnosing or
@@ -733,9 +734,89 @@ def score(case: Case, answer) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Capture and re-score
+# --------------------------------------------------------------------------- #
+#
+# A markdown report cannot be re-scored: scoring reads the tool payloads and
+# the report prints prose. Twice in one night that cost a measurement. The Q22
+# guardrail diagnosis needed to know which rule fired on answers run 11 had
+# already discarded, and the `gap` column changed while run 12 was in flight,
+# so run 12 measures the old rule and nothing can be done about it afterwards.
+#
+# `--capture` writes every draw with its payloads; `--rescore` runs the current
+# scorer over them with no model in the loop. A captured file is as sensitive
+# as the index it came from: against a real export it holds that person's
+# values, so it belongs beside the scratch index and not in the repo.
+
+def capture_row(case: Case, answer, row: dict) -> dict:
+    """One draw, with everything `score` reads and nothing it does not."""
+    return {
+        "id": case.id,
+        "draw": row.get("draw", 1),
+        "answer": row["answer"],
+        "literature_context_text": answer.literature_context_text,
+        "literature_context": bool(answer.literature_context),
+        "tools_used": list(answer.tools_used),
+        "elapsed_sec": row["elapsed_sec"],
+        "guardrail_flags": row["guardrail_flags"],
+        "guardrail_detail": row["guardrail_detail"],
+        "guardrail_rewrote": row["guardrail_rewrote"],
+        "steps": [{"step": step.step, "name": step.name,
+                   "arguments": step.arguments, "result": step.result}
+                  for step in answer.steps],
+    }
+
+
+class _CapturedAnswer:
+    """What `score` needs from an Answer, rebuilt from a captured draw.
+
+    The guardrail is not replayed: its flags were recorded, and re-running it
+    would score today's guard against yesterday's text, which is a second
+    measurement rather than a re-score. `score` reads `answer.guardrail` only
+    to record what fired, so the recorded flags are carried through instead.
+    """
+
+    def __init__(self, draw: dict):
+        self.text = draw["answer"]
+        self.literature_context_text = draw.get("literature_context_text", "")
+        self.literature_context = draw.get("literature_context") or None
+        self.tools_used = list(draw.get("tools_used") or ())
+        self.elapsed_sec = draw.get("elapsed_sec") or 0.0
+        self.guardrail = None
+        self.steps = [ToolCallRecord(
+            step=s.get("step", i + 1), name=s["name"],
+            arguments=s.get("arguments") or {}, result=s.get("result") or {},
+            elapsed_sec=0.0) for i, s in enumerate(draw.get("steps") or ())]
+
+
+def rescore(draws: list[dict]) -> list[dict]:
+    """Today's scorer over answers already given."""
+    by_id = {case.id: case for case in CASES}
+    unknown = sorted({d["id"] for d in draws if d["id"] not in by_id})
+    if unknown:
+        # Not skipped: dropping a draw would shrink the denominator without
+        # saying so, which is the absence-as-coverage defect in the scorer.
+        raise SystemExit(
+            f"captured questions no longer in the case list: "
+            f"{', '.join(unknown)}. Re-score against the commit that ran "
+            f"them, or remove them from the file deliberately.")
+    rows = []
+    for draw in draws:
+        row = score(by_id[draw["id"]], _CapturedAnswer(draw))
+        row["draw"] = draw.get("draw", 1)
+        # What the guard did is a fact about the run, not about the scorer.
+        for key in ("guardrail_flags", "guardrail_detail",
+                    "guardrail_rewrote"):
+            if key in draw:
+                row[key] = draw[key]
+        rows.append(row)
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--index", required=True)
+    parser.add_argument("--index")
     parser.add_argument("--window-index",
                         help="index built by tests/window_fixture.py; "
                              "without it Q34 to Q37 are not run")
@@ -743,6 +824,16 @@ def main() -> int:
     parser.add_argument("--think", action="store_true")
     parser.add_argument("--only", help="comma-separated question ids")
     parser.add_argument("--out", help="write a markdown report here")
+    parser.add_argument("--capture", metavar="PATH",
+                        help="also write every draw with its tool payloads, "
+                             "so a later scorer change can be applied to "
+                             "these answers with --rescore. Holds whatever "
+                             "the tools returned, so against a real index it "
+                             "is health data: keep it beside the index, not "
+                             "in the repo.")
+    parser.add_argument("--rescore", metavar="PATH",
+                        help="score a file written by --capture with today's "
+                             "scorer and exit. No model, no index, no network.")
     parser.add_argument("--fail-under", type=float, default=0.0)
     parser.add_argument("--repeat", type=int, default=1, metavar="N",
                         help="ask each question N times and report a rate per "
@@ -754,6 +845,28 @@ def main() -> int:
     args = parser.parse_args()
     if args.repeat < 1:
         parser.error("--repeat must be at least 1")
+
+    if args.rescore:
+        captured = json.loads(Path(args.rescore).read_text())
+        rows = rescore(captured["draws"])
+        # The run's own metadata, so a re-scored report cannot be mistaken
+        # for a fresh run of a different model.
+        meta = captured.get("run") or {}
+        args.model = args.model or meta.get("model")
+        args.think = meta.get("think", False)
+        args.repeat = meta.get("repeat", 1)
+        report = render(rows, meta.get("elapsed_sec", 0.0), args)
+        header = (f"<!-- re-scored from {args.rescore}, answers given by "
+                  f"{meta.get('model', 'an unrecorded model')} at "
+                  f"{meta.get('started', 'an unrecorded time')} -->")
+        report = header + "\n" + report
+        print(report)
+        if args.out:
+            Path(args.out).write_text(report)
+        return 0
+
+    if not args.index:
+        parser.error("--index is required unless --rescore is given")
 
     cases = CASES
     if args.only:
@@ -786,7 +899,9 @@ def main() -> int:
                                  vector_path=cfg.vector_path)
 
     results = []
+    captured: list[dict] = []
     started = time.monotonic()
+    started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     for index, case in enumerate(cases, start=1):
         print(f"[{index}/{len(cases)}] {case.id}: {case.question}",
               file=sys.stderr, flush=True)
@@ -809,6 +924,7 @@ def main() -> int:
             row = score(case, answer)
             row["draw"] = draw
             results.append(row)
+            captured.append(capture_row(case, answer, row))
             marks = "".join(
                 "." if row[k] else "X" for k in ("number", "cited", "gap",
                                                  "no_diag", "tools", "context"))
@@ -826,6 +942,16 @@ def main() -> int:
     print(report)
     if args.out:
         Path(args.out).write_text(report)
+    if args.capture:
+        Path(args.capture).write_text(json.dumps({
+            "run": {"model": args.model or ollama_client.DEFAULT_CHAT_MODEL,
+                    "think": args.think, "repeat": args.repeat,
+                    "index": str(args.index),
+                    "window_index": str(args.window_index or ""),
+                    "started": started_at,
+                    "elapsed_sec": total_elapsed},
+            "draws": captured,
+        }, indent=1, default=str))
 
     # Each draw is a row, so with --repeat 1 this is exactly what it always
     # was, and with more it is the pass rate over every answer given.

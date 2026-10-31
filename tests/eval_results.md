@@ -12,7 +12,20 @@ Build the bed first, then score against it:
 ```bash
 ./scripts/build-eval-bed.sh --yes /tmp/eval-bed
 python tests/run_agent_eval.py --index /tmp/eval-bed/.index/health.db \
-    --window-index /tmp/eval-bed/window-eval.db --out /tmp/run.md
+    --window-index /tmp/eval-bed/window-eval.db --out /tmp/run.md \
+    --capture /tmp/run.json
+```
+
+Pass `--capture` on every run worth keeping. It writes each draw with the tool
+payloads behind it, which is what `--rescore` needs to apply a later scorer to
+answers already given. Twice on 2026-10-31 a scorer changed and the run that
+would have measured it was already over: without a capture file the answers
+cannot be re-scored, because scoring reads payloads and the report prints
+prose. A capture file holds whatever the tools returned, so against a real
+index it is health data; keep it beside the index.
+
+```bash
+python tests/run_agent_eval.py --rescore /tmp/run.json --out /tmp/rescored.md
 ```
 
 Runs 5 onward are all scored against the same bed: the committed fixtures plus

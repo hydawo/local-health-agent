@@ -1407,3 +1407,99 @@ def test_an_inverted_mesh_heading_is_accepted_the_way_a_person_writes_it():
                  "Diabetes Mellitus, Type 2"):
         assert re.search(pattern, text, re.IGNORECASE), text
     assert not re.search(pattern, "covers hip replacement", re.IGNORECASE)
+
+
+# --------------------------------------------------------------------------- #
+# Capturing a run, so a scorer change can be applied to answers already given
+# --------------------------------------------------------------------------- #
+#
+# Twice in one night a scorer changed and the run that would have measured it
+# had already happened: the Q22 guardrail diagnosis needed to know which rule
+# fired on answers the run had thrown away, and the gap column changed while
+# run 12 was in flight, which made run 12 unattributable to the new rule. A
+# markdown report cannot be re-scored, because scoring reads the recorded tool
+# payloads and the report prints prose. `--capture` writes those, and
+# `--rescore` runs the current scorer over them with no model in the loop.
+
+def _capture_payload(**overrides):
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, capture_row, score
+    from types import SimpleNamespace
+
+    case = next(c for c in CASES if c.id == "Q19")
+    answer = SimpleNamespace(
+        text="No steps on 2026-03-10; the step data runs 2026-03-01 to "
+             "2026-03-09.",
+        literature_context_text="", tools_used=["query_healthkit"],
+        guardrail=None, elapsed_sec=1.5, steps=[_EMPTY_WINDOW],
+        literature_context=None)
+    row = score(case, answer)
+    row["draw"] = 1
+    captured = capture_row(case, answer, row)
+    captured.update(overrides)
+    return captured
+
+
+def test_a_captured_draw_carries_what_scoring_needs():
+    captured = _capture_payload()
+    assert captured["id"] == "Q19"
+    assert captured["draw"] == 1
+    assert "2026-03-01" in captured["answer"]
+    assert captured["tools_used"] == ["query_healthkit"]
+    # The payloads, which is the half a markdown report cannot hold.
+    (step,) = captured["steps"]
+    assert step["name"] == "query_healthkit"
+    assert step["result"]["available_from"] == "2026-03-01"
+
+
+def test_rescoring_a_captured_draw_reproduces_the_row():
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import rescore
+
+    captured = _capture_payload()
+    row = rescore([captured])[0]
+    for key in ("id", "draw", "number", "cited", "gap", "gap_scored",
+                "no_diag", "tools", "answer"):
+        assert row[key] == captured[key] if key in captured else True
+    assert row["gap"] and row["gap_scored"]
+
+
+def test_rescoring_applies_the_current_scorer_not_the_recorded_verdict():
+    """The whole point. A row captured as a pass must fail on re-score when
+    the answer does not satisfy today's rule."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import rescore
+
+    captured = _capture_payload(
+        answer="There is no step data for that date.", gap=True)
+    row = rescore([captured])[0]
+    assert not row["gap"]
+    assert row["gap_missing"]
+
+
+def test_rescoring_a_draw_of_an_unknown_question_is_refused_not_skipped():
+    """A question id the case list no longer holds cannot be scored, and
+    silently dropping it would shrink the denominator without saying so."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import rescore
+
+    captured = _capture_payload(id="Q99")
+    with pytest.raises(SystemExit) as excinfo:
+        rescore([captured])
+    assert "Q99" in str(excinfo.value)
+
+
+def test_a_capture_file_round_trips_through_json():
+    import json as _json
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import rescore
+
+    captured = _capture_payload()
+    reloaded = _json.loads(_json.dumps({"draws": [captured]}))
+    row = rescore(reloaded["draws"])[0]
+    assert row["gap"] and row["id"] == "Q19"

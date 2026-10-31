@@ -136,7 +136,7 @@ Bed ready. Score a run against it with:
     python3 tests/run_agent_eval.py \\
         --index "$index" \\
         --window-index "$window" \\
-        --model qwen3.6:27b --repeat 3 --out run.md
+        --model qwen3.6:27b --repeat 3 --out run.md --capture run.json
 
 Drop --repeat for a single draw, which is what every row in
 tests/eval_results.md before run 11 is.
