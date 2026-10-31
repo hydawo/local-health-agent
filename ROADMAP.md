@@ -695,6 +695,27 @@ list with no right answer written down yet.
   is its own base and names no aggregate, rather than being labelled an
   aggregate of something else. That is the case the three copies agreed on
   only because no real export produces it.
+- **"Named a source file" accepted a source that was not a file.** The
+  pattern list `needs_source` reads held `apple health` and `healthkit`
+  alongside the filename patterns, so "your Apple Health data shows an LDL of
+  112" satisfied a check for having named the lab report, and the
+  `source named` column counted it. Found 2026-10-31 while auditing the
+  columns.
+
+  Split into `FILE_PATTERNS` and `ORIGIN_PATTERNS`. `source_named` reads the
+  file patterns only, which is what its label says, and a `needs_source` case
+  requires one. A watch-metric question keeps the origin or the period as its
+  citation, which is what the README promises, because Apple Health has no
+  file to name. The premise is pinned by a test: all eighteen `needs_source`
+  cases are document-backed, labs as PDFs, notes as files, clinical history as
+  FHIR JSON, literature as a PMID, so none of them can be cited by naming
+  Apple Health. If a watch question ever becomes `needs_source`, that test
+  fails rather than the question.
+
+  Expect `source named` and `cited` to fall from run 11's figures where
+  answers were being credited for an origin. That is a re-measurement, not a
+  regression.
+
 - **Absence-as-coverage is an invariant now, not a doctrine.** The rule that
   broke four times on one branch, an empty list meaning "none held" and never
   "nobody looked", is asserted over every tool the scorer-contract test

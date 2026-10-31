@@ -274,14 +274,27 @@ def _absence_nodes(values):
             yield from _absence_nodes(value)
 
 
-# A source citation proper: a file, a page, or a named data origin.
-SOURCE_PATTERNS = [
+# A citation proper: the file, page or report a claim came out of.
+FILE_PATTERNS = [
     # `.json` is a FHIR member path from the clinical-records folder, which is
     # the only citation those answers can carry.
     r"\w+\.pdf", r"\w+\.md", r"\w+\.txt", r"\w+\.json", r"p\.\d+",
     r"\w+\.docx", r"\w+\.(?:png|jpe?g|heic)", r"read by ocr",
-    r"apple health", r"healthkit", r"\bPMID\s*:?\s*\d+",
+    r"\bPMID\s*:?\s*\d+",
 ]
+
+# Where the data came from, which is not the same thing. Apple Health has no
+# file, so for a watch metric the origin and the period are the citation the
+# README promises. For a lab, a note or a clinical record it is not one:
+# "your Apple Health data shows LDL 112" names neither the report nor even
+# the right source, and it satisfied `needs_source` until 2026-10-31 because
+# both kinds of pattern sat in one list. Every `needs_source` case is
+# document-backed, and a test pins that, so the split is safe.
+ORIGIN_PATTERNS = [r"apple health", r"healthkit"]
+
+# Kept under the old name for the scorer-contract test, which scans tool
+# payloads against the families a scorer reads.
+SOURCE_PATTERNS = FILE_PATTERNS + ORIGIN_PATTERNS
 
 # Date attribution — weaker than a source, but the plan (§1) asks for "which
 # file/date a claim came from", so a dated value is a legitimate citation for
@@ -681,11 +694,15 @@ def score(case: Case, answer) -> dict:
     number_scored = bool(case.must_include or case.must_match
                          or case.must_not_include)
 
-    source_ok = _any(SOURCE_PATTERNS, text)
+    # `source_named` is the column labelled "named a source file", so it reads
+    # the file patterns only. An origin is a weaker claim and is scored as one.
+    source_ok = _any(FILE_PATTERNS, text)
+    origin_ok = _any(ORIGIN_PATTERNS, text)
     dated_ok = _any(DATE_PATTERNS, text)
     # A document-backed answer should name its report; a HealthKit answer has no
-    # file to name, so a date is the citation.
-    cited_ok = source_ok if case.needs_source else (source_ok or dated_ok)
+    # file to name, so the origin or the period is the citation.
+    cited_ok = source_ok if case.needs_source else (source_ok or origin_ok
+                                                    or dated_ok)
     # The coverage the tool reported beside the absence, which the model has
     # to carry itself. See `_coverage_claims`: the old check matched the
     # absence vocabulary that the tools themselves write.

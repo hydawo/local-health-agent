@@ -1743,3 +1743,65 @@ def test_every_case_id_is_unique_and_the_set_is_the_documented_size():
     ids = [case.id for case in CASES]
     assert len(ids) == len(set(ids))
     assert len(ids) == 37
+
+
+# --------------------------------------------------------------------------- #
+# What counts as naming a source
+# --------------------------------------------------------------------------- #
+#
+# `needs_source` means the answer draws on a file and should name it. The
+# pattern list it reads also holds "apple health" and "healthkit", which are
+# origins rather than files, so "your Apple Health data shows LDL 112" counted
+# as citing a lab report. Every one of the eighteen `needs_source` cases is
+# document-backed: labs are PDFs, notes are files, clinical history is FHIR
+# JSON, literature is a PMID. None of them can be cited by naming Apple Health.
+
+def test_naming_apple_health_does_not_cite_a_lab_report():
+    row = _score_with_steps("Q8", "Your Apple Health data shows an LDL of "
+                            "112 on 2026-03-10.", [],
+                            tools_used=("get_lab_trend",))
+    assert not row["cited"]
+    assert not row["source_named"]
+
+
+def test_naming_the_report_cites_it():
+    row = _score_with_steps("Q8", "LDL 112 (labs_2026-03-10.pdf, p.1, "
+                            "2026-03-10).", [], tools_used=("get_lab_trend",))
+    assert row["cited"] and row["source_named"]
+
+
+def test_a_pmid_still_cites_a_literature_answer():
+    row = _score_with_steps(
+        "Q21", "A 2026 trial found an effect (PMID 42609254).",
+        [_lit_step()], tools_used=("search_medical_literature",))
+    assert row["cited"] and row["source_named"]
+
+
+def test_a_healthkit_question_can_still_cite_its_origin_or_a_date():
+    """Q1 is not `needs_source`: Apple Health data has no file, so the metric
+    and the period are the citation, which is what the README promises."""
+    origin = _score_with_steps("Q1", "Your Apple Health resting heart rate "
+                               "averaged 60 in March 2026.", [],
+                               tools_used=("query_healthkit",))
+    assert origin["cited"]
+    dated = _score_with_steps("Q1", "It averaged 60 over 2026-03-01 to "
+                              "2026-03-09.", [], tools_used=("query_healthkit",))
+    assert dated["cited"]
+    assert not dated["source_named"]
+
+
+def test_every_needs_source_case_is_document_backed():
+    """The premise of the change above, pinned: if a HealthKit question ever
+    becomes `needs_source`, requiring a filename would fail it for naming the
+    only origin it has."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    document_tools = {"get_lab_trend", "search_records",
+                      "search_medical_literature", "get_clinical_history",
+                      "get_clinical_vitals"}
+    for case in CASES:
+        if case.needs_source:
+            assert case.expect_tools, case.id
+            assert set(case.expect_tools) <= document_tools, case.id
