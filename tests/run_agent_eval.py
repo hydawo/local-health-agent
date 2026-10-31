@@ -485,7 +485,12 @@ class Case:
     # True when the answer draws on a file (a lab report or note) and so
     # should name it, not merely give a date.
     needs_source: bool = False
-    expect_tools: list[str] = field(default_factory=list)
+    # A name, or a tuple of names satisfied when ANY of them was called, the
+    # same grammar `must_include` uses. The tuple exists for a question two
+    # tools answer equally well: Q19 asks whether activity changed around a
+    # dated event, which `query_healthkit` answered before `compare_windows`
+    # was built and which `compare_windows` answers better now.
+    expect_tools: list = field(default_factory=list)
     # None means the case makes no claim either way (most cases); True/False
     # means the literature block (ROADMAP #4) is expected to appear, or not.
     expect_context: bool | None = None
@@ -677,8 +682,11 @@ CASES: list[Case] = [
     Case("Q19", "Did my activity change around the dates of my last lab panel?",
          must_include=[["03-10", "march 10"]],
          # The activity side. The panel date is already forced by
-         # `must_include`, and it can only have come from a lab tool.
-         expect_tools=["query_healthkit"],
+         # `must_include`, and it can only have come from a lab tool. Either
+         # activity tool answers this: `compare_windows` is the one built for
+         # a dated event, and in run 13 all three draws reached for it and
+         # failed a column that named only its predecessor.
+         expect_tools=[("query_healthkit", "compare_windows")],
          needs_gap=True),
     Case("Q20", "What do I know about my cholesterol overall?",
          must_include=[["186"], ["112"], ["52"]],
@@ -910,7 +918,10 @@ def score(case: Case, answer) -> dict:
     no_diag_ok = not diagnostic_hits
 
     tools_used = answer.tools_used
-    tools_ok = all(t in tools_used for t in case.expect_tools)
+    tools_ok = all(
+        any(name in tools_used for name in
+            (group if isinstance(group, tuple) else (group,)))
+        for group in case.expect_tools)
     tools_scored = bool(case.expect_tools)
 
     verdicts = [step.result.get("comparable", {}).get("verdict")

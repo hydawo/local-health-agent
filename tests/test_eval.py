@@ -1648,11 +1648,17 @@ def test_the_four_tools_added_are_each_the_only_route_to_the_answer():
     from health_agent.agent.tools import TOOLS
 
     names = {t.name for t in TOOLS}
-    for qid, tool in (("Q14", "search_records"), ("Q15", "search_records"),
-                      ("Q17", "query_healthkit"), ("Q19", "query_healthkit")):
+    # Q19 names two, because a dated-event activity question is answerable
+    # through either, and both are still the only routes to activity at all.
+    for qid, expected in (("Q14", ["search_records"]),
+                          ("Q15", ["search_records"]),
+                          ("Q17", ["query_healthkit"]),
+                          ("Q19", [("query_healthkit", "compare_windows")])):
         case = next(c for c in CASES if c.id == qid)
-        assert case.expect_tools == [tool], qid
-        assert tool in names, tool
+        assert case.expect_tools == expected, qid
+        for group in expected:
+            for tool in (group if isinstance(group, tuple) else (group,)):
+                assert tool in names, tool
 
 
 def test_a_question_whose_scorability_moved_between_draws_is_named():
@@ -1791,8 +1797,9 @@ def test_every_expected_tool_is_a_registered_tool():
 
     registered = {tool.name for tool in TOOLS}
     for case in CASES:
-        for name in case.expect_tools:
-            assert name in registered, f"{case.id} expects unknown {name}"
+        for group in case.expect_tools:
+            for name in (group if isinstance(group, tuple) else (group,)):
+                assert name in registered, f"{case.id} expects unknown {name}"
 
 
 def test_every_case_id_is_unique_and_the_set_is_the_documented_size():
@@ -2231,6 +2238,34 @@ def test_the_echo_line_stays_out_when_no_cell_was_earned_that_way():
     args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
     report = render([_row("Q2")], 60.0, args)
     assert "cited on nothing but the date" not in report
+
+
+def test_either_tool_satisfies_a_question_that_two_tools_answer():
+    """Run 13's Q19 failed `tools` on all three draws. The question asks
+    whether activity changed around a dated event, which is the question
+    `compare_windows` was built for, and all three draws called it and
+    answered correctly. The expectation named `query_healthkit`, written
+    before that tool existed, so the column scored the age of the list."""
+    for used in (("query_healthkit",), ("compare_windows",),
+                 ("get_lab_trend", "compare_windows")):
+        row = _score_with_steps("Q19", "Around March 10, 2026 there is no "
+                                "activity recorded after the draw.", [],
+                                tools_used=used)
+        assert row["tools"], used
+    assert not _score_with_steps("Q19", "x", [],
+                                 tools_used=("search_records",))["tools"]
+
+
+def test_a_group_of_expected_tools_still_needs_one_of_them():
+    """The group is an alternation, not a free pass: a question that names two
+    tools is not a question that accepts none."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+
+    q19 = next(c for c in CASES if c.id == "Q19")
+    assert q19.expect_tools, "Q19 still has to expect a tool"
+    assert all(group for group in q19.expect_tools)
 
 
 def test_the_unit_the_tool_reports_counts_as_the_number():
