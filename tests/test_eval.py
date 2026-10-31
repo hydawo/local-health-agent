@@ -1868,3 +1868,61 @@ def test_two_absences_with_nothing_to_require_are_reported_once():
                             [nothing, again], tools_used=("get_lab_trend",))
     assert row["gap_required"] == ["an absence with no figure to carry"]
     assert row["gap_scored"] is False
+
+
+def test_the_rescore_command_runs_with_no_index_and_no_model():
+    """The file format, locked at the command line rather than in the
+    function: `--rescore` has to work from the capture file alone, with no
+    --index, no Ollama and no network, or it cannot be used on an old run."""
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    runner = Path(__file__).parent / "run_agent_eval.py"
+    captured = _capture_payload()
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({
+            "run": {"model": "qwen3.6:27b", "think": False, "repeat": 1,
+                    "started": "2026-10-31T03:00:00-0400",
+                    "elapsed_sec": 42.0},
+            "draws": [captured]}))
+        done = subprocess.run([sys.executable, str(runner), "--rescore",
+                               str(path)],
+                              capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    # The provenance header, so a re-scored report cannot be read as a fresh
+    # run of whatever model happens to be default today.
+    assert done.stdout.startswith("<!-- re-scored from ")
+    assert "answers given by qwen3.6:27b" in done.stdout
+    assert "| Q19 | pass |" in done.stdout
+
+
+def test_rescore_refuses_a_file_it_cannot_score():
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    runner = Path(__file__).parent / "run_agent_eval.py"
+    captured = _capture_payload(id="Q99")
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({"run": {}, "draws": [captured]}))
+        done = subprocess.run([sys.executable, str(runner), "--rescore",
+                               str(path)],
+                              capture_output=True, text=True)
+    assert done.returncode != 0
+    assert "Q99" in done.stderr
+
+
+def test_the_runner_still_requires_an_index_for_a_real_run():
+    import subprocess
+    import sys
+
+    runner = Path(__file__).parent / "run_agent_eval.py"
+    done = subprocess.run([sys.executable, str(runner)],
+                          capture_output=True, text=True)
+    assert done.returncode != 0
+    assert "--index is required" in done.stderr
