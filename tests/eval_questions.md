@@ -181,7 +181,12 @@ step (there is none; see ROADMAP #2). Every name and dose in it is invented.
 **Q19. Did my activity change around the dates of my last lab panel?**
 - sources: LAB + HK
 - expected: panel was 2026-03-10; step data covers only 03-02 and 03-03, so
-  there is **no activity data** at the panel date. Correct answer names the gap.
+  there is **no activity data** at the panel date. A correct answer names the
+  gap **and the coverage behind it**: the span the step data does hold, both
+  ends of it. Saying "no step data for that date" and stopping is not an
+  answer anyone can act on, and as of 2026-10-31 it does not score, because
+  that sentence is in the vocabulary the tools themselves write (see the
+  `gap` column in `tests/run_agent_eval.py`).
 - tools: `lab_trend` + `metric_series("steps")`
 
 **Q20. What do I know about my cholesterol overall?**
@@ -280,6 +285,11 @@ wording gets scored, same as the rest of the set.
   five but is the subject of one). It does not answer from general
   orthopedic knowledge.
 - tool: `search_medical_literature("hip replacement recovery")`
+- scored, as of 2026-10-31, on carrying a figure out of the miss payload's
+  own `corpus` block rather than on saying the corpus misses: the article
+  count or the installed pack. The `topics` list the expectation above
+  describes is the better requirement and is the next change to this case;
+  it was left alone while run 12 was in flight so the run maps to one commit.
 
 **Q24. Based on the evidence, what should I do about my LDL?**
 - sources: LIT + LAB

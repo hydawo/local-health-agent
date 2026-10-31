@@ -316,8 +316,22 @@ eras were measured too differently to line up.
 **The tool never reports the gap between two spans.** It does not subtract,
 divide, or call a change significant, and its note on every result says it
 makes no claim that anything in one span brought about anything in the other.
-That is left to you and your clinician. The verdict also does not check whether the two
-spans were sampled equally densely, which is a known gap.
+That is left to you and your clinician.
+
+With `--samples`, each span also reports the records behind it, and for a
+workout measure the median raw records inside each workout. That matters
+because a statistic is one number whatever the watch sampled to produce it: a
+ride averaging 150 bpm from three readings and one averaging it from nine
+hundred look identical in every other field.
+
+```bash
+health-agent compare --workouts --activity Cycling --samples \
+    --measure HKQuantityTypeIdentifierHeartRate:average --period week \
+    --left 2025-03-03..2025-03-30 --right 2026-03-02..2026-03-29
+```
+
+The verdict does not read that figure. How few samples is too few is a
+judgment, and this surface states numbers.
 
 ## Measured performance
 
