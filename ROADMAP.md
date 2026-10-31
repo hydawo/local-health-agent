@@ -695,6 +695,29 @@ list with no right answer written down yet.
   is its own base and names no aggregate, rather than being labelled an
   aggregate of something else. That is the case the three copies agreed on
   only because no real export produces it.
+- **The scorer accepted a citation the tool never returned.** Found
+  2026-10-31 while auditing the columns below. `must_match=[r"\bPMID\s*:?\s*
+  \d+"]` on Q21, Q25 and Q26 asks for the shape of a citation, and the
+  guardrail only checks a PMID against the returned set inside a sentence
+  that also matches a threshold pattern. So an ordinary finding attributed to
+  a number nobody returned passed both the scorer and the guard. In a tool
+  whose whole claim is that it answers from the person's own data and a named
+  corpus, that is the worst failure on the list.
+
+  Closed with a summary-only `pmid` column: every PMID an answer cites must be
+  one the literature tool returned this turn, scored on any draw that cites
+  one, and the report names the invented ones. It reads the same two functions
+  the guard does, `guardrail.cited_pmids` and `orchestrator.returned_pmids`,
+  both made public for it, because a scorer with its own idea of which
+  citations were real would accept one the guard rejects. It joined the
+  overall pass tuple the way `verdict` did, which moves the pass-rate
+  definition, so the first run to carry it has to say so.
+
+  Not closed: the guard still only checks citations inside threshold
+  sentences, so an invented citation on an ordinary sentence reaches the
+  reader. The eval now fails it, which is how it will be noticed, but the
+  guardrail is where it should be stopped.
+
 - **Three columns could read as a pass with nothing behind them, and two
   still can.** Found 2026-10-31 by taking the `gap` column's defect and
   looking for its shape elsewhere in the scorer. `number` is vacuously true

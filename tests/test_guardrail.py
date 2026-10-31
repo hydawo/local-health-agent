@@ -590,3 +590,23 @@ def test_the_rule_the_model_is_given_does_not_itself_trip_the_guard():
 
     for text in (SAME_SENTENCE_RULE, CITATION_NOTE, LITERATURE_NOTE):
         assert not guardrail.check(text, used_tools=True), text
+
+
+# --------------------------------------------------------------------------- #
+# Reading a text's citations, for a caller that is not the guard
+# --------------------------------------------------------------------------- #
+
+def test_cited_pmids_reads_every_shape_the_guard_already_handles():
+    """Public because the eval needs the same rule. Two copies of "what
+    counts as a citation" is how a scorer and a guard come to disagree about
+    whether an answer cited anything, which is exactly the Q22 shape."""
+    assert guardrail.cited_pmids("nothing here") == frozenset()
+    assert guardrail.cited_pmids(
+        "(Diabetes Care, 2026, PMID 42609254)") == frozenset({"42609254"})
+    assert guardrail.cited_pmids(
+        "(PMIDs 42613609, 42609254)") == frozenset({"42613609", "42609254"})
+    assert guardrail.cited_pmids(
+        "PubMed ID 42609254 and PMID 11111111") == frozenset(
+            {"42609254", "11111111"})
+    # A bare number is not a citation, which is the rule the guard applies.
+    assert guardrail.cited_pmids("42609254 says so") == frozenset()

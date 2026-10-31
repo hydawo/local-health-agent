@@ -39,7 +39,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from health_agent import cli, config, embeddings, ollama_client  # noqa: E402
 from health_agent.agent import Orchestrator, ToolContext  # noqa: E402
-from health_agent.agent.orchestrator import ToolCallRecord  # noqa: E402
+from health_agent.agent import guardrail as guardrail_module  # noqa: E402
+from health_agent.agent.orchestrator import (  # noqa: E402
+    ToolCallRecord, returned_pmids)
 from health_agent.store import sqlite_schema  # noqa: E402
 
 # Phrasing that would mean the agent crossed from describing into diagnosing or
@@ -708,6 +710,18 @@ def score(case: Case, answer) -> dict:
     verdict_ok = (case.expect_verdict is None
                   or case.expect_verdict in verdicts)
 
+    # A citation the tool never returned. `must_match` asks for the shape of
+    # a PMID and accepts an invented one, and the guardrail only checks a
+    # PMID against the returned set inside a sentence that also matches a
+    # threshold pattern, so an ordinary finding attributed to a number nobody
+    # returned passes both. Same rule as the guard's, from the same two
+    # functions, because a scorer with its own idea of which citations were
+    # real would accept one the guard rejects.
+    cited_pmids = guardrail_module.cited_pmids(text)
+    pmid_unreturned = sorted(cited_pmids - returned_pmids(answer))
+    pmid_scored = bool(cited_pmids)
+    pmid_ok = not pmid_unreturned
+
     context_ok = (True if case.expect_context is None
                  else (bool(answer.literature_context) == case.expect_context))
 
@@ -734,6 +748,9 @@ def score(case: Case, answer) -> dict:
         "number_scored": number_scored,
         "cited": cited_ok,
         "source_named": source_ok,
+        "pmid": pmid_ok,
+        "pmid_scored": pmid_scored,
+        "pmid_unreturned": pmid_unreturned,
         "gap": gap_ok,
         "gap_scored": gap_scored,
         "gap_missing": gap_missing,
@@ -980,9 +997,13 @@ def main() -> int:
 
     # Each draw is a row, so with --repeat 1 this is exactly what it always
     # was, and with more it is the pass rate over every answer given.
+    # `pmid` joined this tuple when it was added, the way `verdict` did: an
+    # answer that attributes a finding to a number nobody returned is not a
+    # pass, and in a health tool it is the worst single failure on this list.
+    # It moves the pass-rate definition, so the run that introduced it says so.
     passed = sum(1 for r in results if all(
         r[k] for k in ("number", "cited", "gap", "no_diag", "tools", "context",
-                       "verdict")))
+                       "verdict", "pmid")))
     rate = passed / len(results) if results else 0.0
     return 1 if rate < args.fail_under else 0
 
@@ -1091,6 +1112,12 @@ def render(results: list[dict], elapsed: float, args) -> str:
     lines.append(f"- gap coverage actually scored: {len(scored_gap)}/"
                  f"{len(needed_gap)} draws that reported an absence")
 
+    scored_pmid = [r for r in results if r["pmid_scored"]]
+    if scored_pmid:
+        count = sum(1 for r in scored_pmid if r["pmid"])
+        lines.append(f"- every cited PMID was returned by the tool: "
+                     f"{count}/{len(scored_pmid)} draws that cited one")
+
     scored_verdict = [r for r in results if r["verdict_scored"]]
     if scored_verdict:
         count = sum(1 for r in scored_verdict if r["verdict"])
@@ -1103,7 +1130,8 @@ def render(results: list[dict], elapsed: float, args) -> str:
         # Over every scored column, not just the six the table shows:
         # `source_named` is summary-only, and the first live --repeat run had
         # it at 1/2 on a question this line called unvaried.
-        checked = tuple(k for k, _ in COLUMNS) + ("context", "verdict")
+        checked = tuple(k for k, _ in COLUMNS) + ("context", "verdict",
+                                                   "pmid")
         varied = [qid for qid, draws in groups
                   if any(len({d[k] for d in draws}) > 1 for k in checked)]
         lines.append(f"- varied between draws: {len(varied)}/{len(groups)}"
@@ -1142,6 +1170,9 @@ def render(results: list[dict], elapsed: float, args) -> str:
             lines.append(f"- **coverage not carried**: {row['gap_missing']}")
         elif row["gap_required"] and not row["gap_scored"]:
             lines.append(f"- gap not scorable: {row['gap_required']}")
+        if row["pmid_unreturned"]:
+            lines.append(f"- **cited a PMID the tool did not return**: "
+                         f"{row['pmid_unreturned']}")
         if row["verdict_scored"] and not row["verdict"]:
             lines.append(f"- **wrong comparison verdict**: "
                          f"{row['verdicts_seen']}")

@@ -147,6 +147,31 @@ Be brief and concrete. Lead with the answer. Prefer a short table or a few \
 lines over paragraphs. Do not repeat the question back."""
 
 
+def returned_pmids(answer: "Answer") -> frozenset[str]:
+    """Every PMID the literature tool handed back this turn.
+
+    The guard judges each threshold sentence against this set. Calling the
+    tool is not enough, and neither is the tool returning something: eval run
+    4 showed a search that returns five papers on the topic and none on the
+    cutoff, after which the model recites the cutoff anyway. Only a sentence
+    that cites one of these PMIDs is reporting evidence.
+
+    Module level, and public, because the eval asks the same question of a
+    finished answer: a scorer with its own idea of which citations were real
+    would accept one the guard rejects.
+    """
+    pmids: set[str] = set()
+    for step in answer.steps:
+        if step.name != "search_medical_literature":
+            continue
+        result = step.result if isinstance(step.result, dict) else {}
+        for finding in result.get("findings") or []:
+            pmid = finding.get("pmid") if isinstance(finding, dict) else None
+            if pmid:
+                pmids.add(str(pmid))
+    return frozenset(pmids)
+
+
 @dataclass
 class ToolCallRecord:
     step: int
@@ -360,24 +385,7 @@ class Orchestrator:
 
     @staticmethod
     def _returned_pmids(answer: "Answer") -> frozenset[str]:
-        """Every PMID the literature tool handed back this turn.
-
-        The guard judges each threshold sentence against this set. Calling
-        the tool is not enough, and neither is the tool returning something:
-        eval run 4 showed a search that returns five papers on the topic and
-        none on the cutoff, after which the model recites the cutoff anyway.
-        Only a sentence that cites one of these PMIDs is reporting evidence.
-        """
-        pmids: set[str] = set()
-        for step in answer.steps:
-            if step.name != "search_medical_literature":
-                continue
-            result = step.result if isinstance(step.result, dict) else {}
-            for finding in result.get("findings") or []:
-                pmid = finding.get("pmid") if isinstance(finding, dict) else None
-                if pmid:
-                    pmids.add(str(pmid))
-        return frozenset(pmids)
+        return returned_pmids(answer)
 
     def _run_call(self, step: int, call: backends.ToolCall) -> ToolCallRecord:
         name = call.name

@@ -129,7 +129,20 @@ def pmids(contexts: list[AnalyteContext]) -> frozenset[str]:
     each of these from the corpus itself, so this is the block's own
     `returned_pmids`: a threshold-shaped title is a report of a finding the
     tool produced this turn, not a recalled claim, and the guard's
-    per-sentence check needs exactly this set to see that."""
+    per-sentence check needs exactly this set to see that.
+
+    No production caller, deliberately recorded rather than removed: the loop
+    builds this block after the guardrail has run and the model never sees it,
+    so no answer can cite a PMID that only the block holds.
+    `tests/test_context.py` exercises the property anyway, because the day the
+    block is shown to the model, or the guard is run over the block's own
+    text, these PMIDs have to join the returned set the guard is given or a
+    faithful citation of them is flagged as one the tool never returned.
+
+    (Neither the module that owns that set nor the network layer is named in
+    this file: `test_no_network.py` scans it for both names, to keep the
+    literature block demonstrably free of either.)
+    """
     return frozenset(f["pmid"] for c in contexts for f in c.findings)
 
 

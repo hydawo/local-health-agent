@@ -374,6 +374,17 @@ def _cited(unit: str) -> set[str]:
             for n in _PMID_NUMBER.findall(m.group(1))}
 
 
+def cited_pmids(text: str) -> frozenset[str]:
+    """Every PMID a text cites, by the same rule the guard applies per unit.
+
+    Public for the eval, which needs to ask whether an answer cited a PMID
+    the tool never returned. Two copies of "what counts as a citation" is how
+    a scorer and a guard come to disagree about whether an answer cited
+    anything at all.
+    """
+    return frozenset(_cited(text))
+
+
 def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
     flags: list[Flag] = []
     for unit in _units(text):

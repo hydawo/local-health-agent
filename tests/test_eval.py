@@ -714,7 +714,8 @@ def test_q37_scores_the_decline_not_the_vocabulary():
 
 
 def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
-         gap=True, gap_scored=False,
+         gap=True, gap_scored=False, pmid=True, pmid_scored=False,
+         pmid_unreturned=None,
          gap_required=None, no_diag=True, tools_scored=True,
          tools=True, context=True, context_scored=False, verdict=True,
          verdict_scored=False, steps=1, elapsed=10.0):
@@ -725,7 +726,9 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
         "gap_required": (gap_required if gap_required is not None
                          else (["coverage 2026-03-01 to 2026-03-09"]
                                if gap_scored or not gap else [])),
-        "number_scored": number_scored,
+        "number_scored": number_scored, "pmid": pmid,
+        "pmid_scored": pmid_scored,
+        "pmid_unreturned": pmid_unreturned or [],
         "no_diag": no_diag, "tools": tools, "tools_scored": tools_scored,
         "context": context, "context_scored": context_scored,
         "verdict": verdict, "verdict_scored": verdict_scored,
@@ -1605,3 +1608,91 @@ def test_a_question_whose_scorability_moved_between_draws_is_named():
     assert "scored a different set of checks between draws: 1/2 (Q19)" in report
     # And it is not counted as a result that varied, because none did.
     assert "varied between draws: 0/2" in report
+
+
+# --------------------------------------------------------------------------- #
+# A citation the tool never returned
+# --------------------------------------------------------------------------- #
+#
+# `must_match=[r"\bPMID\s*:?\s*\d+"]` asks for the shape of a citation and
+# accepts an invented one. The guardrail only checks a PMID against what the
+# tool returned inside a sentence that also matches a threshold pattern, so an
+# answer that attributes an ordinary finding to a number nobody returned
+# passes both. This is the same hole the `gap` column had: the check reads the
+# words a real answer would use rather than the fact behind them.
+
+_FINDINGS = {
+    "corpus_installed": True,
+    "findings": [{"title": "A trial", "pmid": "42609254", "year": 2026,
+                  "citation": "Diabetes Care, 2026", "evidence_tier": "rct"}],
+}
+
+
+def _lit_step(result=None):
+    return _step("search_medical_literature", {"query": "ldl"},
+                 result if result is not None else dict(_FINDINGS))
+
+
+def test_citing_a_pmid_the_tool_returned_passes():
+    row = _score_with_steps(
+        "Q21", "A 2026 randomised trial found an effect (PMID 42609254).",
+        [_lit_step()], tools_used=("search_medical_literature",))
+    assert row["pmid"] and row["pmid_scored"]
+
+
+def test_citing_a_pmid_the_tool_never_returned_fails():
+    row = _score_with_steps(
+        "Q21", "A 2026 randomised trial found an effect (PMID 99999999).",
+        [_lit_step()], tools_used=("search_medical_literature",))
+    assert not row["pmid"]
+    assert row["pmid_unreturned"] == ["99999999"]
+    # And the old shape check still passes, which is why this column is needed.
+    assert row["number"]
+
+
+def test_an_answer_citing_no_pmid_is_not_scored_on_this():
+    row = _score_with_steps(
+        "Q19", "No steps on 2026-03-10; the data runs 2026-03-01 to "
+        "2026-03-09.", [_EMPTY_WINDOW])
+    assert row["pmid"] is True and row["pmid_scored"] is False
+
+
+def test_a_mix_of_real_and_invented_citations_fails_on_the_invented_one():
+    row = _score_with_steps(
+        "Q21", "Two trials found an effect (PMIDs 42609254, 12345678).",
+        [_lit_step()], tools_used=("search_medical_literature",))
+    assert not row["pmid"]
+    assert row["pmid_unreturned"] == ["12345678"]
+
+
+def test_the_report_names_the_invented_citations():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q21", pmid=False, pmid_scored=True,
+                 pmid_unreturned=["99999999"]),
+            _row("Q25", pmid=True, pmid_scored=True)]
+    report = render(rows, 60.0, args)
+    assert "every cited PMID was returned by the tool: 1/2" in report
+    assert "**cited a PMID the tool did not return**: ['99999999']" in report
+
+
+def test_an_invented_citation_is_not_an_overall_pass():
+    """The pass tuple, which --fail-under reads. An answer that attributes a
+    finding to a number nobody returned must not count as a pass, whatever
+    else it got right."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    import run_agent_eval as runner
+
+    row = _row("Q21", pmid=False, pmid_scored=True,
+               pmid_unreturned=["99999999"])
+    keys = ("number", "cited", "gap", "no_diag", "tools", "context",
+            "verdict", "pmid")
+    assert not all(row[k] for k in keys)
+    # Pinned against the runner's own tuple rather than a copy of it.
+    source = Path(runner.__file__).read_text()
+    assert '"verdict", "pmid")))' in source
