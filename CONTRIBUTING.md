@@ -131,6 +131,24 @@ python3 tests/run_agent_eval.py --index /tmp/eval-bed/.index/health.db \
 python3 scripts/eval_row.py /tmp/run.json --run N --label "what changed"
 ```
 
+To apply today's scorer to a run already finished, with no model, index or
+network:
+
+```bash
+python3 tests/run_agent_eval.py --rescore /tmp/run.json
+```
+
+Two habits, both bought with runs that measured nothing:
+
+- **Read the failing draws before believing the table.** Of run 12's four
+  failing `number` draws, two were the scorer failing a right answer, one was
+  a tool naming what it held instead of handing it over, and one was a
+  question with no tool behind it. None was the model's arithmetic.
+- **A check that cannot be measured reports unmeasured, never passes.** Every
+  column that can read true with nothing behind it prints how many of its
+  cells were measured, and names the questions that had nothing to check. If
+  you add a column, add that line with it.
+
 If you change a fixture, update the expected values in **both** files — a test
 enforces that every documented question has a test and vice versa.
 
