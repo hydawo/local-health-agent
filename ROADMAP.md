@@ -591,7 +591,30 @@ list with no right answer written down yet.
 
   Whichever is chosen, expect the column to drop from 37/37. That is
   information rather than a regression: the current figure is partly measuring
-  the tools. Eval run 9 found the same shape in a
+  the tools.
+
+  **Design A built, 2026-10-31.** `gap` no longer matches `GAP_PATTERNS`
+  against the answer. For a `needs_gap` case the scorer walks the recorded
+  tool payloads for every absence reported that turn, takes the coverage
+  figures beside it, and requires the answer to carry them: both ends of a
+  reported range, or the article count or a pack name for a literature miss.
+  Dates are matched as regexes rather than substrings, because "march 1" sits
+  inside "march 10" and Q19's own question names the 10th. Every distinct
+  absence has to be carried, deduped, so a tool called twice over one empty
+  window is one requirement and two different empty windows are two.
+
+  Two things the implementation added beyond the design. An absence with no
+  figure beside it reads as unmeasured rather than as a pass, with
+  `gap_scored` false and a report line saying how many cells were actually
+  scored, because a check that quietly renders as a win is this project's
+  oldest defect pointed at its own scorer. And a failing cell names what was
+  required and what was missing in the run's own output, which is the Q22
+  lesson: a diagnosis should not need a second run against discarded answers.
+
+  `GAP_PATTERNS` stays where it is. It scores nothing now, and the
+  scorer-contract test still scans tool payloads against it, so the
+  vocabulary cannot become a scorer again without its nine collisions
+  showing up. Eval run 9 found the same shape in a
   second list and retired it the same way: a bare `diagnos*` token behind
   fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
   constitute a diagnosis", negation four words away) and a date quoted off the

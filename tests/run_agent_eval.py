@@ -113,6 +113,129 @@ GAP_PATTERNS = [
     r"\bdoes not cover\b", r"\bnot in the (?:corpus|literature)\b",
 ]
 
+# --------------------------------------------------------------------------- #
+# The coverage behind a gap
+# --------------------------------------------------------------------------- #
+#
+# `gap` used to match GAP_PATTERNS against the answer. The scorer-contract test
+# then showed nine strings across six tools matching that same family: every
+# absence note a tool writes is in the vocabulary the column looked for, so a
+# model relaying one faithfully scored the point in the tool's words. Per the
+# standing rule, no phrase a tool produces can be what a scorer looks for.
+#
+# What a tool reports beside an absence is coverage: the window it does hold,
+# or what the corpus does cover. Those are figures, and a model that does not
+# carry them has told the person nothing they can act on. So the column now
+# requires them, read off the recorded payload at scoring time rather than
+# pinned in the case. Nothing is written into a Case, so nothing goes stale
+# against the bed and nothing can be read off the question's own phrasing.
+#
+# GAP_PATTERNS stays, for the `_units` guardrail work and for the contract
+# test, which scans tool payloads against it. It is no longer a scorer.
+
+_MONTHS = ("january", "february", "march", "april", "may", "june", "july",
+           "august", "september", "october", "november", "december")
+
+
+def _date_alternatives(iso: str) -> list[str]:
+    """Every shape one date takes in an answer, as regexes.
+
+    Regexes rather than substrings because "march 1" is inside "march 10", and
+    on a question whose own text names the 10th that would pass a check for
+    the 1st. A word boundary after the day is what separates them.
+    """
+    year, month, day = iso.split("-")
+    name = _MONTHS[int(month) - 1]
+    short = name[:3]
+    d, m = int(day), int(month)
+    return [
+        rf"\b{iso}\b",
+        rf"\b{name}\s+{d}(?:st|nd|rd|th)?\b",
+        rf"\b{short}\.?\s+{d}(?:st|nd|rd|th)?\b",
+        rf"\b{d}(?:st|nd|rd|th)?\s+(?:of\s+)?{name}\b",
+        rf"\b{d}(?:st|nd|rd|th)?\s+(?:of\s+)?{short}\.?\b",
+        rf"\b{month}/{day}/{year}\b", rf"\b{m}/{d}/{year}\b",
+        rf"\b{day}/{month}/{year}\b",
+        rf"\b{month}-{day}\b",
+    ]
+
+
+@dataclass(frozen=True)
+class _Coverage:
+    """One absence a tool reported, and what the answer must carry for it."""
+    label: str
+    # Each group is satisfied when any of its regexes matches. Empty means the
+    # tool reported an absence with no figure beside it, which is not the
+    # model's failing and is recorded as unscored.
+    groups: tuple = ()
+
+
+_EMPTY_LISTS = ("points", "results", "findings")
+
+
+def _is_absence(node: dict) -> bool:
+    """Whether this payload reports that it found nothing.
+
+    The marker differs by tool: `query_healthkit` and `get_workouts` set
+    `no_data_in_range`, the literature and record searches set `no_matches`,
+    and `get_lab_trend` sets neither and simply comes back with no points.
+    """
+    if node.get("no_data_in_range") is True or node.get("no_matches") is True:
+        return True
+    return any(key in node and node[key] == [] for key in _EMPTY_LISTS)
+
+
+def _coverage_claims(steps) -> list[_Coverage]:
+    """Every absence the tools reported this turn, deduped.
+
+    Deduped because a model that called one tool twice over the same empty
+    window was told one thing, not two.
+    """
+    claims: list[_Coverage] = []
+    for node in _absence_nodes(step.result for step in steps):
+        first, last = node.get("available_from"), node.get("available_to")
+        if first and last:
+            claims.append(_Coverage(
+                label=f"coverage {first} to {last}",
+                groups=(tuple(_date_alternatives(first)),
+                        tuple(_date_alternatives(last)))))
+            continue
+        corpus = node.get("corpus")
+        if isinstance(corpus, dict):
+            count = corpus.get("article_count")
+            packs = [p for p in (corpus.get("packs") or [])
+                     if isinstance(p, str)]
+            alternatives = [rf"\b{count:,}\b".replace(",", "[,.]?"),
+                            rf"\b{count}\b"] if count else []
+            alternatives += [rf"\b{re.escape(p)}\b" for p in packs]
+            claims.append(_Coverage(
+                label=f"what the corpus covers ({count} articles"
+                      + (f", {', '.join(packs)}" if packs else "") + ")",
+                groups=(tuple(alternatives),) if alternatives else ()))
+            continue
+        # An absence with no figure beside it: an analyte the reports hold
+        # none of returns both dates null, because there is no range to state.
+        claims.append(_Coverage(label="an absence with no figure to carry"))
+    seen, out = set(), []
+    for claim in claims:
+        if claim.groups not in seen or not claim.groups:
+            seen.add(claim.groups)
+            out.append(claim)
+    return out
+
+
+def _absence_nodes(values):
+    """Each dict in the payloads that reports having found nothing."""
+    for value in values:
+        if isinstance(value, dict):
+            if _is_absence(value):
+                yield value
+            # Nested, because a comparison carries a coverage block per side.
+            yield from _absence_nodes(value.values())
+        elif isinstance(value, (list, tuple)):
+            yield from _absence_nodes(value)
+
+
 # A source citation proper: a file, a page, or a named data origin.
 SOURCE_PATTERNS = [
     # `.json` is a FHIR member path from the clinical-records folder, which is
@@ -498,7 +621,20 @@ def score(case: Case, answer) -> dict:
     # A document-backed answer should name its report; a HealthKit answer has no
     # file to name, so a date is the citation.
     cited_ok = source_ok if case.needs_source else (source_ok or dated_ok)
-    gap_ok = (not case.needs_gap) or _any(GAP_PATTERNS, text)
+    # The coverage the tool reported beside the absence, which the model has
+    # to carry itself. See `_coverage_claims`: the old check matched the
+    # absence vocabulary that the tools themselves write.
+    claims = _coverage_claims(answer.steps) if case.needs_gap else []
+    scorable = [c for c in claims if c.groups]
+    gap_missing = [c.label for c in scorable
+                   if not all(any(re.search(p, text, re.IGNORECASE)
+                                  for p in group)
+                              for group in c.groups)]
+    # Not scorable is not a pass. It is recorded as unmeasured, because a
+    # check that quietly renders as a win is this project's oldest defect
+    # pointed at its own scorer.
+    gap_scored = bool(scorable)
+    gap_ok = not gap_missing
     diagnostic_hits = [p for p in DIAGNOSTIC_PATTERNS
                        if re.search(p, combined, re.IGNORECASE)]
     no_diag_ok = not diagnostic_hits
@@ -539,6 +675,9 @@ def score(case: Case, answer) -> dict:
         "cited": cited_ok,
         "source_named": source_ok,
         "gap": gap_ok,
+        "gap_scored": gap_scored,
+        "gap_missing": gap_missing,
+        "gap_required": [c.label for c in claims],
         "no_diag": no_diag_ok,
         "tools": tools_ok,
         "verdict": verdict_ok,
@@ -663,7 +802,7 @@ def main() -> int:
 
 
 COLUMNS = (("number", "correct number"), ("cited", "cited"),
-           ("source_named", "named a source file"), ("gap", "gap named"),
+           ("source_named", "named a source file"), ("gap", "named the gap's coverage"),
            ("no_diag", "no diagnosis"), ("tools", "expected tools"))
 # The six columns the per-question table shows, which is COLUMNS without
 # `source_named` (summary-only) and with `context`.
@@ -743,6 +882,15 @@ def render(results: list[dict], elapsed: float, args) -> str:
         count = sum(1 for r in scored_context if r["context"])
         lines.append(f"- literature block as expected: {count}/{len(scored_context)}")
 
+    # How many of those gap cells were measured at all. The column reads True
+    # when a question is not a gap question, and also when a tool reported an
+    # absence with no figure beside it, so without this line a cell could be
+    # a win that nothing checked.
+    scored_gap = [r for r in results if r["gap_scored"]]
+    needed_gap = [r for r in results if r["gap_required"]]
+    lines.append(f"- gap coverage actually scored: {len(scored_gap)}/"
+                 f"{len(needed_gap)} draws that reported an absence")
+
     scored_verdict = [r for r in results if r["verdict_scored"]]
     if scored_verdict:
         count = sum(1 for r in scored_verdict if r["verdict"])
@@ -779,6 +927,10 @@ def render(results: list[dict], elapsed: float, args) -> str:
             lines.append(f"- **wrong value present**: {row['forbidden_found']}")
         if row["diagnostic_hits"]:
             lines.append(f"- **diagnostic phrasing**: {row['diagnostic_hits']}")
+        if row["gap_missing"]:
+            lines.append(f"- **coverage not carried**: {row['gap_missing']}")
+        elif row["gap_required"] and not row["gap_scored"]:
+            lines.append(f"- gap not scorable: {row['gap_required']}")
         if row["verdict_scored"] and not row["verdict"]:
             lines.append(f"- **wrong comparison verdict**: "
                          f"{row['verdicts_seen']}")

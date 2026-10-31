@@ -713,12 +713,18 @@ def test_q37_scores_the_decline_not_the_vocabulary():
         assert not _score_q37(text)["number"], text
 
 
-def _row(qid, *, draw=1, number=True, cited=True, gap=True, no_diag=True,
+def _row(qid, *, draw=1, number=True, cited=True, gap=True, gap_scored=False,
+         gap_required=None, no_diag=True,
          tools=True, context=True, context_scored=False, verdict=True,
          verdict_scored=False, steps=1, elapsed=10.0):
     return {
         "id": qid, "draw": draw, "number": number, "cited": cited,
-        "source_named": cited, "gap": gap, "no_diag": no_diag, "tools": tools,
+        "source_named": cited, "gap": gap, "gap_scored": gap_scored,
+        "gap_missing": [] if gap else ["coverage 2026-03-01 to 2026-03-09"],
+        "gap_required": (gap_required if gap_required is not None
+                         else (["coverage 2026-03-01 to 2026-03-09"]
+                               if gap_scored or not gap else [])),
+        "no_diag": no_diag, "tools": tools,
         "context": context, "context_scored": context_scored,
         "verdict": verdict, "verdict_scored": verdict_scored,
         "verdicts_seen": ["thin_on_one_side"] if verdict_scored else [],
@@ -1134,3 +1140,203 @@ def test_q37_accepts_the_anchor_date_as_a_person_writes_it():
     # A date that is not the anchor must still fail.
     assert not any(alt.lower() in "around 2023-03-18".lower()
                    for alt in case.must_include[0])
+
+
+# --------------------------------------------------------------------------- #
+# The gap column, scored on the coverage the tool reported
+# --------------------------------------------------------------------------- #
+#
+# Until now `gap` matched GAP_PATTERNS against the answer, and the
+# scorer-contract test showed nine strings across six tools matching that same
+# family: every absence note a tool writes is in the vocabulary the column
+# looked for, so a model relaying one faithfully scored the point in the
+# tool's words. The column now asks for the figures the tool reported beside
+# the absence, which the model has to carry itself, read off the recorded
+# payload rather than pinned in the case.
+
+def _score_with_steps(qid, text, steps, tools_used=("query_healthkit",)):
+    import sys
+    from types import SimpleNamespace
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, score
+
+    case = next(c for c in CASES if c.id == qid)
+    answer = SimpleNamespace(text=text, literature_context_text="",
+                             tools_used=list(tools_used), guardrail=None,
+                             elapsed_sec=0.0, steps=steps,
+                             literature_context=None)
+    return score(case, answer)
+
+
+def _step(name, arguments, result, step=1):
+    return ToolCallRecord(step=step, name=name, arguments=arguments,
+                          result=result, elapsed_sec=0.0)
+
+
+_EMPTY_WINDOW = _step(
+    "query_healthkit", {"metric": "steps"},
+    {"metric": "HKQuantityTypeIdentifierStepCount",
+            "points": [], "no_data_in_range": True,
+            "total_records_for_metric": 7,
+            "available_from": "2026-03-01", "available_to": "2026-03-09",
+     "note": "Step count exists but not in the requested window."})
+
+_Q19_TEXT = "Your last lab panel was on 2026-03-10. "
+
+
+def test_the_gap_column_asks_for_the_coverage_the_tool_reported():
+    row = _score_with_steps("Q19", _Q19_TEXT + (
+        "There are no step records for that date: the step data runs from "
+        "2026-03-01 to 2026-03-09."), [_EMPTY_WINDOW])
+    assert row["gap"] and row["gap_scored"]
+
+
+def test_relaying_the_absence_without_its_figures_no_longer_passes():
+    """The defect itself. Every phrase here matches GAP_PATTERNS, which is
+    what the column used to accept, and none of it tells the person what the
+    index does hold."""
+    for text in ("There is no step data for that date.",
+                 "Step count is not available for 2026-03-10.",
+                 "Your records do not cover that period, so I cannot say.",
+                 "No step records were found; there is a gap there."):
+        row = _score_with_steps("Q19", _Q19_TEXT + text, [_EMPTY_WINDOW])
+        assert not row["gap"], text
+        assert row["gap_scored"], text
+
+
+def test_both_ends_of_the_reported_range_are_required():
+    """One boundary is half the coverage, and the half a model can get right
+    by naming the date the question already contains."""
+    row = _score_with_steps("Q19", _Q19_TEXT + (
+        "No steps on that date; the data starts on 2026-03-01."),
+        [_EMPTY_WINDOW])
+    assert not row["gap"]
+
+
+def test_the_range_is_accepted_in_the_forms_a_person_writes_it():
+    for span in ("March 1 to March 9, 2026", "Mar 1 2026 through Mar 9 2026",
+                 "03/01/2026 to 03/09/2026", "2026-03-01 and 2026-03-09"):
+        row = _score_with_steps("Q19", _Q19_TEXT + (
+            f"There are no steps for that date. The step data covers {span}."),
+            [_EMPTY_WINDOW])
+        assert row["gap"], span
+
+
+def test_a_literature_gap_asks_what_the_corpus_does_cover():
+    """The other shape of absence, and the one the tool's own note asks for:
+    "name what it does cover". A pack name or the article count is a figure
+    the model has to carry; "the corpus has nothing on this" is not."""
+    miss = _step(
+        "search_medical_literature", {"query": "hip replacement recovery"},
+        {"corpus_installed": True, "findings": [], "no_matches": True,
+                "corpus": {"packs": ["sample"], "article_count": 2000,
+                           "built": "2026.09"},
+         "note": "The corpus holds nothing on this."})
+    carried = _score_with_steps(
+        "Q23", "My literature does not cover hip replacement recovery. The "
+        "corpus installed here is the sample pack, 2,000 articles.",
+        [miss], tools_used=("search_medical_literature",))
+    assert carried["gap"] and carried["gap_scored"]
+
+    bare = _score_with_steps(
+        "Q23", "The corpus holds nothing on hip replacement recovery, so I "
+        "cannot answer that from the literature.",
+        [miss], tools_used=("search_medical_literature",))
+    assert not bare["gap"]
+
+
+def test_an_absence_with_no_figure_to_carry_is_marked_unscored():
+    """An analyte the reports hold none of returns both dates null, so there
+    is no coverage figure for the model to state. That has to read as
+    unscored, not as a pass: an unmeasured check rendering as a win is the
+    absence-as-coverage defect, pointed at the scorer."""
+    nothing = _step(
+        "get_lab_trend", {"analyte": "crp"},
+        {"analyte": "crp", "points": [],
+                "total_results_for_analyte": 0,
+                "available_from": None, "available_to": None,
+         "note": "No crp results in these reports at all."})
+    row = _score_with_steps("Q19", _Q19_TEXT + "No data for that date.",
+                            [nothing], tools_used=("get_lab_trend",))
+    assert row["gap"] is True
+    assert row["gap_scored"] is False
+
+
+def test_a_question_that_is_not_a_gap_question_is_untouched():
+    row = _score_with_steps("Q20", "LDL 112, HDL 52, total 186 "
+                            "(labs_2026-03-10.pdf, p.1, 2026-03-10).", [])
+    assert row["gap"] is True and row["gap_scored"] is False
+
+
+def test_every_absence_the_tools_reported_has_to_be_carried():
+    """Two empty windows mean two things the person was not told. Reporting
+    one of them is reporting one of them."""
+    other = _step(
+        "query_healthkit", {"metric": "resting-hr"},
+        {"points": [], "no_data_in_range": True,
+                "total_records_for_metric": 7,
+                "available_from": "2026-02-01", "available_to": "2026-02-28"})
+    both = _score_with_steps("Q19", _Q19_TEXT + (
+        "No steps or resting heart rate for that date. Steps run 2026-03-01 "
+        "to 2026-03-09 and resting heart rate 2026-02-01 to 2026-02-28."),
+        [_EMPTY_WINDOW, other])
+    assert both["gap"]
+    one = _score_with_steps("Q19", _Q19_TEXT + (
+        "No steps for that date; steps run 2026-03-01 to 2026-03-09."),
+        [_EMPTY_WINDOW, other])
+    assert not one["gap"]
+
+
+def test_the_same_absence_reported_twice_is_one_requirement():
+    """A model that calls a tool twice over the same empty window was told
+    one thing, not two."""
+    again = _step("query_healthkit", {"metric": "steps"},
+                  dict(_EMPTY_WINDOW.result), step=2)
+    row = _score_with_steps("Q19", _Q19_TEXT + (
+        "No steps for that date; the data runs 2026-03-01 to 2026-03-09."),
+        [_EMPTY_WINDOW, again])
+    assert row["gap"]
+
+
+def test_the_row_records_what_was_required_and_what_was_missing():
+    """The Q22 lesson: a check that fails must say why in the run's own
+    output, or diagnosing it means re-running against discarded answers."""
+    row = _score_with_steps("Q19", _Q19_TEXT + "No step data at all.",
+                            [_EMPTY_WINDOW])
+    assert not row["gap"]
+    detail = " ".join(row["gap_missing"])
+    assert "2026-03-01" in detail and "2026-03-09" in detail
+
+
+def test_the_report_says_how_many_gap_cells_were_measured():
+    """A gap cell reads pass when the question is not a gap question and when
+    a tool reported an absence with no figure beside it. Without this line a
+    reader cannot tell either of those from a cell the model earned."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q19", gap=True, gap_scored=True),
+            _row("Q23", gap=False, gap_scored=True),
+            # A gap question whose absence carried no figure: in the
+            # denominator, not in the numerator.
+            _row("Q30", gap=True, gap_scored=False,
+                 gap_required=["an absence with no figure to carry"])]
+    report = render(rows, 60.0, args)
+    assert "gap coverage actually scored: 2/3 draws" in report
+    assert "**coverage not carried**" in report
+
+
+def test_an_unscorable_gap_is_named_in_the_report_not_left_blank():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    report = render([_row("Q19", gap=True, gap_scored=False,
+                          gap_required=["an absence with no figure to carry"])],
+                    60.0, args)
+    assert "gap not scorable" in report

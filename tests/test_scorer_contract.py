@@ -70,7 +70,12 @@ FAMILIES: dict[str, list[str]] = {
     # Required: a tool string matching this satisfies Q37's `must_match` for a
     # model that copies it without declining anything.
     "decline": [DECLINE_PATTERN],
-    # Required: same hazard for `needs_gap`.
+    # Kept, though `GAP_PATTERNS` no longer scores anything: the nine
+    # collisions this family found are why `gap` was changed to require the
+    # coverage figures a tool reports instead of the absence words it writes.
+    # The scan stays so the vocabulary cannot quietly become a scorer again
+    # without the collisions showing up, and so the exemptions keep recording
+    # which strings they are.
     "gap": GAP_PATTERNS,
     # Forbidden, and substrings rather than regexes.
     "directive": [re.escape(phrase) for phrase in DIRECTIVE_ADVICE],
