@@ -456,8 +456,17 @@ index (`tests/window_fixture.py`), and a model run is recorded separately.
 Four of the five sub-projects in the decomposition remain.
 
 **Known gaps, carried deliberately.** Four things this work left open, recorded
-here because a scratch ledger does not survive and each needs a decision rather
-than a fix.
+here because a scratch ledger does not survive and each looked at the time like
+a decision rather than a fix. Later work added more entries to the list and
+closed most of them in place, each keeping what it first said and adding what
+was done. Of the original four, three are now fixed (`sample_depth`, the
+unlabelled sentinel, and the three copies of the measure-key rule) and the
+fourth, the rule against scoring a tool's own phrases, is built as
+`tests/test_scorer_contract.py`. What remains open from it is the finding it
+produced rather than the test itself: the `gap` column scores that an answer
+mentions an absence, in words that may be the tool's, and scoring it properly
+is a decision about what to ask of the model. That is the one thing in this
+list with no right answer written down yet.
 
 - The comparability block names a `sample_depth` check that is not implemented.
   Reaching it needs `workout_series` to propagate `workout_detail`'s own

@@ -860,3 +860,34 @@ One thing is fixed regardless. This run reported `uncited_medical_claim
 (rewritten)` and nothing more, so which of the four rules fired and on what
 sentence took a separate investigation, against answers the run had already
 discarded. The eval now records each flag's rule and excerpt.
+
+### What the model sees differently since run 11
+
+Run 12 is not a like-for-like rerun of run 11, and the reason is written down
+here rather than reconstructed afterwards. Four changes since `b6c0e4b` alter
+what reaches the model, so a column that moves is not evidence about the model
+on its own.
+
+1. **Where a citation sits.** `SAME_SENTENCE_RULE` now rides in
+   `CITATION_NOTE`, in the literature tool's note and in prompt rule 1b: a
+   sentence stating a general rule carries its citation inside that same
+   sentence. This is the Q22 guardrail fix, and the guardrail itself is
+   unchanged, so the expected effect is fewer `uncited_medical_claim` fires
+   and no change to any column.
+2. **No unit, said in words.** `query_healthkit` and `compare_windows` no
+   longer hand back `"unit": "unlabelled"`. The field is null and a
+   `unit_note` says the records name no unit. Nothing on the eval bed is
+   unitless, so this should be invisible in the run and is listed because a
+   payload change that cannot be seen is the kind that gets forgotten.
+3. **Sample depth.** `compare_windows` with `sample_counts` now reports the
+   median records inside each workout per side, in the payload and in the
+   rendered text. No eval question asks for `sample_counts`, so this adds
+   nothing to any answer unless the model starts asking for it.
+4. **Two tool descriptions** gained a sentence about a null unit, and
+   `get_clinical_history`'s note says "never state" where it said "do not
+   say", which was the scorer-contract collision.
+
+The scorer changed too, in `72d1109`: four questions score differently
+(Q17, Q36, Q37 and anything the dose pattern would have caught). Those are
+scoring fixes, so a question that moves there is the scorer being right where
+it was wrong, not the model changing.
