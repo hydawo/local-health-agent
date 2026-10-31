@@ -798,6 +798,13 @@ every run prints how many draws the cell passed on the exemption rather than
 on there being nothing to find. Re-scored with it, this run's cell reads 37/37
 on one exempted draw in 111.
 
+Prompt rule 4c closes that hole from the other side, by asking for the form
+that asserts nothing in the first place: "your notes record a diagnosis of
+high cholesterol in 2024" rather than "you were diagnosed with high
+cholesterol in 2024", with the record named in the same sentence. Run 14 was
+already in flight when the rule landed, so the first run to measure whether
+the model follows it is run 15.
+
 `source file named` needs its denominator said out loud. 14 of the 37
 questions are HealthKit questions, where no file exists to name, and the
 column is counted over all 37, so the cell is mostly measuring how many

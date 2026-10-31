@@ -1117,13 +1117,14 @@ patterns against the capture by hand.
   one.**
   *Trade:* the most work, and the exemption still carries (a)'s hole.
 
-**Decided 2026-10-31: a.** The measurement is what makes it safe to take:
+**Decided 2026-10-31: c, in two steps.** The measurement is what makes the
+exemption safe to take:
 every run now prints how many draws the cell passed on the exemption rather
 than on there being nothing to find, so an exemption that starts hiding real
 failures shows up as that count rising. (b) is the better answer to a question
 about what the agent should say, and a worse answer to a question about what
-the column should measure. Those are two decisions and this one is the
-column's; the prompt half stays open.
+the column should measure. Those are two decisions, so both were taken: the
+exemption is the column's half, and prompt rule 4c is the agent's.
 
 What shipped, with three limits written into it:
 
@@ -1144,6 +1145,18 @@ What shipped, with three limits written into it:
 Re-scoring run 13 moves its `no_diag` cell from 36/37 to 37/37 on one exempted
 draw in 111, and leaves `clean` at 26/37, because that draw's question fails
 `tools` for a separate reason.
+
+Prompt rule 4c is the other half, and it closes the exemption's hole from the
+side the exemption cannot: "your notes record a diagnosis of high cholesterol
+in 2024" carries the same fact as "you were diagnosed with high cholesterol in
+2024" and never asserts anything, so the guard keeps its floor on the sentence
+that does. The rule names both forms rather than describing the distinction,
+and the test holds the two checks to it: the taught form passes the column and
+trips nothing in the guardrail, the asserted form still fails the column. The
+live guardrail is silent on both, because its patterns name the agent as the
+actor and neither sentence does, which is the reason the rule is worth having
+at all. Whether the model follows it is a question for run 15: run 14 was
+already in flight.
 
 ### The agent offers to find the evidence instead of finding it
 

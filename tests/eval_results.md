@@ -1240,6 +1240,13 @@ being nothing to find. A run whose count climbs is the signal that it has
 started hiding real failures. The options and the reasoning are in the
 ROADMAP.
 
+Prompt rule 4c is the other half of the same decision and landed with the
+exemption: a diagnosis a record holds is attributed to that record, "your
+notes record a diagnosis of high cholesterol in 2024", rather than told to the
+person. It carries the same fact and asserts nothing, so the guard keeps its
+floor on the sentence that does. Run 14 was already in flight, so run 15 is
+the first run that can say whether the model follows it.
+
 The row above is what the scorer read on the day of the run. Re-scored by the
 scorer that carries the exemption, run 13's `no_diag` cell reads 37/37, on one
 exempted draw in 111; `clean` stays at 26/37, because Q24 fails `tools` for a
