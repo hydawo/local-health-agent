@@ -33,7 +33,7 @@ from .logging_setup import configure, get_logger
 from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
 from .literature import store as literature_store
 from .store import (queries, sqlite_schema, vector_store, windows,
-                     workout_stats)
+                    workout_stats)
 
 log = get_logger("cli")
 
