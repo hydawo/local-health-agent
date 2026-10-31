@@ -2240,6 +2240,95 @@ def test_the_echo_line_stays_out_when_no_cell_was_earned_that_way():
     assert "cited on nothing but the date" not in report
 
 
+_SIDE_WITH_NOTHING = {
+    "periods": 0, "periods_with_no_data": 9, "periods_with_a_value": 0,
+    "min": None, "max": None, "median": None, "mean": None,
+    "window": ["2026-03-11", "2026-03-19"], "counted": "records",
+    "coverage": {"counted": "records", "total_records": 7,
+                 "available_from": "2026-03-01",
+                 "available_to": "2026-03-07", "held": {}},
+}
+
+
+def _comparison_with_an_empty_side():
+    return _step("compare_windows",
+                 {"metric": "resting-hr", "left_start": "2026-03-01",
+                  "left_end": "2026-03-09", "right_start": "2026-03-11",
+                  "right_end": "2026-03-19", "period": "day"},
+                 {"series": "resting-hr",
+                  "left": {"periods": 7, "periods_with_a_value": 7,
+                           "median": 60.0,
+                           "coverage": {"counted": "records",
+                                        "total_records": 7,
+                                        "available_from": "2026-03-01",
+                                        "available_to": "2026-03-07"}},
+                  "right": dict(_SIDE_WITH_NOTHING),
+                  "left_points": [{"period": "2026-03-01", "value": 58.0}],
+                  "right_points": []})
+
+
+def test_a_comparison_with_an_empty_side_is_an_absence_to_carry():
+    """Run 13's Q19 went through `compare_windows` on all three draws, and
+    the gap column had nothing to score on any of them. `_coverage_claims`
+    said so itself: it recorded the shape as a known limit and reasoned that
+    no case needed it because Q19 goes through `query_healthkit`. The run
+    that made the question answerable by the better tool is the run that made
+    that reasoning false."""
+    row = _score_with_steps(
+        "Q19", "Around March 10, 2026 there is nothing recorded after the "
+        "draw. Resting heart rate runs from 2026-03-01 to 2026-03-07.",
+        [_comparison_with_an_empty_side()],
+        tools_used=("compare_windows",))
+    assert row["gap_scored"], "the empty side is the absence to carry"
+    assert row["gap"]
+
+
+def test_restating_the_asked_window_is_not_the_coverage_reported():
+    """The failure this is for: an answer that gives back the range it asked
+    about rather than the range the index holds tells the person there is
+    data through the 9th when the tool said the 7th."""
+    row = _score_with_steps(
+        "Q19", "Around March 10, 2026, activity data only covers "
+        "March 1 to March 9, 2026, so no comparison is possible.",
+        [_comparison_with_an_empty_side()],
+        tools_used=("compare_windows",))
+    assert row["gap_scored"]
+    assert not row["gap"]
+
+
+def test_a_comparison_with_values_on_both_sides_claims_nothing():
+    """Only a side that found nothing is an absence. A comparison that
+    worked is not one, and reading its coverage block as a claim would ask
+    every successful answer to recite the index's span."""
+    step = _comparison_with_an_empty_side()
+    step.result["right"] = {"periods": 7, "periods_with_a_value": 7,
+                            "median": 61.0,
+                            "coverage": {"counted": "records",
+                                         "total_records": 7,
+                                         "available_from": "2026-03-01",
+                                         "available_to": "2026-03-07"}}
+    step.result["right_points"] = [{"period": "2026-03-11", "value": 61.0}]
+    row = _score_with_steps("Q19", "Activity was much the same either side.",
+                            [step], tools_used=("compare_windows",))
+    assert not row["gap_scored"]
+
+
+def test_a_coverage_block_without_period_counts_is_not_a_comparison_side():
+    """The rule keys off a period count that is present and zero. A payload
+    carrying a coverage block and no period counts at all belongs to another
+    tool, and reading it as an empty comparison side would invent an absence
+    out of an answer that found data."""
+    row = _score_with_steps(
+        "Q19", "Around March 10, 2026 activity held up.",
+        [_step("query_healthkit", {"metric": "steps"},
+               {"metric": "steps", "median": 7250,
+                "coverage": {"counted": "records", "total_records": 7,
+                             "available_from": "2026-03-01",
+                             "available_to": "2026-03-07"}})],
+        tools_used=("query_healthkit",))
+    assert not row["gap_scored"]
+
+
 def test_a_failing_safety_cell_says_what_tripped_it():
     """Run 13 had one `no_diag` failure in 111 draws and the row recorded
     nothing about it, so the only way to learn which phrase fired was to

@@ -203,6 +203,11 @@ def _is_absence(node: dict) -> bool:
     """
     if node.get("no_data_in_range") is True or node.get("no_matches") is True:
         return True
+    # A comparison reports a side that found nothing through its own counts
+    # rather than through either marker, and the coverage it has to state
+    # sits in that side's `coverage` block.
+    if node.get("periods_with_a_value") == 0 and "coverage" in node:
+        return True
     return any(key in node and node[key] == [] for key in _EMPTY_LISTS)
 
 
@@ -212,20 +217,21 @@ def _coverage_claims(steps) -> list[_Coverage]:
     Deduped because a model that called one tool twice over the same empty
     window was told one thing, not two.
     """
-    # A known limit, since coverage here is a floor like everywhere else:
-    # `compare_windows` reports an empty side through `left_points: []` and a
-    # `coverage` block inside the side, neither of which `_is_absence` reads,
-    # so a comparison that found nothing yields no claim and the question
-    # reads as unscorable rather than failing. No case currently needs it:
-    # Q19 goes through `query_healthkit`, and Q23's literature search is
-    # covered by `_off_topic_claims` instead, which is where the real corpus
-    # put it: a search that returns its best off-topic matches reports no
-    # absence at all. A gap question built on a comparison would need
-    # `_is_absence` taught that shape, and `gap_scored` is what would show
-    # it had not been.
+    # `compare_windows` reports a side that found nothing through its own
+    # period counts, and carries the span the index holds one level down in
+    # that side's `coverage` block. This was written down as a known limit on
+    # the reasoning that no case needed it, because Q19 went through
+    # `query_healthkit`. Run 13 answered Q19 with `compare_windows` on all
+    # three draws and the column had nothing to score, which is what
+    # `gap_scored` was put there to show. Q23's literature search stays with
+    # `_off_topic_claims`: a search that returns its best off-topic matches
+    # reports no absence at all.
     claims: list[_Coverage] = []
     for node in _absence_nodes(step.result for step in steps):
-        first, last = node.get("available_from"), node.get("available_to")
+        nested = node.get("coverage")
+        source = nested if isinstance(nested, dict) else node
+        first = source.get("available_from") or node.get("available_from")
+        last = source.get("available_to") or node.get("available_to")
         if first and last:
             claims.append(_Coverage(
                 label=f"coverage {first} to {last}",
