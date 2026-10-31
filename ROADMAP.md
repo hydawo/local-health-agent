@@ -355,6 +355,15 @@ attack surface, and which trade someone wants is theirs to make rather than
 ours to make for them. This settles the question that had the Oura sub-project
 parked; it does not schedule the work.
 
+Six questions still have to be answered before a spec can be written, and they
+are listed with options, trades and a recommendation each in
+[`docs/oura-open-questions.md`](docs/oura-open-questions.md): which figures are
+in scope, how an Oura resting heart rate coexists with an Apple Watch one,
+where Oura-only scores live, where the API token lives, what the API path owes
+`THREAT_MODEL.md`'s Claim 3 (three network modules become four, with a test
+asserting the exact set), and what the synthetic fixture is. Nothing there is
+built.
+
 ## 9. Better lab value extraction
 
 Move from regex and table heuristics to a more robust structured extraction
