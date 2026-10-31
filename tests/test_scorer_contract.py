@@ -261,6 +261,11 @@ CALLS: tuple[tuple[str, dict, str], ...] = (
 )
 
 
+# Filled by the `payloads` fixture, which is module-scoped and runs once.
+# A list rather than a second fixture so the tools are driven once, not twice.
+RAW: list[tuple[str, str, dict, dict]] = []
+
+
 @pytest.fixture(scope="module")
 def payloads(tmp_path_factory) -> list[tuple[str, str, str]]:
     """Every string every listed call hands the model, as (tool, path, text)."""
@@ -322,6 +327,10 @@ def payloads(tmp_path_factory) -> list[tuple[str, str, str]]:
         assert name in by_name, f"{name} is not a registered tool"
         result = by_name[name].handler(contexts[index], dict(args))
         collected += [(name, path, text) for path, text in _strings(result)]
+        # The payload itself, for the absence-as-coverage check below. The
+        # string crawl cannot answer that question: it asks what fields a
+        # payload carries, not what words.
+        RAW.append((name, index, dict(args), result))
 
     yield collected
     main.close()
@@ -506,3 +515,51 @@ def test_an_exemption_does_not_cover_a_different_string_on_the_same_key():
     assert _is_exempt(
         "query_healthkit", "note", "gap",
         "There is no resting-hr data in this index at all. Do not substitute.")
+
+
+# --------------------------------------------------------------------------- #
+# Absence, reported as coverage
+# --------------------------------------------------------------------------- #
+
+def test_every_absence_a_tool_reports_carries_the_coverage_behind_it(payloads):
+    """The doctrine that broke four times on one branch, as an invariant.
+
+    An empty list must mean "none held", never "nobody looked", and the way a
+    reader tells the difference is the coverage beside it: the span the index
+    does hold, a total, or what the corpus does cover. The eval's `gap` column
+    now scores exactly those figures, so a tool that reports an absence
+    without them silently makes that question unscorable.
+
+    Uses the eval's own `_is_absence`, so there is one rule for what counts as
+    a tool saying it found nothing.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import _absence_nodes
+
+    assert RAW, "the payloads fixture must run first"
+    # A count of what the index holds, under whatever name the tool gives it:
+    # `total_sleep_records`, `total_results_for_analyte`, `chunks_indexed`,
+    # `article_count`. Spelling them out one by one was the first version of
+    # this list and it missed two, which read as doctrine failures rather
+    # than as the list being short.
+    def has_total(node: dict) -> bool:
+        return any(node.get(key) is not None for key in node
+                   if key.startswith("total_")
+                   or key in ("chunks_indexed", "article_count"))
+
+    blocks = ("corpus", "coverage", "held")
+    missing = []
+    for name, index, args, result in RAW:
+        for node in _absence_nodes([result]):
+            # "No corpus is installed" is the absence of a source, not of
+            # data in one, and there is no coverage of a corpus that is not
+            # there. The note says so in words, which is the whole answer.
+            if node.get("corpus_installed") is False:
+                continue
+            has_range = node.get("available_from") and node.get("available_to")
+            has_block = any(isinstance(node.get(k), dict) for k in blocks)
+            if not (has_range or has_total(node) or has_block):
+                missing.append((name, index, sorted(node)[:8]))
+    assert not missing, (
+        "a tool reported an absence with no coverage beside it: " + repr(missing))

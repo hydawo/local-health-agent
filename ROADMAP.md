@@ -695,6 +695,22 @@ list with no right answer written down yet.
   is its own base and names no aggregate, rather than being labelled an
   aggregate of something else. That is the case the three copies agreed on
   only because no real export produces it.
+- **Absence-as-coverage is an invariant now, not a doctrine.** The rule that
+  broke four times on one branch, an empty list meaning "none held" and never
+  "nobody looked", is asserted over every tool the scorer-contract test
+  drives: a payload that reports finding nothing must carry the coverage
+  beside it, a span, a count, or what the corpus covers. It matters more since
+  the `gap` column started scoring exactly those figures, because a tool that
+  reports an absence without them makes that question unscorable rather than
+  failing it.
+
+  One exception, stated in the test: "no corpus is installed" is the absence
+  of a source rather than of data in one, and there is no coverage of a corpus
+  that is not there. The first version of the check also read two real
+  payloads as failures, because its list of coverage field names was written
+  out by hand and missed `total_sleep_records` and `chunks_indexed`; it now
+  takes any `total_*` count, which is the shape rather than the spelling.
+
 - **The scorer accepted a citation the tool never returned.** Found
   2026-10-31 while auditing the columns below. `must_match=[r"\bPMID\s*:?\s*
   \d+"]` on Q21, Q25 and Q26 asks for the shape of a citation, and the
