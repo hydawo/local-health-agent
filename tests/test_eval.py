@@ -1805,3 +1805,50 @@ def test_every_needs_source_case_is_document_backed():
         if case.needs_source:
             assert case.expect_tools, case.id
             assert set(case.expect_tools) <= document_tools, case.id
+
+
+def test_the_row_script_computes_the_table_cells_from_a_capture_file():
+    """Every row in eval_results.md was transcribed by hand, and run 11's
+    narrative had to be corrected twice for that kind of slip. A cell counts
+    questions that held on every draw, which is what the run 11 row means."""
+    import json as _json
+    import subprocess
+    import sys
+    import tempfile
+
+    script = Path(__file__).parent.parent / "scripts" / "eval_row.py"
+    draws = []
+    for draw in (1, 2):
+        row = _capture_payload()
+        row["draw"] = draw
+        if draw == 2:
+            # One draw of two fails the gap column and nothing else: it keeps
+            # the panel date the question asks for and so still carries a
+            # value and a citation. The question did not hold on every draw,
+            # so the gap cell must say 0/1 while the rest say 1/1.
+            row["answer"] = ("Your last lab panel was on 2026-03-10. There "
+                             "is no step data for that date.")
+        draws.append(row)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "capture.json"
+        path.write_text(_json.dumps({
+            "run": {"model": "qwen3.6:27b", "repeat": 2, "elapsed_sec": 120.0},
+            "draws": draws}))
+        out = subprocess.run(
+            [sys.executable, str(script), str(path), "--run", "99",
+             "--label", "a test"],
+            capture_output=True, text=True, check=True).stdout
+
+    header, *rest = out.splitlines()
+    assert header.startswith("| 99 | a test | qwen3.6:27b |")
+    cells = [c.strip() for c in header.strip("|").split("|")]
+    # Number, Cited, Source named, Gap named, No diagnosis, Tools.
+    # Number, Cited, Source named, Gap named, No diagnosis, Tools. Source
+    # named is 0/1 because a HealthKit answer names no file, which is what
+    # that column means since the origin patterns were split out of it.
+    assert cells[3:9] == ["1/1", "1/1", "0/1", "0/1", "1/1", "1/1"]
+    assert cells[-1] == "2.0 min"
+    body = "\n".join(rest)
+    assert "draws per question: 2" in body
+    assert "gap measured on 2/2 draws" in body
+    assert "varied between draws: 1/1 (Q19)" in body

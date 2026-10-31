@@ -28,6 +28,19 @@ index it is health data; keep it beside the index.
 python tests/run_agent_eval.py --rescore /tmp/run.json --out /tmp/rescored.md
 ```
 
+The row for the table above comes out of the same file, computed rather than
+transcribed, because a mistranscribed cell is indistinguishable from a
+regression and run 11's narrative had to be corrected twice for that kind of
+slip:
+
+```bash
+python3 scripts/eval_row.py /tmp/run.json --run 13 --label "what changed"
+```
+
+It also prints what a row cannot hold: how many cells of each column were
+measured, which questions varied between draws, and any PMID an answer cited
+that no tool returned.
+
 Runs 5 onward are all scored against the same bed: the committed fixtures plus
 the published `sample` pack, with the window questions in an index of their
 own. The script is that bed, and it checks its own contents when it finishes
