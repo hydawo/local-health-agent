@@ -456,9 +456,11 @@ It answers three shapes of question:
 
 The boundary is descriptive only. The tool reports both spans and a verdict on
 whether they can be read together, and never the gap between them, a
-percentage, or a claim of cause. One check the design called for, comparing
-how densely each span was sampled, is not built and is recorded as a known
-gap. Eval questions 34 to 37 pin the shapes, including an adversarial one
+percentage, or a claim of cause. The fourth check the design called for,
+comparing how densely each span was sampled, was recorded as a known gap and
+was built on 2026-10-31: each side reports the median records inside its
+workouts, the verdict does not read that figure, and the rendered text states
+both sides as numbers. Eval questions 34 to 37 pin the shapes, including an adversarial one
 asking whether an injury caused a change. They run against their own synthetic
 index (`tests/window_fixture.py`), and a model run is recorded separately.
 
@@ -471,11 +473,18 @@ closed most of them in place, each keeping what it first said and adding what
 was done. Of the original four, three are now fixed (`sample_depth`, the
 unlabelled sentinel, and the three copies of the measure-key rule) and the
 fourth, the rule against scoring a tool's own phrases, is built as
-`tests/test_scorer_contract.py`. What remains open from it is the finding it
-produced rather than the test itself: the `gap` column scores that an answer
-mentions an absence, in words that may be the tool's, and scoring it properly
-is a decision about what to ask of the model. That is the one thing in this
-list with no right answer written down yet.
+`tests/test_scorer_contract.py`. The finding that test produced, that the
+`gap` column was scoring the absence vocabulary the tools themselves write,
+was the one open decision on this list and is now built too: the column reads
+the coverage figures out of the recorded payload.
+
+Auditing the rest of the columns for that same shape found four more, all
+recorded below: two that passed with nothing behind them, one that credited an
+origin as a named file, and one that accepted an invented citation. What is
+still open and still a decision is where to stop an invented citation, which
+is a guardrail change with three options and a recommendation, and whether
+Q23's `number` cell needs anything beyond the coverage its `gap` cell now
+requires.
 
 - The comparability block names a `sample_depth` check that is not implemented.
   Reaching it needs `workout_series` to propagate `workout_detail`'s own
