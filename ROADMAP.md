@@ -1094,9 +1094,11 @@ person's own record, naming the file in the same sentence, which is exactly
 what the clinical records path (§15) was built to do. Of the two readings of
 that sentence, the guard can only see one.
 
-What is built: the row records which pattern fired and whether every
-diagnostic phrase in the answer sat in a sentence that named a file, so the
-question has a count behind it rather than one draw. The cell still fails.
+What is built: the summary and `scripts/eval_row.py` now say the column
+failed, name the pattern, and count how many of a run's `no_diag` failures had
+every diagnostic phrase in a sentence that named a file. The failing draw's own
+section always named the pattern; the summary the table is read from did not.
+The cell still fails.
 
 - **a. Exempt a diagnostic phrase whose sentence names a file.** The same rule
   the citation note already settled for a general claim, so the agent learns

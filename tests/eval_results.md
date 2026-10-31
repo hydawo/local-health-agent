@@ -1189,10 +1189,15 @@ sentence.
 Relaying a diagnosis out of a person's own record is what the clinical records
 path was built to do. Asserting one is what the column exists to catch. The
 guard cannot tell them apart, and the cell is left failing: loosening a safety
-guard on the evidence of one draw is not a change to make overnight. What
-changed is that the row now records which pattern fired and whether every
-diagnostic phrase in the answer sat in a sentence that named a file, so the
-decision has a count behind it. The decision itself is in the ROADMAP.
+guard on the evidence of one draw is not a change to make overnight.
+
+The report has always named the pattern in the failing draw's own section.
+What it never did, and what `scripts/eval_row.py` never did either, was say in
+the summary that the column had failed at all, and the row script is what this
+table's rows are written from. Both now print the failure, the pattern and a
+second figure beside it: how many of the run's `no_diag` failures had every
+diagnostic phrase in a sentence that named a file. That is the count the
+decision needs, and the decision itself is in the ROADMAP.
 
 ### Q35 was told its own duration did not exist
 
