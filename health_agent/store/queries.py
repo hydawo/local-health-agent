@@ -480,6 +480,38 @@ def _sample_depth(conn, row, base_type: str) -> dict:
             "bounds": "inclusive", "reason": None}
 
 
+def _period_depth(rows) -> dict:
+    """One period's sample depth, per record base type.
+
+    Median over the workouts of each workout's own in-interval count, with the
+    counts carried so a caller spanning several periods can take a median over
+    all the workouts instead of a median of medians. A workout `_sample_depth`
+    refused is counted apart with its reason: a window that could not be
+    computed is not a depth of zero, and reading it as one would report rides
+    with no duration as rides with no samples.
+    """
+    bases = sorted({b for r in rows for b in (r.sample_depth or {})})
+    out = {}
+    for base in bases:
+        counts, reasons = [], []
+        for row in rows:
+            entry = (row.sample_depth or {}).get(base)
+            if entry is None:
+                continue
+            if entry.get("count") is None:
+                reasons.append(entry.get("reason") or "no count")
+            else:
+                counts.append(entry["count"])
+        out[base] = {
+            "median": derive.median(counts, None).value if counts else None,
+            "counts": tuple(sorted(counts)),
+            "workouts_counted": len(counts),
+            "workouts_without_a_count": len(reasons),
+            "reasons": tuple(reasons),
+        }
+    return out
+
+
 def workout_measures(conn) -> list[dict]:
     """One row per measure the index holds, for every absence message to read.
 
@@ -543,6 +575,15 @@ class WorkoutSeriesPoint:
     duration_unit: str | None = None
     distance_unit: str | None = None
     energy_unit: str | None = None
+    # {base_type: {"median", "counts", "workouts_counted",
+    #              "workouts_without_a_count", "reasons"}}, or None when
+    # `sample_counts` was not requested. The median is over this period's
+    # workouts, each contributing the count of raw records inside its own
+    # interval, and `counts` carries them so a side can take a median over
+    # all its workouts rather than a median of medians. A workout whose
+    # window could not be computed is counted as one without a count, never
+    # as a depth of zero.
+    sample_depth: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -632,7 +673,8 @@ def _entry(d) -> dict:
 def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                    indoor=None, source_include=(), source_exclude=(),
                    measures=(), derive_names=(), ratio_of=None,
-                   percentile_of=None) -> WorkoutSeries:
+                   percentile_of=None,
+                   sample_counts=False) -> WorkoutSeries:
     """Workouts grouped by period, with each measure summarized by median.
 
     Median rather than mean, so one 4-hour ride cannot carry a week.
@@ -673,6 +715,7 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         measures=measures,
         derive_names=tuple(n for n in derive_names
                            if n not in _SERIES_ONLY_DERIVATIONS),
+        sample_counts=sample_counts,
         limit=1_000_000)
     total, first, last = workout_coverage(conn)
     label = activity or "all workouts"
@@ -766,7 +809,8 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
             period=key, period_start=spans[key][0], period_end=spans[key][1],
             n=len(group), duration=dur, distance=dist, energy=en,
             measures=summarized, derived=derived, duration_unit=dur_u,
-            distance_unit=dist_u, energy_unit=en_u))
+            distance_unit=dist_u, energy_unit=en_u,
+            sample_depth=_period_depth(group) if sample_counts else None))
     return WorkoutSeries(label=label, period=period, unit=unit, points=points,
                          total_records=total, available_from=first,
                          available_to=last)

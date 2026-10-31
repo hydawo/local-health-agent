@@ -13,8 +13,12 @@ from __future__ import annotations
 
 import pytest
 
+from pathlib import Path as _Path
+
 from health_agent.agent import guardrail
 from health_agent.store import queries, sqlite_schema, windows
+
+_TESTS_DIR = _Path(__file__).parent
 
 HR = "HKQuantityTypeIdentifierHeartRate"
 HR_AVG = f"{HR}:average"
@@ -986,3 +990,203 @@ def test_a_side_that_carries_values_always_carries_a_unit_name(box):
             for side in (comparison.left, comparison.right):
                 if side.value_periods and not side.unit_mixed:
                     assert side.unit is not None, (spec, start, side)
+
+
+# --------------------------------------------------------------------------- #
+# Sample depth, per side
+# --------------------------------------------------------------------------- #
+#
+# §6 of the design doc names four comparability checks and this was the one
+# recorded as not implemented: "the median in-interval sample count per side".
+# It is what makes T3's "the earlier year's rides carry almost no heart-rate
+# samples" a number rather than a remembered caveat, and without it two sides
+# whose statistics rest on three readings and on nine hundred read identically.
+# The verdict does not use it: how few samples is too few is a judgment, and
+# this layer states numbers.
+
+def _ride_at(conn, *, date, epoch, key, hr_avg=140.0, duration=30.0,
+             samples=0, first_sample_key=100):
+    cur = conn.execute(
+        "INSERT INTO workout(activity_type, duration, duration_unit, "
+        "total_distance, total_distance_unit, source_name, start_date, "
+        "start_epoch, local_date, dedup_key) VALUES("
+        "'HKWorkoutActivityTypeCycling', ?, 'min', 10.0, 'mi', 'Watch', ?, "
+        "?, ?, ?)", (duration, f"{date}T09:00:00-05:00", epoch, date, key))
+    conn.execute(
+        "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+        "VALUES(?, 'statistic', ?, ?, 'count/min')",
+        (cur.lastrowid, HR_AVG, hr_avg))
+    for i in range(samples):
+        conn.execute(
+            "INSERT INTO record(type, value_num, unit, start_date, "
+            "start_epoch, local_date, dedup_key) VALUES(?, 60, 'count/min', "
+            "?, ?, ?, ?)",
+            (HR, f"{date}T09:00:00-05:00", epoch + 60.0 * (i + 1), date,
+             bytes([first_sample_key + i])))
+    conn.commit()
+
+
+_DEPTH_SPEC = dict(activity="Cycling", measure=HR_AVG)
+_DEPTH_LEFT = ("2023-01-01", "2023-01-31")
+_DEPTH_RIGHT = ("2023-03-01", "2023-03-31")
+
+
+def _depth_box(box):
+    """Two thin rides on the left, two well-sampled ones on the right."""
+    base = 1672585200.0                                   # 2023-01-01 09:00
+    day = 86400.0
+    _ride_at(box, date="2023-01-05", epoch=base, key=b"\x01", samples=2,
+             first_sample_key=10)
+    _ride_at(box, date="2023-01-12", epoch=base + 7 * day, key=b"\x02",
+             samples=4, first_sample_key=20)
+    later = 1677672000.0                                  # 2023-03-01 09:00
+    _ride_at(box, date="2023-03-05", epoch=later, key=b"\x03", samples=20,
+             first_sample_key=30)
+    _ride_at(box, date="2023-03-12", epoch=later + 7 * day, key=b"\x04",
+             samples=24, first_sample_key=60)
+    return box
+
+
+def test_each_side_reports_the_median_samples_inside_its_workouts(box):
+    comparison = windows.compare(
+        _depth_box(box), spec=windows.SeriesSpec(**_DEPTH_SPEC),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week",
+        sample_counts=True)
+    left, right = comparison.left.sample_depth, comparison.right.sample_depth
+    assert left[HR]["median"] == 3.0                      # over 2 and 4
+    assert right[HR]["median"] == 22.0                    # over 20 and 24
+    assert left[HR]["workouts_counted"] == 2
+    assert comparison.comparable["left_sample_depth"] == left
+    assert comparison.comparable["right_sample_depth"] == right
+
+
+def test_the_side_median_is_over_workouts_not_over_periods(box):
+    """A median of per-period medians is a different number, and on an
+    uneven split it is the wrong one."""
+    base = 1672585200.0
+    _ride_at(box, date="2023-01-05", epoch=base, key=b"\x01", samples=1,
+             first_sample_key=10)
+    _ride_at(box, date="2023-01-06", epoch=base + 3600.0 * 24, key=b"\x02",
+             samples=1, first_sample_key=20)
+    _ride_at(box, date="2023-01-20", epoch=base + 86400.0 * 15, key=b"\x03",
+             samples=9, first_sample_key=30)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(**_DEPTH_SPEC),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week",
+        sample_counts=True)
+    # Three workouts: 1, 1, 9. Over workouts the median is 1; over the two
+    # periods' medians (1 and 9) it would be 5.
+    assert comparison.left.sample_depth[HR]["median"] == 1.0
+    assert comparison.left.sample_depth[HR]["counts"] == (1, 1, 9)
+
+
+def test_a_comparison_not_asked_for_depth_carries_none_of_it(box):
+    comparison = windows.compare(
+        _depth_box(box), spec=windows.SeriesSpec(**_DEPTH_SPEC),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week")
+    assert comparison.left.sample_depth is None
+    assert "left_sample_depth" not in comparison.comparable
+    assert "inside each workout" not in windows.render(comparison)
+
+
+def test_a_metric_side_has_no_sample_depth_to_report(box):
+    """A metric period already carries its record count; there is no workout
+    interval to count inside."""
+    for day in ("2023-01-02", "2023-01-09"):
+        _daily(box, date=day, value=60.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week",
+        sample_counts=True)
+    assert comparison.left.sample_depth is None
+    assert "left_sample_depth" not in comparison.comparable
+
+
+def test_the_rendered_text_states_both_depths_and_reads_as_two_numbers(box):
+    comparison = windows.compare(
+        _depth_box(box), spec=windows.SeriesSpec(**_DEPTH_SPEC),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week",
+        sample_counts=True)
+    text = windows.render(comparison)
+    # The record type is named in the words the metric registry uses, not by
+    # its HealthKit identifier.
+    assert "median of 3 heart rate records inside each workout" in text
+    assert "median of 22 heart rate records inside each workout" in text
+    lowered = text.lower()
+    for word in FORBIDDEN:
+        assert word not in lowered, word
+
+
+def test_an_anchored_window_asked_for_depth_carries_it_too(box):
+    base = 1672585200.0
+    _ride_at(box, date="2023-01-05", epoch=base, key=b"\x01", samples=2,
+             first_sample_key=10)
+    _ride_at(box, date="2023-01-20", epoch=base + 86400.0 * 15, key=b"\x02",
+             samples=8, first_sample_key=20)
+    comparison = windows.as_comparison(
+        windows.window(box, spec=windows.SeriesSpec(**_DEPTH_SPEC),
+                       anchor=windows.resolve_anchor(box, date="2023-01-13"),
+                       before_days=10, after_days=10, period="week",
+                       sample_counts=True),
+        sample_counts=True)
+    assert comparison.left.sample_depth[HR]["median"] == 2.0
+    assert comparison.right.sample_depth[HR]["median"] == 8.0
+
+
+def test_a_workout_with_no_window_to_count_in_is_not_a_depth_of_zero(box):
+    base = 1672585200.0
+    _ride_at(box, date="2023-01-05", epoch=base, key=b"\x01", samples=4,
+             first_sample_key=10)
+    _ride_at(box, date="2023-01-12", epoch=base + 86400.0 * 7, key=b"\x02",
+             samples=0, duration=None)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(**_DEPTH_SPEC),
+        left=_DEPTH_LEFT, right=_DEPTH_RIGHT, period="week",
+        sample_counts=True)
+    depth = comparison.left.sample_depth[HR]
+    assert depth["median"] == 4.0
+    assert depth["workouts_counted"] == 1
+    assert depth["workouts_without_a_count"] == 1
+    assert "inside 1 of its 2 workouts" in windows.render(comparison)
+
+
+def test_the_depth_clause_adds_no_phrase_an_eval_scorer_reads(box):
+    """The standing rule, applied before the phrase ships rather than after.
+
+    No wording a tool produces may be what a scorer looks for, in either
+    direction: forbidding such a phrase flags faithful answers and requiring
+    one admits unfaithful ones. The rendered text around this clause already
+    matches the gap family ("4 periods with no data"), which is recorded in
+    ROADMAP #16, so the clause is scanned on its own.
+    """
+    import re
+    import sys
+
+    sys.path.insert(0, str(_TESTS_DIR))
+    from run_agent_eval import (DECLINE_PATTERN, DIAGNOSTIC_PATTERNS,
+                                DIRECTIVE_ADVICE, GAP_PATTERNS)
+
+    shapes = [
+        {HR: {"median": 3.0, "counts": (2, 4), "workouts_counted": 2,
+              "workouts_without_a_count": 0, "reasons": ()}},
+        {HR: {"median": 4.0, "counts": (4,), "workouts_counted": 1,
+              "workouts_without_a_count": 1,
+              "reasons": ("workout has no duration",)}},
+        {HR: {"median": None, "counts": (), "workouts_counted": 0,
+              "workouts_without_a_count": 2,
+              "reasons": ("workout has no duration",) * 2}},
+    ]
+    families = {"no_diag": DIAGNOSTIC_PATTERNS, "decline": [DECLINE_PATTERN],
+                "gap": GAP_PATTERNS,
+                "directive": [re.escape(p) for p in DIRECTIVE_ADVICE]}
+    for shape in shapes:
+        clause = windows._depth_clause(
+            windows.SideSummary(
+                n=1, empty_periods=0, min=1.0, max=1.0, median=1.0, mean=1.0,
+                unit="count/min", first="2023-01-01", last="2023-01-07",
+                sample_depth=shape))
+        assert clause
+        for family, patterns in families.items():
+            for pattern in patterns:
+                assert not re.search(pattern, clause, re.IGNORECASE), \
+                    f"{family}: {pattern} matched {clause!r}"

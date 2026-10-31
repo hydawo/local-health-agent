@@ -2388,3 +2388,76 @@ def test_the_title_does_not_print_the_unlabelled_sentinel_as_a_unit(tmp_path, ca
     assert "(none)" not in out
     assert "avg per day" in out and "60" in out
     assert "name no unit" in out
+
+
+def _rides_for_depth(path):
+    """Two thin rides in January, two well-sampled ones in March."""
+    from health_agent.store import sqlite_schema
+
+    hr = "HKQuantityTypeIdentifierHeartRate"
+    conn = sqlite_schema.connect(path, create=True)
+    sqlite_schema.initialize(conn)
+    plan = [("2023-01-05", 1672585200.0, 2, 10, b"\x01"),
+            ("2023-01-12", 1673190000.0, 4, 20, b"\x02"),
+            ("2023-03-05", 1677672000.0, 20, 30, b"\x03"),
+            ("2023-03-12", 1678276800.0, 24, 60, b"\x04")]
+    for date, epoch, samples, key_base, key in plan:
+        cur = conn.execute(
+            "INSERT INTO workout(activity_type, duration, duration_unit, "
+            "total_distance, total_distance_unit, source_name, start_date, "
+            "start_epoch, local_date, dedup_key) VALUES("
+            "'HKWorkoutActivityTypeCycling', 30.0, 'min', 10.0, 'mi', "
+            "'Watch', ?, ?, ?, ?)",
+            (f"{date}T09:00:00-05:00", epoch, date, key))
+        conn.execute(
+            "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+            "VALUES(?, 'statistic', ?, 140.0, 'count/min')",
+            (cur.lastrowid, hr + ":average"))
+        for i in range(samples):
+            conn.execute(
+                "INSERT INTO record(type, value_num, unit, start_date, "
+                "start_epoch, local_date, dedup_key) VALUES(?, 60, "
+                "'count/min', ?, ?, ?, ?)",
+                (hr, f"{date}T09:00:00-05:00", epoch + 60.0 * (i + 1), date,
+                 bytes([key_base, i])))
+    conn.commit()
+    # The CLI refuses an index that holds records with no daily rollup, which
+    # is a real guard and not something a fixture should route around.
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+    conn.close()
+    return path
+
+
+_DEPTH_COMPARE = ("compare", "--workouts", "--activity", "Cycling",
+                  "--measure", "HKQuantityTypeIdentifierHeartRate:average",
+                  "--left", "2023-01-01..2023-01-31",
+                  "--right", "2023-03-01..2023-03-31", "--period", "week")
+
+
+def test_compare_samples_prints_the_depth_behind_each_side(tmp_path, capsys):
+    """The §6 comparability check, from the command line as well as the tool."""
+    index = _rides_for_depth(tmp_path / "health.db")
+    code, out, _ = _run(index, capsys, *_DEPTH_COMPARE, "--samples")
+    assert code == 0
+    # Joined, because the printed line wraps at the terminal width.
+    flat = " ".join(out.split())
+    assert "median of 3 heart rate records inside each workout" in flat
+    assert "median of 22 heart rate records inside each workout" in flat
+
+
+def test_compare_without_samples_says_nothing_about_depth(tmp_path, capsys):
+    index = _rides_for_depth(tmp_path / "health.db")
+    code, out, _ = _run(index, capsys, *_DEPTH_COMPARE)
+    assert code == 0
+    assert "inside each workout" not in out
+
+
+def test_compare_samples_json_carries_the_depth(tmp_path, capsys):
+    index = _rides_for_depth(tmp_path / "health.db")
+    code, out, _ = _run(index, capsys, *_DEPTH_COMPARE, "--samples", "--json")
+    assert code == 0
+    payload = json.loads(out)
+    hr = "HKQuantityTypeIdentifierHeartRate"
+    assert payload["left"]["sample_depth"][hr]["median"] == 3.0
+    assert payload["comparable"]["right_sample_depth"][hr]["median"] == 22.0

@@ -1396,13 +1396,16 @@ def cmd_compare(args: argparse.Namespace, cfg: config.Config) -> int:
                 anchor = resolved
                 before = 30 if args.before is None else args.before
                 after = 30 if args.after is None else args.after
-                comparison = windows.as_comparison(windows.window(
-                    conn, spec=spec, anchor=anchor, before_days=before,
-                    after_days=after, period=args.period))
+                comparison = windows.as_comparison(
+                    windows.window(
+                        conn, spec=spec, anchor=anchor, before_days=before,
+                        after_days=after, period=args.period,
+                        sample_counts=args.samples),
+                    sample_counts=args.samples)
             else:
                 comparison = windows.compare(
                     conn, spec=spec, left=args.left, right=args.right,
-                    period=args.period)
+                    period=args.period, sample_counts=args.samples)
         except ValueError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 2
@@ -3189,6 +3192,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_cmp.add_argument("--indoor", dest="indoor", action="store_true",
                        default=None)
     p_cmp.add_argument("--outdoor", dest="indoor", action="store_false")
+    p_cmp.add_argument("--samples", action="store_true",
+                       help="also report the records behind each side, and "
+                            "for a workout measure the median records inside "
+                            "each workout")
     p_cmp.add_argument("--json", action="store_true")
     p_cmp.set_defaults(func=cmd_compare)
 

@@ -257,3 +257,85 @@ def test_the_series_unit_is_mixed_when_measure_units_differ(box):
     assert queries.workout_series(box, measures=(hr,)).unit == "mixed"
     assert queries.workout_series(
         box, measures=(hr,), end="2026-03-03").unit == "count/min"
+
+
+# --------------------------------------------------------------------------- #
+# Sample depth, through the series
+# --------------------------------------------------------------------------- #
+#
+# The §6 comparability check the design doc recorded as not implemented: "the
+# median in-interval sample count per side". A statistic is one number whatever
+# the watch sampled to produce it, so a ride averaging 150 bpm off three
+# readings and one averaging it off nine hundred look identical in every other
+# field. `workout_detail` could already count the records inside a workout's
+# interval; nothing carried that up to a period or a side.
+
+
+def _samples(conn, *, epoch, offsets, base=HR, start_key=10):
+    for i, offset in enumerate(offsets):
+        conn.execute(
+            "INSERT INTO record(type, value_num, unit, start_date, "
+            "start_epoch, local_date, dedup_key) VALUES(?, 60, 'count/min', "
+            "'2026-03-02T09:00:00-05:00', ?, '2026-03-02', ?)",
+            (base, epoch + offset, bytes([start_key + i])))
+    conn.commit()
+
+
+def test_a_period_carries_the_median_sample_depth_of_its_workouts(box):
+    first, second = 1772830800.0, 1772917200.0
+    _ride(box, date="2026-03-02", duration=30.0, hr_avg=145.0, key=b"\x01",
+          epoch=first)
+    _ride(box, date="2026-03-03", duration=30.0, hr_avg=150.0, key=b"\x02",
+          epoch=second)
+    _samples(box, epoch=first, offsets=[60.0, 120.0, 180.0], start_key=10)
+    _samples(box, epoch=second, offsets=[60.0, 120.0, 180.0, 240.0, 300.0],
+             start_key=20)
+
+    series = queries.workout_series(box, period="week", activity="Cycling",
+                                    measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    (point,) = series.points
+    depth = point.sample_depth[HR]
+    assert depth["median"] == 4.0                 # median of 3 and 5
+    assert depth["counts"] == (3, 5)
+    assert depth["workouts_counted"] == 2
+    assert depth["workouts_without_a_count"] == 0
+
+
+def test_a_series_not_asked_for_depth_carries_none(box):
+    _ride(box, date="2026-03-02", duration=30.0, hr_avg=145.0, key=b"\x01")
+    series = queries.workout_series(box, period="week", activity="Cycling",
+                                    measures=(f"{HR}:average",))
+    assert series.points[0].sample_depth is None
+
+
+def test_a_workout_whose_window_cannot_be_computed_is_counted_as_such(box):
+    """A duration of None is the one case `_sample_depth` refuses, and a
+    refusal must not be read as a depth of zero."""
+    _ride(box, date="2026-03-02", duration=30.0, hr_avg=145.0, key=b"\x01",
+          epoch=1772830800.0)
+    _ride(box, date="2026-03-03", duration=None, hr_avg=150.0, key=b"\x02",
+          epoch=1772917200.0)
+    _samples(box, epoch=1772830800.0, offsets=[60.0, 120.0], start_key=10)
+
+    series = queries.workout_series(box, period="week", activity="Cycling",
+                                    measures=(f"{HR}:average",),
+                                    sample_counts=True)
+    depth = series.points[0].sample_depth[HR]
+    assert depth["median"] == 2.0
+    assert depth["workouts_counted"] == 1
+    assert depth["workouts_without_a_count"] == 1
+    assert "no duration" in depth["reasons"][0]
+
+
+def test_depth_is_keyed_by_every_requested_statistic_type(box):
+    _ride(box, date="2026-03-02", duration=30.0, hr_avg=145.0, key=b"\x01",
+          epoch=1772830800.0, cadence=80.0)
+    _samples(box, epoch=1772830800.0, offsets=[60.0], start_key=10)
+    series = queries.workout_series(
+        box, period="week", activity="Cycling",
+        measures=(f"{HR}:average", f"{CAD}:average"), sample_counts=True)
+    depth = series.points[0].sample_depth
+    assert sorted(depth) == sorted([HR, CAD])
+    assert depth[HR]["median"] == 1.0
+    assert depth[CAD]["median"] == 0.0            # asked, and none are held

@@ -239,13 +239,19 @@ rendered text and `because` string. Running the guardrail over the template
 stays as a cheap regression guard against a pattern it may gain later, not as
 evidence about this one.
 
-A second correction: §6 names a `sample_depth` check, the median in-interval
-sample count per side. It is **not implemented**, and reaching it needs
-`workout_series` to propagate `workout_detail`'s own `sample_depth`. The
-capability exists through `get_workouts(detail=True, sample_counts=True)`, so
-nothing is unreachable, but a comparison cannot state T3's "the earlier year's
-rides carry almost no heart-rate samples". Recorded as a known gap rather than
-quietly dropped.
+A second correction, since closed: §6 names a `sample_depth` check, the median
+in-interval sample count per side, and it was **not implemented** when this
+document was written. It is now. `workout_series` takes `sample_counts` and
+propagates `workout_detail`'s own per-workout depth, each period carrying its
+workouts' counts as well as their median; a side takes its median over all its
+workouts rather than over its periods' medians, which on an uneven split is a
+different and wrong number. The verdict does not read it: how few samples is
+too few is a judgment, and this block states numbers. A workout whose window
+cannot be computed is counted apart with its reason rather than as a depth of
+zero. The rendered text now states T3's case as two figures, "a median of 3
+heart rate records inside each workout" against "a median of 22", and leaves
+"almost no samples" to the reader. Reachable from `compare_windows` with
+`sample_counts` and from `health-agent compare --samples`.
 
 `comparable` never says `significant`, `likely`, `suggests`, or anything about
 cause. Two windows either side of a date are two windows either side of a
@@ -376,8 +382,9 @@ these are the shape differences a reader should not be surprised by.
   type, each entry carrying `count`, `window_seconds`, `bounds` and `reason`.
   It is None only when not asked for, `{}` when asked with no statistic
   measure among those requested, and carries a reason when a window is not
-  computable. The section 6 `sample_depth` comparability check remains the
-  unimplemented gap recorded above.
+  computable. The section 6 `sample_depth` comparability check reads it through
+  `workout_series`, which carries each period's counts so a side can take one
+  median over its workouts.
 
 ## 11. Not in scope
 

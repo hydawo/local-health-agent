@@ -1512,3 +1512,81 @@ def _labelled_series(tmp_path):
             "1, 60, 60, 60, 60)", ((day + _dt.timedelta(days=i)).isoformat(),))
     conn.commit()
     return tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+
+
+# --------------------------------------------------------------------------- #
+# sample_counts, through the tool
+# --------------------------------------------------------------------------- #
+
+def _rides_with_samples(tmp_path):
+    """Two thin rides in January, two well-sampled ones in March."""
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    plan = [("2023-01-05", 1672585200.0, 2, 10, b"\x01"),
+            ("2023-01-12", 1673190000.0, 4, 20, b"\x02"),
+            ("2023-03-05", 1677672000.0, 20, 30, b"\x03"),
+            ("2023-03-12", 1678276800.0, 24, 60, b"\x04")]
+    for date, epoch, samples, key_base, key in plan:
+        cur = conn.execute(
+            "INSERT INTO workout(activity_type, duration, duration_unit, "
+            "total_distance, total_distance_unit, source_name, start_date, "
+            "start_epoch, local_date, dedup_key) VALUES("
+            "'HKWorkoutActivityTypeCycling', 30.0, 'min', 10.0, 'mi', "
+            "'Watch', ?, ?, ?, ?)",
+            (f"{date}T09:00:00-05:00", epoch, date, key))
+        conn.execute(
+            "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
+            "VALUES(?, 'statistic', ?, 140.0, 'count/min')",
+            (cur.lastrowid, _HR + ":average"))
+        for i in range(samples):
+            conn.execute(
+                "INSERT INTO record(type, value_num, unit, start_date, "
+                "start_epoch, local_date, dedup_key) VALUES(?, 60, "
+                "'count/min', ?, ?, ?, ?)",
+                (_HR, f"{date}T09:00:00-05:00", epoch + 60.0 * (i + 1), date,
+                 bytes([key_base, i])))
+    conn.commit()
+    return tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+
+
+_RANGE_ARGS = {"activity": "Cycling", "measure": _HR + ":average",
+               "left_start": "2023-01-01", "left_end": "2023-01-31",
+               "right_start": "2023-03-01", "right_end": "2023-03-31",
+               "period": "week"}
+
+
+def test_sample_counts_reports_the_depth_behind_each_side(tmp_path):
+    """§6's fourth comparability check, reaching the model at last. Two sides
+    whose statistics rest on three readings and on twenty-two are otherwise
+    indistinguishable in this payload."""
+    ctx = _rides_with_samples(tmp_path)
+    result = tools.dispatch(ctx, "compare_windows",
+                            {**_RANGE_ARGS, "sample_counts": True})
+    left = result["left"]["sample_depth"][_HR]
+    assert left["median"] == 3.0
+    assert left["workouts_counted"] == 2
+    assert result["right"]["sample_depth"][_HR]["median"] == 22.0
+    assert result["comparable"]["left_sample_depth"][_HR]["median"] == 3.0
+    assert "median of 3 heart rate records" in result["rendered"]
+    # The raw per-workout counts stay out of the payload: the median and the
+    # two workout counts are the figures, and a list of every count is context
+    # the model does not need and would be free to recompute from.
+    assert "counts" not in left
+
+
+def test_without_sample_counts_the_payload_is_the_same_shape_as_before(tmp_path):
+    result = tools.dispatch(_rides_with_samples(tmp_path), "compare_windows",
+                            _RANGE_ARGS)
+    assert "sample_depth" not in result["left"]
+    assert "left_sample_depth" not in result["comparable"]
+
+
+def test_an_anchored_comparison_asked_for_depth_gets_it(tmp_path):
+    """The anchored path builds its sides before `as_comparison` is called, so
+    the flag has to reach the window and not only the verdict."""
+    result = tools.dispatch(_rides_with_samples(tmp_path), "compare_windows", {
+        "activity": "Cycling", "measure": _HR + ":average",
+        "anchor_date": "2023-02-01", "before_days": 40, "after_days": 40,
+        "period": "week", "sample_counts": True})
+    assert result["left"]["sample_depth"][_HR]["median"] == 3.0
+    assert result["right"]["sample_depth"][_HR]["median"] == 22.0

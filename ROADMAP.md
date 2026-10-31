@@ -465,6 +465,31 @@ than a fix.
   `get_workouts(detail=True, sample_counts=True)`, so nothing is unreachable,
   but a comparison cannot say "these runs carry about three heart-rate samples
   each", which was one of the things the window work was for.
+
+  **Built.** `workout_series` takes `sample_counts` and carries each period's
+  own workout counts as well as their median, because a side's median has to
+  be over its workouts and not over its periods' medians: three workouts at 1,
+  1 and 9 samples have a median of 1, while their two periods' medians are 1
+  and 9, whose median is 5. `SideSummary.sample_depth` holds the side figure,
+  the verdict block carries both sides when asked, and the rendered text states
+  T3's case as two numbers, "a median of 3 heart rate records inside each
+  workout" against "a median of 22", leaving "almost no samples" to the reader.
+  A workout whose window cannot be computed is counted apart with its reason,
+  never as a depth of zero, since reading a refusal as a zero would report
+  rides with no duration as rides with no samples.
+
+  The verdict does not read the figure. How few samples is too few is a
+  judgment and this block states numbers, so no verdict value was added and
+  the eval's `expect_verdict` contract is untouched. Reachable through
+  `compare_windows` with `sample_counts`, which also had to be threaded into
+  `windows.window` rather than only `as_comparison`, because the anchored path
+  summarizes its sides while the window is built; and through a new
+  `health-agent compare --samples`, without which the check was unreachable
+  from the command line. The payload omits the raw per-workout counts, which
+  are a list the model would be free to recompute from. Four mutation tests,
+  one per layer, and the refusal wording was reworded once after a scan caught
+  it adding a tenth string to the eval's gap family ("no count of heart rate
+  records"); a test now scans the clause itself against every family.
 - **No phrase that appears in a tool's own output may be used in an eval
   scorer, in either direction.** The model receives that output and quotes it.
   Forbidding such a phrase flags faithful answers; requiring one admits

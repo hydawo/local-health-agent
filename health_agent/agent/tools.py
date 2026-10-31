@@ -668,6 +668,16 @@ def _side_payload(summary, *, sample_counts: bool = False) -> dict:
     }
     if sample_counts:
         out[summary.counted] = summary.counted_n
+        if summary.sample_depth is not None:
+            # §6's sample_depth check: the median records inside each workout
+            # on this side. The raw per-workout counts stay behind, because
+            # the median and the two workout counts are the figures and a list
+            # of every count is something a model would be free to recompute
+            # from. Absent rather than null on a metric side, which has no
+            # workout interval to count inside.
+            out["sample_depth"] = {
+                base: {k: v for k, v in depth.items() if k != "counts"}
+                for base, depth in summary.sample_depth.items()}
     return out
 
 
@@ -776,7 +786,11 @@ def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
         result = windows.window(
             ctx.conn, spec=spec, anchor=resolved,
             before_days=_whole_days(args, "before_days", 30),
-            after_days=_whole_days(args, "after_days", 30), period=period)
+            after_days=_whole_days(args, "after_days", 30), period=period,
+            # The sides are summarized while the window is built, before
+            # `as_comparison` sees the flag, so the depth has to be asked for
+            # here or it is never counted at all.
+            sample_counts=sample_counts)
         comparison = windows.as_comparison(result, sample_counts=sample_counts)
         anchor_block = {"date": resolved.date, "label": resolved.label,
                         "citation": resolved.citation}
@@ -1665,7 +1679,9 @@ TOOLS: tuple[Tool, ...] = (
                 "exclude_source": {"type": "array",
                                    "items": {"type": "string"}},
                 "sample_counts": {"type": "boolean", "description":
-                                  "Also report the records behind each side."},
+                                  "Also report the records behind each side, "
+                                  "and for a workout measure the median "
+                                  "records inside each workout."},
             },
         },
         handler=_compare_windows,

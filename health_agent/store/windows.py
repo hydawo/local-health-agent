@@ -120,11 +120,18 @@ class SideSummary:
     unit_mixed: bool = False
     # What the underlying count counts, as a plural noun, and the count. A
     # metric side counts records and a workout side counts workouts, so the
-    # noun travels with the number rather than being guessed from it. This
-    # is not the spec's `sample_depth`, which needs `workout_series` to carry
-    # `workout_detail`'s own depth and is recorded as a spec gap.
+    # noun travels with the number rather than being guessed from it. It is
+    # not `sample_depth` below, which counts what is inside each workout.
     counted: str = "records"
     counted_n: int = 0
+    # §6's fourth check: {base_type: {"median", "counts", "workouts_counted",
+    # "workouts_without_a_count", "reasons"}}, the median over this side's
+    # workouts of the records inside each one's own interval. None unless the
+    # caller asked for it, and None on a metric side, which has no workout
+    # interval to count inside and already carries its record count above.
+    # The verdict does not read it: how few samples is too few is a judgment,
+    # and this block states numbers.
+    sample_depth: dict | None = None
     # The range asked for, beside the bucketed span in `first` and `last`,
     # which is clipped to it.
     window_start: str | None = None
@@ -257,7 +264,8 @@ def _count(n: int, plural: str) -> str:
     return f"{n} {noun}"
 
 
-def _series(conn, spec: SeriesSpec, start: str, end: str, period: str):
+def _series(conn, spec: SeriesSpec, start: str, end: str, period: str,
+            *, sample_counts: bool = False):
     if spec.metric and (spec.activity or spec.measure or spec.derive_name
                         or spec.indoor is not None):
         # `indoor` belongs to this list: without it, a metric comparison
@@ -303,7 +311,8 @@ def _series(conn, spec: SeriesSpec, start: str, end: str, period: str):
         conn, period=period, activity=spec.activity, start=start, end=end,
         indoor=spec.indoor, source_exclude=tuple(spec.source_exclude),
         measures=(spec.measure,) if spec.measure else (),
-        derive_names=(spec.derive_name,) if spec.derive_name else ())
+        derive_names=(spec.derive_name,) if spec.derive_name else (),
+        sample_counts=sample_counts)
 
 
 def _entries(series, spec: SeriesSpec) -> list[dict]:
@@ -458,8 +467,36 @@ def _summarize(conn, series, spec: SeriesSpec, start: str, end: str,
         unit_mixed=mixed,
         counted=counted,
         counted_n=sum(getattr(p, "n", 0) or 0 for p in series.points),
+        sample_depth=_side_depth(series.points),
         window_start=start, window_end=end,
         coverage=coverage)
+
+
+def _side_depth(points) -> dict | None:
+    """One side's sample depth, over its workouts rather than its periods.
+
+    Each period carried the counts of its own workouts for exactly this: a
+    median of per-period medians is a different number, and on an uneven split
+    it is the wrong one. Three workouts at 1, 1 and 9 samples have a median of
+    1; their two periods' medians are 1 and 9, whose median is 5.
+    """
+    if not any(getattr(p, "sample_depth", None) is not None for p in points):
+        return None
+    bases = sorted({b for p in points for b in (p.sample_depth or {})})
+    out = {}
+    for base in bases:
+        entries = [(p.sample_depth or {}).get(base) for p in points]
+        entries = [e for e in entries if e]
+        counts = tuple(sorted(c for e in entries for c in e["counts"]))
+        reasons = tuple(r for e in entries for r in e["reasons"])
+        out[base] = {
+            "median": derive.median(list(counts), None).value if counts else None,
+            "counts": counts,
+            "workouts_counted": len(counts),
+            "workouts_without_a_count": len(reasons),
+            "reasons": reasons,
+        }
+    return out
 
 
 def _clip_span(series, start: str, end: str):
@@ -481,7 +518,8 @@ def _clip_span(series, start: str, end: str):
 # --------------------------------------------------------------------------- #
 
 def window(conn, *, spec: SeriesSpec, anchor, before_days: int,
-           after_days: int, period: str = "day") -> Window:
+            after_days: int, period: str = "day",
+            sample_counts: bool = False) -> Window:
     """The periods either side of an anchor, each side summarized.
 
     The anchor's own day is in neither side: the day of an event is the
@@ -497,8 +535,10 @@ def window(conn, *, spec: SeriesSpec, anchor, before_days: int,
         _shift(anchor.date, -1)
     after_start, after_end = _shift(anchor.date, 1), _shift(anchor.date,
                                                             after_days)
-    before = _series(conn, spec, before_start, before_end, period)
-    after = _series(conn, spec, after_start, after_end, period)
+    before = _series(conn, spec, before_start, before_end, period,
+                     sample_counts=sample_counts)
+    after = _series(conn, spec, after_start, after_end, period,
+                    sample_counts=sample_counts)
     return Window(
         label=spec.label, anchor=anchor,
         before=_summarize(conn, before, spec, before_start, before_end, period),
@@ -537,8 +577,10 @@ def compare(conn, *, spec: SeriesSpec, left, right, period: str = "day",
     what it counts. It is off by default so the payload stays the same size
     for a caller that did not ask for it.
     """
-    left_series = _series(conn, spec, left[0], left[1], period)
-    right_series = _series(conn, spec, right[0], right[1], period)
+    left_series = _series(conn, spec, left[0], left[1], period,
+                          sample_counts=sample_counts)
+    right_series = _series(conn, spec, right[0], right[1], period,
+                           sample_counts=sample_counts)
     left_sum = _summarize(conn, left_series, spec, left[0], left[1], period)
     right_sum = _summarize(conn, right_series, spec, right[0], right[1], period)
     return Comparison(
@@ -663,6 +705,13 @@ def _verdict(left: SideSummary, right: SideSummary, *,
     if sample_counts:
         block[f"left_{left.counted}"] = left.counted_n
         block[f"right_{right.counted}"] = right.counted_n
+        # §6's sample_depth check. Absent rather than null on a metric side,
+        # which has no workout interval to count inside: a null would read as
+        # a depth nobody could measure rather than a figure that does not
+        # apply to this kind of side.
+        for name, side in (("left", left), ("right", right)):
+            if side.sample_depth is not None:
+                block[f"{name}_sample_depth"] = side.sample_depth
 
     empty = [(name, side) for name, side in zip(names, (left, right))
              if side.n == 0]
@@ -746,6 +795,41 @@ def _verdict(left: SideSummary, right: SideSummary, *,
 # The rendered text
 # --------------------------------------------------------------------------- #
 
+def _depth_clause(side: SideSummary) -> str:
+    """The side's sample depth, as a number and nothing more.
+
+    One clause per record type counted, which is one type in every comparison
+    this layer can be asked for, since a spec names one measure. "Almost no
+    samples" is the reader's conclusion to draw, not this template's: it says
+    how many and in how many workouts.
+    """
+    if not side.sample_depth:
+        return ""
+    parts = []
+    for base, depth in sorted(side.sample_depth.items()):
+        counted = depth["workouts_counted"]
+        total = counted + depth["workouts_without_a_count"]
+        where = ("inside each workout" if counted == total
+                 else f"inside {counted} of its {_count(total, 'workouts')}")
+        if depth["median"] is None:
+            # Not "no records counted": the eval's gap family reads "no" near
+            # "records", and a tool's own words must not be what a scorer
+            # looks for. The absence here is of a countable interval, which is
+            # also the more accurate thing to say.
+            parts.append(f"the interval inside each of its "
+                         f"{_count(total, 'workouts')} could not be counted")
+        else:
+            parts.append(f"a median of {depth['median']:g} "
+                         f"{_label_for(base)} records {where}")
+    return ", " + ", ".join(parts)
+
+
+def _label_for(base_type: str) -> str:
+    """A record type in the words a reader uses, when the registry knows it."""
+    metric = metrics.lookup(base_type)
+    return metric.label.lower() if metric else base_type
+
+
 def _side_line(name: str, side: SideSummary, spec: SeriesSpec | None) -> str:
     if side.n == 0:
         return (f"{name}: no periods in that range"
@@ -775,7 +859,8 @@ def _side_line(name: str, side: SideSummary, spec: SeriesSpec | None) -> str:
     tail = (f", {_count(side.empty_periods, 'periods')} with no data."
             if side.empty_periods else ".")
     return (f"{name}: {span}{basis}, median {side.median:g}{unit}{named}, "
-            f"range {side.min:g} to {side.max:g}{unit}" + tail)
+            f"range {side.min:g} to {side.max:g}{unit}"
+            + _depth_clause(side) + tail)
 
 
 def render(comparison: Comparison) -> str:
