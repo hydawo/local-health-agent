@@ -911,6 +911,52 @@ def test_a_since_that_filters_history_to_empty_names_the_plural_kinds(clinical_c
     assert "condition," not in result["note"] and "conditions" in result["note"]
 
 
+def test_a_kind_with_no_records_hands_over_the_kinds_that_do(clinical_ctx):
+    """Eval run 12's Q37, draw 1. The model asked for procedures, was told in
+    the note that conditions are held, reported "no procedure records" and
+    then asked the person when their injury happened, which a condition
+    record carried. Naming the other kinds and leaving the model to ask for
+    them is not enough, so they come back already retrieved, the way rule 1e
+    hands over the personal notes."""
+    clinical_ctx.conn.execute("DELETE FROM clinical_fact WHERE kind='procedure'")
+    clinical_ctx.conn.commit()
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"kind": "procedures"})
+    assert result["facts"] == [], "no procedure record exists, and it says so"
+    kinds = {f["kind"] for f in result["facts_of_other_kinds"]}
+    assert "condition" in kinds and "procedure" not in kinds
+    assert "facts_of_other_kinds" in result["note"]
+
+
+def test_a_kind_that_is_held_does_not_drag_in_the_other_kinds(clinical_ctx):
+    """The handover is for an empty result. A question about medications gets
+    medications."""
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"kind": "medications"})
+    assert result["facts"]
+    assert "facts_of_other_kinds" not in result
+
+
+def test_an_empty_history_with_no_kind_asked_for_adds_nothing(clinical_ctx):
+    """Asked for everything and given nothing back, there is no other kind to
+    hand over: `since` filtered the lot."""
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"since": "2099-01-01"})
+    assert result["facts"] == []
+    assert "facts_of_other_kinds" not in result
+
+
+def test_the_other_kinds_respect_the_same_since(clinical_ctx):
+    """A window the person asked about is still the window. Handing back
+    records from outside it would answer a question nobody asked."""
+    clinical_ctx.conn.execute("DELETE FROM clinical_fact WHERE kind='procedure'")
+    clinical_ctx.conn.commit()
+    result = tools.dispatch(clinical_ctx, "get_clinical_history",
+                            {"kind": "procedures", "since": "2099-01-01"})
+    assert result["facts"] == []
+    assert "facts_of_other_kinds" not in result
+
+
 def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):
     result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
                             {"start_date": "2099-01-01"})

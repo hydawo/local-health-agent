@@ -1398,11 +1398,35 @@ def _get_clinical_history(ctx: ToolContext, args: dict) -> dict:
         )
         return _attach_personal_notes(ctx, payload, row_kind or "")
     if not facts:
+        # Naming the other kinds and leaving the model to ask for them is not
+        # enough: eval run 12 drew a model that asked for procedures, was
+        # told conditions are held, reported "no procedure records" and then
+        # asked the person for the date of an injury that a condition record
+        # carried. Rule 1e already settled this shape by handing over the
+        # personal notes rather than telling the model to go looking, so the
+        # other kinds are handed over the same way. `facts` stays empty,
+        # because no record of the kind asked for exists.
+        # Only when a kind was asked for. Without one, this query is the one
+        # that already came back empty, so the guard saves a repeat rather
+        # than changing what the model sees. The window is the person's own
+        # `since`: records from outside it would answer a question nobody
+        # asked.
+        others = queries.clinical_facts(ctx.conn, since=args.get("since"),
+                                        limit=MAX_CLINICAL_FACTS) \
+            if row_kind else []
         payload["note"] = (
             f"No {kind or 'clinical'} records in the requested range. The "
             f"index does hold {', '.join(payload['kinds_available'])}. Say "
             f"what is absent."
         )
+        if others:
+            payload["facts_of_other_kinds"] = others
+            payload["note"] += (
+                " Those records are here under `facts_of_other_kinds`, "
+                "already retrieved. Read them before telling the person "
+                "something is unrecorded, and before asking them for a date "
+                "or a name one of them carries."
+            )
         return _attach_personal_notes(ctx, payload, row_kind or "")
     if len(facts) >= MAX_CLINICAL_FACTS:
         payload["truncated"] = True
