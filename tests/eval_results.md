@@ -1080,3 +1080,36 @@ about it twice.
 fired once in 111 draws, on Q22, and rewrote nothing, which is the expected
 shape of the `SAME_SENTENCE_RULE` change: the rule moved where a citation has
 to sit, and the guard itself is byte-for-byte what it was.
+
+## What changed after run 13 launched
+
+Run 13 started at `276871d` against run 12's bed and model, to isolate the
+scorer changes made after run 12 began. Work continued while it ran, so its
+own report is scored by the checks as they stood at launch and its capture
+file is what carries the answers forward. Written here while it is fresh,
+because this is the bookkeeping that gets reconstructed from shell history
+otherwise.
+
+**Scorer, after run 13's process had loaded it.** Its report will not show
+these; re-scoring its capture will.
+
+1. **The gap claim for a literature question** reads the findings a search
+   returned, not only an absence it reported. Q23's cell measures something
+   for the first time.
+2. **Q1 accepts its figure in `count/min`**, the unit the index stores. One
+   run-12 draw was failed for it.
+3. **The decline list** counts the forms whose subject is the evidence, as in
+   "too sparse to determine". One run-12 draw was failed for it.
+4. **Four report lines**: how many gap draws were measured and which had
+   nothing to measure, how many `cited` failures had no locator in their
+   payloads, how many `cited` cells were earned on the question's own date,
+   and the source-file figure over the questions that have a file.
+5. **A capture records the commit that produced it.** Run 13's does not,
+   since the field did not exist when it started.
+
+**Agent side, one change, and run 14 is the first run that can see it.**
+`get_clinical_history` asked for a kind it holds nothing of now hands back
+the kinds it does hold, under `facts_of_other_kinds`, rather than naming them
+in a note and leaving the model to ask. Run 12's Q37 draw 1 is why. Nothing
+else the model sees has changed, so a column that moves between run 13 and
+run 14 is either that or the model.
