@@ -76,9 +76,13 @@ def main() -> int:
     print(f"- draws per question: {repeat}")
     for label, key in (("number", "number"), ("tools", "tools"),
                        ("gap", "gap"), ("pmid", "pmid")):
-        scored = [r for r in rows if r.get(f"{key}_scored")]
-        blank = sorted({r["id"] for r in rows if not r.get(f"{key}_scored")})
-        print(f"- {label} measured on {len(scored)}/{len(rows)} draws"
+        # The gap column's denominator is draws of a gap question. Counted
+        # over every draw it would list every other question as having
+        # nothing to check, which is true and says nothing.
+        over = [r for r in rows if r.get("gap_case")] if key == "gap" else rows
+        scored = [r for r in over if r.get(f"{key}_scored")]
+        blank = sorted({r["id"] for r in over if not r.get(f"{key}_scored")})
+        print(f"- {label} measured on {len(scored)}/{len(over)} draws"
               + (f"; nothing to check on {', '.join(blank)}" if blank else ""))
     varied = sorted(qid for qid, draws in groups.items()
                     if any(len({d[k] for d in draws}) > 1 for k in CLEAN))
