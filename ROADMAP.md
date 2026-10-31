@@ -476,7 +476,11 @@ fourth, the rule against scoring a tool's own phrases, is built as
 `tests/test_scorer_contract.py`. The finding that test produced, that the
 `gap` column was scoring the absence vocabulary the tools themselves write,
 was the one open decision on this list and is now built too: the column reads
-the coverage figures out of the recorded payload.
+the coverage figures out of the recorded payload. Run 12 then reported that
+the rebuilt column had measured nothing across all 111 draws, because the real
+literature corpus answers a question it does not cover with off-topic matches
+rather than an absence; the claim now comes off the findings instead, and the
+line that caught it is the unmeasured count the rebuild added.
 
 Auditing the rest of the columns for that same shape found four more, all
 recorded below: two that passed with nothing behind them, one that credited an
@@ -643,7 +647,32 @@ requires.
   stored "Diabetes Mellitus, Type 2" and the readable "type 2 diabetes
   mellitus" alike; a reversed-heading alternative was written and then
   removed when a mutation test showed it could never change an outcome. Run
-  12 was scored before this refinement, on the count or the pack. Eval run 9 found the same shape in a
+  12 was scored before this refinement, on the count or the pack.
+
+  **And then run 12 showed the whole thing measured nothing, 2026-10-31.**
+  Its summary line reads `gap coverage actually scored: 0/0 draws that
+  reported an absence`. Both gap questions ran three draws and neither
+  produced a single claim, which the unmeasured line was built to make
+  visible and did on its first run.
+
+  Q19 is fine: the window it asks about holds data, so there is no absence to
+  report. Q23 is the hole. The semantic literature search always hands back
+  its best matches, so a corpus holding nothing on hip replacement recovery
+  does not report an absence at all: it returned five articles on vascular
+  surgery and tendon rehabilitation with no `no_matches` flag, because the
+  tool cannot tell they are off topic. Design A was built and tested against
+  the payload a miss produces, and the real corpus does not produce one.
+
+  Fixed in `4fd5fc3` by claiming off the findings instead. An answer that
+  says the corpus does not cover this must name something it does hold, by
+  PMID or by a term out of a returned title, which is what the tool's note
+  asks for and what all three run-12 draws did, each in a different way. Two
+  guards keep it from being a free pass: a term already in the question is
+  dropped, so repeating "recovery" names nothing, and research boilerplate is
+  dropped, because "patients", "outcomes" and "randomized" sit in every title
+  and in every answer. Where that leaves nothing requirable, the cell reports
+  unmeasured rather than failing a model for a title the question wrote for
+  it. Each guard is mutation-tested. Eval run 9 found the same shape in a
   second list and retired it the same way: a bare `diagnos*` token behind
   fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
   constitute a diagnosis", negation four words away) and a date quoted off the
