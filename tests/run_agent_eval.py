@@ -160,6 +160,24 @@ def _date_alternatives(iso: str) -> list[str]:
     ]
 
 
+def _topic_alternatives(topic: str) -> str:
+    """One MeSH heading, as a model would write it.
+
+    MeSH inverts its headings ("Diabetes Mellitus, Type 2"), and nobody writes
+    them that way, so the comma is a boundary rather than a character to
+    match: either side of it counts, longest part first.
+    """
+    parts = [p.strip() for p in topic.split(",") if p.strip()] or [topic]
+    # The longest comma-separated part, which covers both the stored form and
+    # the readable one: MeSH stores "Diabetes Mellitus, Type 2" and a person
+    # writes "type 2 diabetes mellitus", and "Diabetes Mellitus" is inside
+    # both. A reversed-heading alternative was written first and then removed:
+    # a mutation test showed it never changed an outcome, because the
+    # reversal contains every part the longest one does.
+    longest = max(parts, key=len)
+    return r"\b" + re.escape(longest).replace(r"\ ", r"\s+") + r"\b"
+
+
 @dataclass(frozen=True)
 class _Coverage:
     """One absence a tool reported, and what the answer must carry for it."""
@@ -202,14 +220,31 @@ def _coverage_claims(steps) -> list[_Coverage]:
             continue
         corpus = node.get("corpus")
         if isinstance(corpus, dict):
+            # Topics first, because that is what the tool's own note asks the
+            # model to do: "name what it does cover". A topic is something a
+            # person can act on. The article count says how much of something
+            # unnamed there is, and a pack is a filename, so those are the
+            # fallback for a corpus whose coverage block records no topics.
+            topics = [t for t in (corpus.get("topics") or [])
+                      if isinstance(t, str) and t.strip()]
+            if topics:
+                claims.append(_Coverage(
+                    label="a topic the corpus does cover ("
+                          + ", ".join(topics[:3])
+                          + (", ..." if len(topics) > 3 else "") + ")",
+                    groups=(tuple(_topic_alternatives(t) for t in topics),)))
+                continue
             count = corpus.get("article_count")
             packs = [p for p in (corpus.get("packs") or [])
                      if isinstance(p, str)]
             alternatives = [rf"\b{count:,}\b".replace(",", "[,.]?"),
                             rf"\b{count}\b"] if count else []
-            alternatives += [rf"\b{re.escape(p)}\b" for p in packs]
+            # A pack is listed as `sample@2026.09` and nobody writes the
+            # version, so the slug alone is the match.
+            alternatives += [rf"\b{re.escape(p.split('@')[0])}\b"
+                             for p in packs]
             claims.append(_Coverage(
-                label=f"what the corpus covers ({count} articles"
+                label=f"what the corpus holds ({count} articles"
                       + (f", {', '.join(packs)}" if packs else "") + ")",
                 groups=(tuple(alternatives),) if alternatives else ()))
             continue

@@ -285,11 +285,14 @@ wording gets scored, same as the rest of the set.
   five but is the subject of one). It does not answer from general
   orthopedic knowledge.
 - tool: `search_medical_literature("hip replacement recovery")`
-- scored, as of 2026-10-31, on carrying a figure out of the miss payload's
-  own `corpus` block rather than on saying the corpus misses: the article
-  count or the installed pack. The `topics` list the expectation above
-  describes is the better requirement and is the next change to this case;
-  it was left alone while run 12 was in flight so the run maps to one commit.
+- scored, as of 2026-10-31, on naming one of the topics the miss payload's
+  own `corpus` block lists, which is what the tool's note asks for and what
+  the expectation above describes. The article count or the installed pack
+  is the fallback, for a corpus whose coverage records no topics. A MeSH
+  heading matches on its longest comma-separated part, so the stored
+  "Diabetes Mellitus, Type 2" and the readable "type 2 diabetes mellitus"
+  both count. Run 12 was scored before this change, on the count or the pack
+  (commit `6ce8ce5`).
 
 **Q24. Based on the evidence, what should I do about my LDL?**
 - sources: LIT + LAB

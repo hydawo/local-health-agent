@@ -614,7 +614,18 @@ list with no right answer written down yet.
   `GAP_PATTERNS` stays where it is. It scores nothing now, and the
   scorer-contract test still scans tool payloads against it, so the
   vocabulary cannot become a scorer again without its nine collisions
-  showing up. Eval run 9 found the same shape in a
+  showing up.
+
+  Refined the same night: a literature miss asks for one of the topics its
+  `corpus` block lists, not the article count, because naming what the corpus
+  does cover is what the tool's note asks for and what a person can act on,
+  while a count says how much of something unnamed there is. The count and
+  the pack slug remain the fallback for a corpus recording no topics. A MeSH
+  heading matches on its longest comma-separated part, which covers the
+  stored "Diabetes Mellitus, Type 2" and the readable "type 2 diabetes
+  mellitus" alike; a reversed-heading alternative was written and then
+  removed when a mutation test showed it could never change an outcome. Run
+  12 was scored before this refinement, on the count or the pack. Eval run 9 found the same shape in a
   second list and retired it the same way: a bare `diagnos*` token behind
   fixed-width negation lookbehinds flagged a model's own disclaimer ("do not
   constitute a diagnosis", negation four words away) and a date quoted off the

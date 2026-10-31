@@ -1340,3 +1340,70 @@ def test_an_unscorable_gap_is_named_in_the_report_not_left_blank():
                           gap_required=["an absence with no figure to carry"])],
                     60.0, args)
     assert "gap not scorable" in report
+
+
+def test_a_literature_gap_asks_for_the_topics_the_corpus_does_cover():
+    """What the tool's own note asks the model to do: "name what it does
+    cover". A topic is what a person can act on; the article count tells them
+    how much of something unnamed there is, and the pack slug is a filename.
+
+    Falls back to the count or the pack only where the payload carries no
+    topics, so a corpus built before topics were recorded still scores.
+    """
+    corpus = {"packs": ["sample@2026.09"], "article_count": 2000,
+              "topics": ["Diabetes Mellitus, Type 2", "Hypertension",
+                         "Exercise"], "built": "2026.09"}
+    miss = _step("search_medical_literature", {"query": "hip replacement"},
+                 {"corpus_installed": True, "findings": [], "no_matches": True,
+                  "corpus": corpus,
+                  "note": "The corpus holds nothing on this."})
+    named = _score_with_steps(
+        "Q23", "My literature does not cover hip replacement recovery. What "
+        "it does cover is cardiovascular and metabolic research: type 2 "
+        "diabetes, hypertension and exercise.",
+        [miss], tools_used=("search_medical_literature",))
+    assert named["gap"] and named["gap_scored"]
+
+    counted = _score_with_steps(
+        "Q23", "The corpus holds nothing on hip replacement recovery. It has "
+        "2,000 articles.", [miss], tools_used=("search_medical_literature",))
+    assert not counted["gap"], "a count is not what the corpus covers"
+
+    without_topics = _step(
+        "search_medical_literature", {"query": "hip replacement"},
+        {"corpus_installed": True, "findings": [], "no_matches": True,
+         "corpus": {"packs": ["sample@2026.09"], "article_count": 2000},
+         "note": "The corpus holds nothing on this."})
+    fallback = _score_with_steps(
+        "Q23", "Nothing on hip replacement recovery. The corpus here is the "
+        "sample pack, 2,000 articles.", [without_topics],
+        tools_used=("search_medical_literature",))
+    assert fallback["gap"] and fallback["gap_scored"]
+
+
+def test_a_pack_version_matches_on_its_slug_alone():
+    """Packs are listed as `sample@2026.09`; nobody writes the version."""
+    miss = _step("search_medical_literature", {"query": "x"},
+                 {"findings": [], "no_matches": True,
+                  "corpus": {"packs": ["sample@2026.09"], "article_count": 7}})
+    row = _score_with_steps("Q23", "Nothing on that. The sample pack is what "
+                            "is installed here.", [miss],
+                            tools_used=("search_medical_literature",))
+    assert row["gap"]
+
+
+def test_an_inverted_mesh_heading_is_accepted_the_way_a_person_writes_it():
+    """MeSH stores "Diabetes Mellitus, Type 2"; a person writes "type 2
+    diabetes mellitus". Scoring only the stored form would fail an answer that
+    named the topic correctly, which is the Q37 date-format defect in another
+    vocabulary."""
+    import re
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import _topic_alternatives
+
+    pattern = _topic_alternatives("Diabetes Mellitus, Type 2")
+    for text in ("covers type 2 diabetes mellitus", "covers diabetes mellitus",
+                 "Diabetes Mellitus, Type 2"):
+        assert re.search(pattern, text, re.IGNORECASE), text
+    assert not re.search(pattern, "covers hip replacement", re.IGNORECASE)
