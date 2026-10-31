@@ -364,6 +364,18 @@ where Oura-only scores live, where the API token lives, what the API path owes
 asserting the exact set), and what the synthetic fixture is. Nothing there is
 built.
 
+The other two readers the event-windows design put out of scope, Strong and
+Slopes, got the same treatment on 2026-10-31 in
+[`docs/strong-and-slopes-open-questions.md`](docs/strong-and-slopes-open-questions.md):
+whether a Strong export is data or prose, where a set lives given the index's
+unit is a workout, what happens when the same session arrives through both the
+CSV and Apple Health, whether Slopes needs a reader at all given it already
+syncs to HealthKit, what question any of it lets a person ask that they cannot
+ask today, and what the fixture is. The recommendation on Slopes is to say in
+the docs that it needs no reader rather than to build one, and the memo's own
+first step is confirming the Strong format against a real export, which is
+never committed. Nothing there is built either.
+
 ## 9. Better lab value extraction
 
 Move from regex and table heuristics to a more robust structured extraction
