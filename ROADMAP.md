@@ -709,8 +709,19 @@ list with no right answer written down yet.
   with nothing to check, which is the line the `gap` column already carries.
   The pass semantics are deliberately unchanged, because eleven runs of those
   rows depend on them, and a test pins both lists so adding a case with
-  neither check is a decision rather than a quiet cell. Giving those eight
-  questions real expectations is the open work; Q22 and Q23 are the
+  neither check is a decision rather than a quiet cell.
+
+  Four of the five tools cells were closed the same night: Q14 and Q15 can
+  only reach notes through `search_records`, and Q17 and Q19 can only reach a
+  HealthKit metric through `query_healthkit`, so each names the one tool its
+  question cannot be answered without. `eval_questions.md` had documented
+  them all along under the pre-agent names (`search`, `metric_series`); the
+  cases simply never encoded them. Q12 is left alone and is now the only
+  question whose `tools` cell measures nothing: there is no list-analytes
+  tool, so it is reachable through either `get_lab_trend` or `search_records`
+  and requiring one would score a route rather than an answer.
+
+  The three number cells are the open work. Q22, Q23 and Q26 are the
   interesting ones, since what a correct answer must carry there is a refusal
   and a coverage statement rather than a value.
 - Every per-question eval result in this repository is a single draw, and the

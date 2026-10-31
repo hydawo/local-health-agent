@@ -439,9 +439,18 @@ CASES: list[Case] = [
          expect_tools=["search_records"]),
     Case("Q14", "Which notes did I flag to follow up on?",
          must_include=[["sleep-log", "sleep log"], ["symptom", "headache"]],
+         # The only tool that reads notes. Added 2026-10-31: these five cases
+         # had no expected tool, so their `tools` cell passed on every draw
+         # without checking anything. Only a tool the question cannot be
+         # answered without is listed, which is why Q12 still has none: "what
+         # lab tests do I have results for" is reachable through either
+         # get_lab_trend or search_records and requiring one would score a
+         # route rather than an answer.
+         expect_tools=["search_records"],
          needs_source=True),
     Case("Q15", "When did I record headaches?",
-         must_include=[["03-12", "march 12"]]),
+         must_include=[["03-12", "march 12"]],
+         expect_tools=["search_records"]),
     Case("Q16", "My notes mention a vitamin D result. What did the lab actually say?",
          must_include=[["22.1"], ["28.4"]],
          needs_source=True,
@@ -462,13 +471,21 @@ CASES: list[Case] = [
     # note would make the case unambiguous but reset eleven runs of this row.
     Case("Q17", "Around the time I logged poor sleep, what was my resting heart rate?",
          must_include=[["march 7", "03-07", "march 1", "1\u20137",
-                        "march 4", "03-04", "march 5", "03-05"]]),
+                        "march 4", "03-04", "march 5", "03-05"]],
+         # Resting heart rate is only reachable through this tool. The sleep
+         # log that dates the question needs `search_records` too, but one
+         # indisputable tool is what this column should hold: requiring both
+         # would fail an answer that found the date another way.
+         expect_tools=["query_healthkit"]),
     Case("Q18", "Is there anything in my recent labs I should ask my doctor about?",
          must_include=[["112"], ["28.4"]],
          needs_source=True,
          expect_tools=["get_lab_trend"]),
     Case("Q19", "Did my activity change around the dates of my last lab panel?",
          must_include=[["03-10", "march 10"]],
+         # The activity side. The panel date is already forced by
+         # `must_include`, and it can only have come from a lab tool.
+         expect_tools=["query_healthkit"],
          needs_gap=True),
     Case("Q20", "What do I know about my cholesterol overall?",
          must_include=[["186"], ["112"], ["52"]],

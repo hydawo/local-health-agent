@@ -119,6 +119,10 @@ corpus, `FHIR` = the clinical records beside an Apple Health export.
 - expected: **23 distinct analytes**; must include hba1c, ldl, hdl, tsh,
   vitamin_d, glucose
 - tool: `list_analytes()`
+- no `expect_tools` in the case, deliberately: there is no list-analytes agent
+  tool, so this is reachable through either `get_lab_trend` or
+  `search_records`, and requiring one would score a route rather than an
+  answer. It is the last question whose `tools` cell measures nothing.
 
 ---
 

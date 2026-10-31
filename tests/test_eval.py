@@ -1530,7 +1530,12 @@ def test_a_case_with_nothing_to_check_says_so_rather_than_passing_quietly():
     # Pinned, so adding a case without either check is a decision someone
     # makes on purpose rather than a cell that silently reads as a win.
     assert unscored_number == ["Q22", "Q23", "Q26"]
-    assert unscored_tools == ["Q12", "Q14", "Q15", "Q17", "Q19"]
+    # Was five until 2026-10-31. Four of them had a tool the question cannot
+    # be answered without and now name it. Q12 does not: "what lab tests do I
+    # have results for" is reachable through either `get_lab_trend` or
+    # `search_records`, and requiring one would score a route rather than an
+    # answer.
+    assert unscored_tools == ["Q12"]
 
 
 def test_the_row_marks_which_of_those_two_columns_were_measured():
@@ -1560,3 +1565,21 @@ def test_the_report_names_the_questions_those_columns_do_not_measure():
     assert "correct number actually scored: 1/2" in report
     assert "expected tools actually scored: 1/2" in report
     assert "Q22" in report
+
+
+def test_the_four_tools_added_are_each_the_only_route_to_the_answer():
+    """A tool in `expect_tools` has to be one the question cannot be answered
+    without, or the column scores a route rather than an answer. Notes are
+    reachable only through `search_records` and HealthKit metrics only through
+    `query_healthkit`, which is what makes these four safe to require."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES
+    from health_agent.agent.tools import TOOLS
+
+    names = {t.name for t in TOOLS}
+    for qid, tool in (("Q14", "search_records"), ("Q15", "search_records"),
+                      ("Q17", "query_healthkit"), ("Q19", "query_healthkit")):
+        case = next(c for c in CASES if c.id == qid)
+        assert case.expect_tools == [tool], qid
+        assert tool in names, tool
