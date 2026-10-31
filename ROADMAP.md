@@ -11,6 +11,21 @@ release claims and how to verify it is in [THREAT_MODEL.md](THREAT_MODEL.md).
 
 Items are roughly in dependency order. The first one unlocks most of the rest.
 
+## Open decisions
+
+Each of these is written up where it belongs, with options, the trade each one
+makes, and a recommendation. None needs research to answer; each needs a
+choice.
+
+| What | Where | Recommended |
+| --- | --- | --- |
+| Where to stop an invented citation in the guardrail | §16's eval findings | flag it, and say whether it was invented or quoted |
+| Whether a tag question gets a ninth tool | §16's eval findings | yes, `get_notes_by_tag`, a listing rather than a search |
+| Whether `cited` stays scored on an answer that declines for lack of coverage | §16's eval findings | leave it scored for now; the reporting half is built |
+| Whether Q23 needs a value check beyond its gap coverage | §16's eval findings | no |
+| Oura: six questions, from scope to where a token lives | [`docs/oura-open-questions.md`](docs/oura-open-questions.md) | one per question, in the memo |
+| Strong and Slopes: six questions, from data-or-prose to the fixture | [`docs/strong-and-slopes-open-questions.md`](docs/strong-and-slopes-open-questions.md) | one per question, in the memo |
+
 ---
 
 ## 1. Medical literature grounding (RAG, not fine-tuning)
