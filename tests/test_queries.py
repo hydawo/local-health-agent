@@ -125,6 +125,61 @@ def test_sleep_aggregates_by_duration_per_stage(ingested):
     assert by_key[("2026-03-05", "HKCategoryValueSleepAnalysisAsleepREM")] == 2700.0
 
 
+def test_a_night_two_devices_recorded_is_the_larger_one_not_the_sum(ingested):
+    """Issue 22. Adding a watch's and a ring's seconds together returned
+    about twice the deep sleep and twice the asleep hours for one night.
+
+    The night's figures are the device with the most asleep time, which is
+    the `max` an additive series already takes, and they are that device's
+    wholesale so the stages still sum to `asleep_seconds`.
+    """
+    conn, _ = ingested
+    nights = {n["night"]: n for n in queries.sleep_nights(conn)}
+
+    collided = nights["2026-03-10"]
+    assert collided["multi_source"] is True
+    assert collided["sources"] == ["Fixture Ring", "Fixture Watch"]
+    assert collided["source"] == "Fixture Ring"
+    # 4h, the ring's. The watch recorded 3h and the sum would be 7h.
+    assert collided["asleep_seconds"] == 4 * 3600
+    assert collided["stages"]["AsleepDeep"] == 3600.0
+    assert sum(v for k, v in collided["stages"].items()
+               if k.startswith("Asleep")) == collided["asleep_seconds"]
+    # In bed comes from the chosen device too: the ring recorded 20 minutes
+    # where the watch recorded 30. A per-field maximum would report a night
+    # neither device recorded.
+    assert collided["in_bed_seconds"] == 20 * 60
+    assert collided["per_source"]["Fixture Watch"]["asleep_seconds"] == 3 * 3600
+    assert collided["per_source"]["Fixture Ring"]["asleep_seconds"] == 4 * 3600
+    # The span is the chosen device's, not the earliest start of one beside
+    # the latest end of the other.
+    assert collided["first_start"].startswith("2026-03-10T22:40")
+    assert collided["last_end"].startswith("2026-03-11T04:00")
+
+    single = nights["2026-03-04"]
+    assert single["multi_source"] is False
+    assert single["source"] == "Fixture Watch"
+    assert single["asleep_seconds"] == 3.5 * 3600
+    assert single["per_source"]["Fixture Watch"]["in_bed_seconds"] == 1800.0
+
+
+def test_a_night_whose_rows_name_no_device_is_still_one_night(ingested):
+    """`source_name` is nullable, and a per-source mapping needs one key
+    type to sort. The sentinel is the key; `sources` leaves it out, as the
+    summing version left a null name out, because naming a device the export
+    did not name would be inventing one."""
+    conn, _ = ingested
+    conn.execute("UPDATE record SET source_name = NULL WHERE type = "
+                 "'HKCategoryTypeIdentifierSleepAnalysis' AND source_name = "
+                 "'Fixture Ring'")
+    nights = {n["night"]: n for n in queries.sleep_nights(conn)}
+    collided = nights["2026-03-10"]
+    assert collided["sources"] == ["Fixture Watch"]
+    assert collided["source"] == queries.UNNAMED_SOURCE
+    assert collided["multi_source"] is True
+    assert collided["asleep_seconds"] == 4 * 3600
+
+
 # --------------------------------------------------------------------------- #
 # Windows and missing data
 # --------------------------------------------------------------------------- #
@@ -185,9 +240,9 @@ def test_category_identifier_fallback_is_category():
 def test_index_summary(ingested):
     conn, _ = ingested
     summary = queries.index_summary(conn)
-    assert summary["records"] == 25
+    assert summary["records"] == 31
     assert summary["first_date"] == "2026-03-01"
-    assert summary["last_date"] == "2026-03-09"
+    assert summary["last_date"] == "2026-03-11"
     assert summary["workouts"] == 1
     assert summary["activity_summaries"] == 2
     assert "Fixture Watch" in summary["sources"]
@@ -198,7 +253,7 @@ def test_list_types_search(ingested):
     found = queries.list_types(conn, search="sleep")
     assert len(found) == 1
     assert found[0]["type"] == "HKCategoryTypeIdentifierSleepAnalysis"
-    assert found[0]["n"] == 4
+    assert found[0]["n"] == 10
 
 
 def test_workout_summary(ingested):

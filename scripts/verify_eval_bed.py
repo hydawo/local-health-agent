@@ -24,7 +24,7 @@ SCHEMA_VERSION = 6
 
 # tests/fixtures, as ingested by `health-agent ingest tests/fixtures`.
 MAIN_COUNTS = {
-    "record": 25,
+    "record": 31,
     "workout": 1,
     "activity_summary": 2,
     "lab_result": 48,

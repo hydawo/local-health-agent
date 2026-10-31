@@ -859,6 +859,19 @@ def cmd_sleep(args: argparse.Namespace, cfg: config.Config) -> int:
         print(_table(headers, rows))
         print("\nNights are labelled by the evening they began; segments after "
               "midnight count toward the night before.")
+        collided = [n for n in nights if n["multi_source"]]
+        if collided:
+            # The same caveat `_print_caveats` prints for a metric, said for
+            # a night. Without it the table reads as one measurement, and a
+            # person wearing a watch and a ring cannot tell that a device's
+            # figures were set aside.
+            devices = sorted({s for n in collided for s in n["sources"]})
+            print(f"\n{len(collided)} night(s) had more than one recording "
+                  f"device ({', '.join(devices)}). Each of those nights shows "
+                  "the one device that recorded the most sleep, not the "
+                  "devices added together, because summing overlapping "
+                  "devices double-counts. --json carries every device's own "
+                  "totals.")
         return 0
     finally:
         conn.close()

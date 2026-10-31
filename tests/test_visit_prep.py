@@ -199,6 +199,61 @@ def test_display_converts_sleep_seconds_to_minutes_and_resting_hr_to_bpm():
     assert visit_prep._display("weight", 170, "lb") == (170.0, "lb")
 
 
+def _sleep_export_xml(nights: list[tuple[str, str, int]]) -> str:
+    """A HealthKit export of whole-night sleep. nights: (source, date, hours).
+
+    One AsleepCore segment per night per source, starting at 22:00 on the
+    evening named, so the night-attribution rule labels it by that evening.
+    `_export_xml` writes quantity records only and sleep is a category type.
+    """
+    body = ""
+    for source, day, hours in nights:
+        end = date.fromisoformat(day) + timedelta(days=1)
+        body += (' <Record type="HKCategoryTypeIdentifierSleepAnalysis" '
+                 f'sourceName="{source}" creationDate="{end} 08:00:00 -0500" '
+                 f'startDate="{day} 22:00:00 -0500" '
+                 f'endDate="{end} {(22 + hours) % 24:02d}:00:00 -0500" '
+                 'value="HKCategoryValueSleepAnalysisAsleepCore"/>\n')
+    return ('<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n'
+            ' <ExportDate value="2026-06-30 09:00:00 -0400"/>\n'
+            ' <Me HKCharacteristicTypeIdentifierDateOfBirth="1990-01-01"/>\n'
+            f'{body}</HealthData>\n')
+
+
+def test_a_second_sleep_device_is_not_a_change_in_sleep(tmp_path):
+    """Issue 22's consequence on a sheet a clinician reads.
+
+    `sleep_nights` added every source's seconds together, so a person who
+    started wearing a ring halfway through the window had their nightly sleep
+    jump by the ring's whole total. Nothing about their sleep changed, and the
+    sheet would have reported a shift of hours. The figures are one device's
+    now, so there is no signal to print.
+    """
+    from health_agent.ingest import healthkit
+    from health_agent.store import sqlite_schema
+
+    prior = [("Watch", d, 7) for d in _days(date(2026, 5, 1), 30)]
+    recent = [("Watch", d, 7) for d in _days(date(2026, 5, 31), 30)]
+    recent += [("Ring", d, 6) for d in _days(date(2026, 5, 31), 30)]
+    export = tmp_path / "sleep.xml"
+    export.write_text(_sleep_export_xml(prior + recent))
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    healthkit.ingest_file(conn, export)
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+
+    label, unit, values = visit_prep._daily_values(conn, "sleep")
+    assert values["2026-05-01"] == 7 * 3600
+    # The night both devices covered is the larger one's seven hours, not
+    # thirteen. Thirteen is what summing them returned.
+    assert values["2026-06-01"] == 7 * 3600
+    signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
+    assert not [s for s in signals if "Sleep" in s.subject
+                or "sleep" in s.subject.lower()]
+    conn.close()
+
+
 def test_resting_heart_rate_shift_is_a_signal(tmp_path):
     prior = [("RestingHeartRate", "count/min", d, "58") for d in _days(date(2026, 5, 1), 30)]
     recent = [("RestingHeartRate", "count/min", d, "64") for d in _days(date(2026, 5, 31), 30)]

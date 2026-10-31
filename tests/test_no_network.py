@@ -147,7 +147,7 @@ def test_ingest_alone_is_offline(no_network, tmp_path):
         return healthkit.register_source_file(
             conn, path, kind, healthkit.sha256_file(path))
 
-    assert healthkit.ingest_file(conn, FIXTURES / "export.xml").records_inserted == 25
+    assert healthkit.ingest_file(conn, FIXTURES / "export.xml").records_inserted == 31
     sqlite_schema.rebuild_daily_metrics(conn)
     assert records.ingest_records(
         conn, FIXTURES / "records",

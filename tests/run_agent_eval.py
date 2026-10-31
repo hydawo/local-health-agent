@@ -940,6 +940,20 @@ CASES: list[Case] = [
          # answer here is a declined claim, which none of them match.
          must_match=[DECLINE_PATTERN],
          expect_tools=["compare_windows"], window_index=True),
+    # Q3's shape, for sleep. The device mention is required rather than
+    # forbidden, since a figure chosen between two devices is a figure whose
+    # provenance the reader cannot otherwise see, and the two summed figures
+    # are forbidden because they are what this question exists to catch. The
+    # required group names no word the tool writes: `multi_source_warning`
+    # says "recording device", and "ring" and "watch" are the fixture's own
+    # device names, which the payload carries as data for the answer to
+    # attribute rather than as prose for it to relay.
+    Case("Q38", "How much did I sleep on the night of 2026-03-10?",
+         must_include=[["4 hour", "4h", "4.0 hour", "four hour"],
+                       ["ring"],
+                       ["watch"]],
+         must_not_include=["7 hours", "7h 00m", "1 hour 30", "1h 30m"],
+         expect_tools=["query_healthkit"]),
 ]
 
 

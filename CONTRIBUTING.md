@@ -107,7 +107,7 @@ produces confusing failures against an existing index.
 
 ## The eval set
 
-`tests/eval_questions.md` holds 37 questions with hand-verified answers, and
+`tests/eval_questions.md` holds 38 questions with hand-verified answers, and
 `tests/test_eval.py` executes them against the tool layer. This is the accuracy
 signal, as distinct from the unit tests' correctness signal: a prompt change, a
 retrieval change, or a model swap can leave every unit test green while making

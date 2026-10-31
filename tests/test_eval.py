@@ -127,6 +127,29 @@ def test_q5_deep_sleep(evalbox):
     assert ("2026-03-05", "HKCategoryValueSleepAnalysisAsleepDeep") in stored
 
 
+def test_q38_a_night_two_devices_recorded(evalbox):
+    """Q3 for sleep, and the question that was missing when issue 22 was
+    filed. The fixture's only sleep night had one source, so a tool adding
+    every device's seconds together answered it correctly and the eval could
+    not tell.
+    """
+    nights = {n["night"]: n for n in queries.sleep_nights(evalbox)}
+    night = nights["2026-03-10"]
+    assert night["multi_source"] is True
+    assert night["sources"] == ["Fixture Ring", "Fixture Watch"]
+    # The ring's four hours, not the seven the two devices sum to.
+    assert night["asleep_seconds"] == 4 * 3600
+    assert night["stages"]["AsleepDeep"] == 3600.0
+    assert night["in_bed_seconds"] == 20 * 60
+    assert sum(v for k, v in night["stages"].items()
+               if k.startswith("Asleep")) == night["asleep_seconds"]
+    assert night["per_source"]["Fixture Watch"]["asleep_seconds"] == 3 * 3600
+
+    # The single-source night keeps the figures Q5 scores.
+    assert nights["2026-03-04"]["asleep_seconds"] == 3600 * 3.5
+    assert nights["2026-03-04"]["multi_source"] is False
+
+
 def test_q6_weight_change(evalbox):
     result = series(evalbox, "weight", period="day")
     assert [p.value for p in result.points] == [180.0, 179.0]
@@ -1821,7 +1844,7 @@ def test_every_case_id_is_unique_and_the_set_is_the_documented_size():
 
     ids = [case.id for case in CASES]
     assert len(ids) == len(set(ids))
-    assert len(ids) == 37
+    assert len(ids) == 38
 
 
 # --------------------------------------------------------------------------- #

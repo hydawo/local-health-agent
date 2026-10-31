@@ -51,8 +51,8 @@ def test_rejects_garbage_timestamp():
 
 def test_ingest_counts(ingested):
     _, stats = ingested
-    assert stats.records_seen == 25
-    assert stats.records_inserted == 25
+    assert stats.records_seen == 31
+    assert stats.records_inserted == 31
     assert stats.workouts_inserted == 1
     assert stats.activity_summaries == 2
     assert stats.status == "complete"
@@ -107,7 +107,7 @@ def test_category_values_stay_text(ingested):
         "SELECT value_num, value_text FROM record "
         "WHERE type = 'HKCategoryTypeIdentifierSleepAnalysis'"
     ).fetchall()
-    assert len(rows) == 4
+    assert len(rows) == 10
     assert all(r["value_num"] is None for r in rows)
     assert {r["value_text"] for r in rows} == {
         "HKCategoryValueSleepAnalysisInBed",
@@ -188,9 +188,9 @@ def test_forced_reingest_inserts_no_duplicates(ingested, fixture_export):
     after = conn.execute("SELECT COUNT(*) AS n FROM record").fetchone()["n"]
 
     assert after == before
-    assert stats.records_seen == 25
+    assert stats.records_seen == 31
     assert stats.records_inserted == 0
-    assert stats.records_duplicate == 25
+    assert stats.records_duplicate == 31
 
 
 # --------------------------------------------------------------------------- #
@@ -267,7 +267,7 @@ def test_ingests_straight_from_a_zip(tmp_path, fixture_export, index_path):
     conn = sqlite_schema.connect(index_path, create=True)
     sqlite_schema.initialize(conn)
     stats = healthkit.ingest_file(conn, archive)
-    assert stats.records_inserted == 25
+    assert stats.records_inserted == 31
     conn.close()
 
 

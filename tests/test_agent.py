@@ -286,6 +286,40 @@ def test_sleep_is_attributed_to_nights_not_calendar_dates(ctx):
     assert "2026-03-05" not in nights
 
 
+def test_a_night_two_devices_recorded_says_which_one_the_figures_are(ctx):
+    """Issue 22, in the payload the model reads. The night's figures are one
+    device's, so the payload names it, carries each device's own total beside
+    it, and warns once for the answer, the way the series path has warned
+    since the step counts hit the same question."""
+    result = tools.dispatch(ctx, "query_healthkit", {"metric": "sleep"})
+    night = {n["night_of"]: n for n in result["nights"]}["2026-03-10"]
+
+    assert night["asleep_hours"] == 4.0          # the ring's; the watch's was 3
+    assert night["stages_hours"]["AsleepDeep"] == 1.0
+    assert night["source"] == "Fixture Ring"
+    assert night["sources"] == ["Fixture Ring", "Fixture Watch"]
+    assert night["per_source_asleep_hours"] == {"Fixture Ring": 4.0,
+                                                "Fixture Watch": 3.0}
+    warning = result["multi_source_warning"]
+    assert "double-counts" in warning
+    assert "Fixture Ring" in warning and "Fixture Watch" in warning
+    # A single-source night carries no per-device breakdown, because there is
+    # no choice behind its figures to report.
+    single = {n["night_of"]: n for n in result["nights"]}["2026-03-04"]
+    assert "per_source_asleep_hours" not in single
+    assert single["source"] == "Fixture Watch"
+
+
+def test_a_single_source_range_is_not_warned_about(ctx):
+    """The warning is about the nights in the answer, not about the index: a
+    range holding one device per night has nothing to disclose, and a warning
+    there would teach the model to hedge every sleep answer."""
+    result = tools.dispatch(ctx, "query_healthkit",
+                            {"metric": "sleep", "start_date": "2026-03-04",
+                             "end_date": "2026-03-04"})
+    assert "multi_source_warning" not in result
+
+
 def test_sleep_night_range_filter(ctx):
     result = tools.dispatch(ctx, "query_healthkit",
                             {"metric": "sleep", "start_date": "2026-03-04",
@@ -365,7 +399,7 @@ def test_tool_errors_come_back_as_data(ctx):
 
 def test_data_inventory_describes_the_index(ctx):
     inventory = tools.data_inventory(ctx.conn)
-    assert inventory["healthkit"]["records"] == 25
+    assert inventory["healthkit"]["records"] == 31
     assert "resting-hr" in inventory["healthkit"]["metrics_available"]
     assert "hba1c" in inventory["labs"]["analytes_available"]
     assert "followup" in inventory["notes"]["tags"]

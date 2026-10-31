@@ -32,7 +32,7 @@ def test_ingest_reports_counts(tmp_path, fixture_export, capsys):
     code = main(["--index", str(index), "ingest", str(fixture_export)])
     out = capsys.readouterr().out
     assert code == 0
-    assert "records read        25" in out
+    assert "records read        31" in out
     assert "correlation dupes   2" in out
     assert index.exists()
 
@@ -40,8 +40,30 @@ def test_ingest_reports_counts(tmp_path, fixture_export, capsys):
 def test_stats(cli):
     code, out = cli("stats")
     assert code == 0
-    assert "25 across 7 HealthKit types" in out
-    assert "2026-03-01 to 2026-03-09" in out
+    assert "31 across 7 HealthKit types" in out
+    assert "2026-03-01 to 2026-03-11" in out
+
+
+def test_sleep_table_shows_the_chosen_device_not_the_sum(cli):
+    """Issue 22, for a person rather than the model. `cmd_sleep` had no test
+    of any kind, and the table it prints read as one measurement on a night
+    two devices recorded."""
+    code, out = cli("sleep")
+    assert code == 0
+    # 4h, the ring's. Summed with the watch's 3h it would print 7h.
+    assert "2026-03-10  4h 00m" in out
+    assert "1h 00m" in out        # deep sleep, the ring's; summed it is 1h 30m
+    assert "7h 00m" not in out
+    assert "more than one recording device" in out
+    assert "Fixture Ring" in out and "Fixture Watch" in out
+    assert "double-counts" in out
+
+
+def test_a_single_source_sleep_window_prints_no_caveat(cli):
+    code, out = cli("sleep", "--to", "2026-03-04")
+    assert code == 0
+    assert "2026-03-04" in out
+    assert "more than one recording device" not in out
 
 
 def test_metric_daily(cli):

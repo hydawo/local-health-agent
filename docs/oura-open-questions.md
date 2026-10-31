@@ -59,6 +59,15 @@ clinic-versus-watch vitals: two kinds of measurement are not one series. (a)
 is the cheapest and would let an answer average two devices into a number
 neither recorded.
 
+**Settled for the additive half, 2026-10-31.** This question is still open for
+an averaged figure, which is what it is really about: two devices reporting
+different resting heart rates for one morning. The additive case was decided
+by issue 22, which found `sleep_nights` summing a watch's and a ring's seconds
+for one night, and it was decided the way (a) already describes as right: the
+largest single source, reported with the choice named and the devices' own
+totals beside it. So a ring arriving does not change what an additive figure
+means, and this question is narrower than it was written.
+
 ---
 
 ## 3. Where do Oura-only scores live, if they are in scope?

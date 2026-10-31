@@ -757,7 +757,7 @@ out of git.
 
 ## Accuracy
 
-`tests/eval_questions.md` holds 37 questions with hand-verified answers
+`tests/eval_questions.md` holds 38 questions with hand-verified answers
 spanning all four sources. There are two ways to run them:
 
 ```bash

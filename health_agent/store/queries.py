@@ -15,6 +15,15 @@ source's total independently and report the largest — the number Apple's own
 Health app approximates — and to *tell the caller* how many periods had more than
 one contributing source, so a suspicious total is visible rather than silent.
 `--combine sum` and `--source NAME` are available when the caller knows better.
+
+The rule reads as a description of the whole module and was one function short
+of it until 2026-10-31: `sleep_nights` added every device's seconds together,
+so a watch and a ring covering one night returned about twice the deep sleep
+and twice the asleep hours, and the same records answered differently through
+`health-agent sleep` and `health-agent metric sleep`. Reported by Matt Abate
+in issue 22. A rule written at the top of a module is not a rule every
+function in it follows, and the one that did not was the only sleep read path
+the agent and the visit-prep sheet had.
 """
 
 from __future__ import annotations
@@ -197,6 +206,12 @@ WHERE type = 'HKCategoryTypeIdentifierSleepAnalysis'
 GROUP BY night, stage, source_name
 """
 
+# A source_name a row did not carry, named, so a per-source mapping has one
+# key type and sorts. `sources` leaves it out, as the summing version left a
+# NULL name out, since naming a device the export did not name would be
+# inventing one.
+UNNAMED_SOURCE = "unnamed source"
+
 ASLEEP_PREFIX = "HKCategoryValueSleepAnalysisAsleep"
 
 
@@ -205,8 +220,26 @@ def sleep_nights(conn: sqlite3.Connection, start: str | None = None,
     """Sleep totals per night, with stages broken out.
 
     Returns one entry per night, each with `stages` (seconds per stage),
-    `asleep_seconds` (every Asleep* stage summed), and `in_bed_seconds`.
-    Nights are ordered oldest first.
+    `asleep_seconds` (every Asleep* stage summed), `in_bed_seconds`, the
+    `source` those figures came from, whether the night had more than one,
+    and `per_source` behind them. Nights are ordered oldest first.
+
+    One night recorded by two devices is one night. Adding their seconds
+    together returned about twice the deep sleep and twice the asleep hours
+    for anyone wearing a watch and a ring, or a watch and a sleep app, which
+    made this the one additive path in the module that broke the rule at the
+    top of it: `health-agent sleep` and `health-agent metric sleep` answered
+    the same records differently, and the inflated figure was the one the
+    agent and the visit-prep sheet read. Reported by Matt Abate in issue 22.
+
+    So the night's figures are one source's, the one with the most asleep
+    time, which is the `max` an additive series already takes. They are that
+    source's wholesale rather than a per-stage maximum: stages chosen one by
+    one stop summing to `asleep_seconds` and describe a night no device
+    recorded. The cost is that a stage, or an in-bed segment, held only by
+    the source that lost is not in the night's figures, so `per_source`
+    carries what each one reported and `multi_source` says the figure was
+    chosen.
     """
     rows = conn.execute(SLEEP_NIGHT_SQL).fetchall()
 
@@ -215,9 +248,10 @@ def sleep_nights(conn: sqlite3.Connection, start: str | None = None,
         night = row["night"]
         if not night or (start and night < start) or (end and night > end):
             continue
-        entry = by_night.setdefault(night, {
-            "night": night, "stages": {}, "asleep_seconds": 0.0,
-            "in_bed_seconds": 0.0, "sources": set(),
+        source = row["source_name"] or UNNAMED_SOURCE
+        entry = by_night.setdefault(night, {}).setdefault(source, {
+            "source": source, "stages": {}, "asleep_seconds": 0.0,
+            "in_bed_seconds": 0.0,
             "first_start": row["first_start"], "last_end": row["last_end"],
         })
         stage = (row["stage"] or "Unknown").replace("HKCategoryValueSleepAnalysis", "")
@@ -227,16 +261,37 @@ def sleep_nights(conn: sqlite3.Connection, start: str | None = None,
             entry["asleep_seconds"] += seconds
         elif row["stage"] == "HKCategoryValueSleepAnalysisInBed":
             entry["in_bed_seconds"] += seconds
-        if row["source_name"]:
-            entry["sources"].add(row["source_name"])
         entry["first_start"] = min(entry["first_start"], row["first_start"])
         entry["last_end"] = max(entry["last_end"] or "", row["last_end"] or "")
 
     out = []
     for night in sorted(by_night):
-        entry = by_night[night]
-        entry["sources"] = sorted(entry["sources"])
-        out.append(entry)
+        per_source = by_night[night]
+        # In-bed time and then the name break a tie, so two devices reporting
+        # the same asleep total choose the same way on every run rather than
+        # by whichever row the group-by happened to return first.
+        chosen = max(per_source.values(),
+                     key=lambda e: (e["asleep_seconds"], e["in_bed_seconds"],
+                                    e["source"]))
+        out.append({
+            "night": night,
+            "stages": dict(chosen["stages"]),
+            "asleep_seconds": chosen["asleep_seconds"],
+            "in_bed_seconds": chosen["in_bed_seconds"],
+            "sources": sorted(n for n in per_source if n != UNNAMED_SOURCE),
+            "source": chosen["source"],
+            "multi_source": len(per_source) > 1,
+            "per_source": {
+                name: {"asleep_seconds": e["asleep_seconds"],
+                       "in_bed_seconds": e["in_bed_seconds"],
+                       "stages": dict(e["stages"])}
+                for name, e in sorted(per_source.items())},
+            # The chosen source's own span. Merged across devices, a night
+            # could start on one and end on the other and read as a span
+            # neither of them recorded.
+            "first_start": chosen["first_start"],
+            "last_end": chosen["last_end"],
+        })
     return out
 
 

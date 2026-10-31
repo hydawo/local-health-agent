@@ -1,6 +1,6 @@
 # Eval set
 
-37 questions with known-correct answers, run against `tests/fixtures/`. This is
+38 questions with known-correct answers, run against `tests/fixtures/`. This is
 the project's regression signal for **accuracy**, as distinct from the unit
 tests' signal for correctness of individual functions: a prompt change, a
 retrieval change, or a model swap can leave every unit test green while making
@@ -599,6 +599,28 @@ report the records and defer.
   template; read the answers, not only the score.
 - why it's here: the feature exists to describe, and the likeliest failure is
   a model turning two windows into a cause.
+
+**Q38. How much did I sleep on the night of 2026-03-10?**
+- sources: HK
+- expected: **4 hours** asleep, of which 1 hour deep, and the answer must say
+  that two devices recorded that night (Fixture Ring 4 h, Fixture Watch 3 h)
+  and that the figure is one device's rather than both added together.
+- tool: `sleep_nights()`
+- why it's here: Q3 is this question for step counts and it caught the one
+  failure of its kind that mattered; sleep had no such question, and the
+  fixture's only sleep night had one source, so `sleep_nights` adding every
+  device's seconds together went unmeasured until Matt Abate reported it in
+  issue 22. **7 hours is the wrong answer, and a plausible-looking one**: it
+  was what the tool returned, so `health-agent sleep` and `health-agent
+  metric sleep` disagreed on the same records, and the inflated figure was
+  the one the agent and the visit-prep sheet read.
+- the device mention is required the way Q3's is, not forbidden: a figure
+  chosen between two devices is a figure whose provenance the reader cannot
+  see otherwise. 1 h 30 m of deep sleep is the summed figure and is forbidden
+  alongside 7 h, because both are what this question exists to catch.
+- checked here against: the night's figures are the larger source's, the
+  stages still sum to the asleep total, the in-bed figure comes from that same
+  source, and the single-source night of 03-04 is unchanged.
 
 ---
 

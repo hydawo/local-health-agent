@@ -306,7 +306,8 @@ def _query_sleep(ctx: ToolContext, args: dict) -> dict:
         }
 
     trimmed = nights[-MAX_SERIES_POINTS:]
-    return {
+    collided = [n for n in trimmed if n["multi_source"]]
+    payload = {
         "metric": "sleep",
         "attribution": ("Each night is labelled by the evening it began; "
                         "segments after midnight count toward the night "
@@ -319,11 +320,31 @@ def _query_sleep(ctx: ToolContext, args: dict) -> dict:
                 "stages_hours": {stage: round(seconds / 3600, 2)
                                  for stage, seconds in sorted(n["stages"].items())},
                 "sources": n["sources"],
+                # Which device the figures above are, beside the list of
+                # which ones covered the night. A night reporting two
+                # sources and one set of figures says nothing about where
+                # the figures came from, and the model has no way to ask.
+                "source": n["source"],
+                **({"per_source_asleep_hours": {
+                    name: round(per["asleep_seconds"] / 3600, 2)
+                    for name, per in n["per_source"].items()}}
+                   if n["multi_source"] else {}),
             }
             for n in trimmed
         ],
         "truncated": len(nights) > len(trimmed) or None,
     }
+    if collided:
+        payload["multi_source_warning"] = (
+            f"{len(collided)} night(s) had more than one recording device "
+            f"({', '.join(sorted({s for n in collided for s in n['sources']}))}"
+            "). Each night's figures are the one device that recorded the "
+            "most sleep, not the devices added together, because summing "
+            "overlapping devices double-counts. The devices' own totals are "
+            "in per_source_asleep_hours. Say which device a night's figures "
+            "come from when the total matters."
+        )
+    return payload
 
 
 _DETAIL_ONLY_ARGS = ("activity", "period", "measures", "derive", "indoor",

@@ -111,6 +111,24 @@
  <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-05 02:00:00 -0500" endDate="2026-03-05 02:45:00 -0500" value="HKCategoryValueSleepAnalysisAsleepDeep"/>
  <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-05 07:00:00 -0500" startDate="2026-03-05 02:45:00 -0500" endDate="2026-03-05 03:30:00 -0500" value="HKCategoryValueSleepAnalysisAsleepREM"/>
 
+ <!-- The night of 2026-03-10 into 03-11, recorded TWICE: a watch and a ring.
+      Watch: InBed 30m; Core 2h30 + Deep 30m = 3h asleep.
+      Ring:  InBed 20m; Core 3h + Deep 1h = 4h asleep.
+      The night's figures are the ring's, the larger single source: 4h asleep,
+      1h deep, 20m in bed. Added together they would read 7h and 1h30, which
+      is the double-counting issue 22 reported. The ring wins on asleep time
+      while recording LESS in bed, so a night's in-bed figure comes from the
+      chosen source too rather than from whichever device recorded more.
+      The night of 03-04 above stays single-source, so sleep has the same
+      clean-night/collided-night pair the step counts have, and it sits
+      clear of 03-04 so that night's boundary assertions still hold. -->
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-11 07:00:00 -0400" startDate="2026-03-10 22:30:00 -0400" endDate="2026-03-10 23:00:00 -0400" value="HKCategoryValueSleepAnalysisInBed"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-11 07:00:00 -0400" startDate="2026-03-11 00:00:00 -0400" endDate="2026-03-11 02:30:00 -0400" value="HKCategoryValueSleepAnalysisAsleepCore"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Watch" sourceVersion="10.2" creationDate="2026-03-11 07:00:00 -0400" startDate="2026-03-11 02:30:00 -0400" endDate="2026-03-11 03:00:00 -0400" value="HKCategoryValueSleepAnalysisAsleepDeep"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Ring" sourceVersion="4.1" creationDate="2026-03-11 07:05:00 -0400" startDate="2026-03-10 22:40:00 -0400" endDate="2026-03-10 23:00:00 -0400" value="HKCategoryValueSleepAnalysisInBed"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Ring" sourceVersion="4.1" creationDate="2026-03-11 07:05:00 -0400" startDate="2026-03-11 00:00:00 -0400" endDate="2026-03-11 03:00:00 -0400" value="HKCategoryValueSleepAnalysisAsleepCore"/>
+ <Record type="HKCategoryTypeIdentifierSleepAnalysis" sourceName="Fixture Ring" sourceVersion="4.1" creationDate="2026-03-11 07:05:00 -0400" startDate="2026-03-11 03:00:00 -0400" endDate="2026-03-11 04:00:00 -0400" value="HKCategoryValueSleepAnalysisAsleepDeep"/>
+
  <!-- HRV: 45, 55, 50 ms -> mean exactly 50.0 -->
  <Record type="HKQuantityTypeIdentifierHeartRateVariabilitySDNN" sourceName="Fixture Watch" sourceVersion="10.2" unit="ms" creationDate="2026-03-01 08:10:00 -0500" startDate="2026-03-01 08:10:00 -0500" endDate="2026-03-01 08:10:00 -0500" value="45">
   <MetadataEntry key="HKAlgorithmVersion" value="2"/>
