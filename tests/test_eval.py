@@ -714,8 +714,8 @@ def test_q37_scores_the_decline_not_the_vocabulary():
 
 
 def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
-         gap=True, gap_scored=False, pmid=True, pmid_scored=False,
-         pmid_unreturned=None,
+         gap=True, gap_scored=False, gap_case=None, pmid=True,
+         pmid_scored=False, pmid_unreturned=None,
          gap_required=None, no_diag=True, tools_scored=True,
          tools=True, context=True, context_scored=False, verdict=True,
          verdict_scored=False, steps=1, elapsed=10.0):
@@ -726,6 +726,13 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
         "gap_required": (gap_required if gap_required is not None
                          else (["coverage 2026-03-01 to 2026-03-09"]
                                if gap_scored or not gap else [])),
+        # A row is a gap question's draw when it was scored on one, failed
+        # one, or had one required of it, unless the caller says otherwise.
+        # Saying otherwise is how a gap question that produced no claim at
+        # all is written, which is the run-12 case.
+        "gap_case": (gap_case if gap_case is not None
+                     else (gap_scored or not gap
+                           or bool(gap_required))),
         "number_scored": number_scored, "pmid": pmid,
         "pmid_scored": pmid_scored,
         "pmid_unreturned": pmid_unreturned or [],
@@ -1330,7 +1337,7 @@ def test_the_report_says_how_many_gap_cells_were_measured():
             _row("Q30", gap=True, gap_scored=False,
                  gap_required=["an absence with no figure to carry"])]
     report = render(rows, 60.0, args)
-    assert "gap coverage actually scored: 2/3 draws" in report
+    assert "gap coverage actually scored: 2/3 draws of a gap question" in report
     assert "**coverage not carried**" in report
 
 
@@ -2045,3 +2052,70 @@ def test_a_non_gap_question_is_not_asked_to_name_the_corpus():
         tools_used=("search_medical_literature",))
     assert row["gap"]
     assert not row["gap_scored"]
+
+
+def test_a_gap_question_that_produced_no_claim_at_all_is_still_reported():
+    """Run 12's failure mode, and the one the line has to survive. Every gap
+    draw came back with nothing to require, so a denominator counting claims
+    printed no line at all rather than printing 0/6. The denominator is draws
+    of a gap question, and the questions are named."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q19", gap=True, gap_scored=False, gap_required=[],
+                 gap_case=True),
+            _row("Q23", gap=True, gap_scored=False, gap_required=[],
+                 gap_case=True)]
+    report = render(rows, 60.0, args)
+    assert "gap coverage actually scored: 0/2 draws of a gap question" in report
+    assert "nothing to score the gap against on: Q19, Q23" in report
+
+
+def test_the_gap_line_stays_out_of_a_run_with_no_gap_question():
+    """`--only Q1` should not print a column nothing in the run exercises."""
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    report = render([_row("Q1", gap=True, gap_scored=False, gap_required=[],
+                          gap_case=False)], 60.0, args)
+    assert "gap coverage actually scored" not in report
+
+
+def test_every_gap_case_in_the_list_is_scorable_on_some_real_payload():
+    """The hole run 12 fell into, as a standing check. Design A was built and
+    tested against the payload a literature miss produces and the real corpus
+    does not produce one, so Q23 was scored on nothing for a whole run. Each
+    gap case here is driven against the payload shapes its own tool can
+    actually return, and has to come back scorable on at least one of them."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, _coverage_claims, _off_topic_claims
+
+    # One realistic payload per gap case, by the tool it goes through. Shapes
+    # taken from the tools themselves, not invented here: the empty window is
+    # `query_healthkit`'s miss, and the two literature shapes are the corpus
+    # miss and the off-topic hit that run 12 got instead.
+    shapes = {
+        "Q19": [[_EMPTY_WINDOW]],
+        "Q23": [[_step("search_medical_literature", {"query": "hip"},
+                       {"findings": [], "no_matches": True,
+                        "corpus": {"packs": ["sample@2026.09"],
+                                   "article_count": 2000,
+                                   "topics": ["Hypertension"]}})],
+                [_OFF_TOPIC]],
+    }
+    gap_cases = [c for c in CASES if c.needs_gap]
+    assert {c.id for c in gap_cases} == set(shapes), (
+        "a gap case was added or removed without a payload shape to prove it "
+        "can be scored")
+    for case in gap_cases:
+        for steps in shapes[case.id]:
+            claims = (_coverage_claims(steps)
+                      + _off_topic_claims(steps, case.question))
+            assert any(c.groups for c in claims), (case.id, steps)

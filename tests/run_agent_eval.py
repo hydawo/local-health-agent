@@ -881,6 +881,12 @@ def score(case: Case, answer) -> dict:
         "gap_scored": gap_scored,
         "gap_missing": gap_missing,
         "gap_required": [c.label for c in claims],
+        # Whether this question is a gap question at all, which is what the
+        # report's denominator has to be. Counting draws that produced a
+        # claim instead makes the line disappear in exactly the case it
+        # exists to report: run 12's gap column measured nothing, and a
+        # denominator of claims would have printed nothing rather than 0/6.
+        "gap_case": case.needs_gap,
         "no_diag": no_diag_ok,
         "tools": tools_ok,
         "tools_scored": tools_scored,
@@ -1232,12 +1238,20 @@ def render(results: list[dict], elapsed: float, args) -> str:
     # How many of those gap cells were measured at all. The column reads True
     # when a question is not a gap question, and also when a tool reported an
     # absence with no figure beside it, so without this line a cell could be
-    # a win that nothing checked.
-    scored_gap = [r for r in results if r["gap_scored"]]
-    needed_gap = [r for r in results if r["gap_required"]]
-    if needed_gap:
+    # a win that nothing checked. The denominator is every draw of a gap
+    # question, not every draw that produced a claim: run 12 produced none at
+    # all, and that is the finding, so it has to be the thing the line can
+    # say.
+    gap_draws = [r for r in results if r["gap_case"]]
+    scored_gap = [r for r in gap_draws if r["gap_scored"]]
+    if gap_draws:
         lines.append(f"- gap coverage actually scored: {len(scored_gap)}/"
-                     f"{len(needed_gap)} draws that reported an absence")
+                     f"{len(gap_draws)} draws of a gap question")
+        unscorable = sorted({r["id"] for r in gap_draws
+                             if not r["gap_scored"]})
+        if unscorable:
+            lines.append(f"- nothing to score the gap against on: "
+                         f"{', '.join(unscorable)}")
 
     scored_pmid = [r for r in results if r["pmid_scored"]]
     if scored_pmid:
