@@ -890,7 +890,11 @@ CASES: list[Case] = [
          # hold, got a refusal back, and told the person none of their 21
          # cycling workouts had a duration recorded while the other two draws
          # computed it. The prose was a faithful report of the payload, so
-         # only the verdict can catch it, and only off the payload.
+         # only the verdict can catch it, and only off the payload. Run 14
+         # lost a draw the same way to the sentence added to that refusal,
+         # and the tool now reads the duration instead of describing it, so
+         # a draw that asks for an unheld key reaches these figures and this
+         # verdict rather than a refusal it can report faithfully.
          expect_verdict="ok",
          expect_tools=["compare_windows"], window_index=True),
     # Q36 asks how a refusal gets reported, and run 11 showed a phrase list

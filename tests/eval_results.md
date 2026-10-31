@@ -1333,8 +1333,19 @@ payload also carries `duration_held: 4` on both sides.
 
 A sentence in a payload is not a mechanism. This is the lesson prompt rule 1e
 already bought on the medication list: the prompt stopped asking for a second
-search once the tool stopped leaving one to ask for. The options are in the
-ROADMAP.
+search once the tool stopped leaving one to ask for.
+
+Fixed on the tool side after this run, which is why run 15 is the first run
+that can measure it. A measure key no workout carries, over a window that
+holds durations, now comes back as the duration series: `measure_substituted`
+names the key asked for, the figure answered with, the count of workouts
+carrying a duration and the keys the index does hold, and both `series` and
+the rendered text are labelled by the figure reported rather than the one
+asked for. The clause quoted above no longer exists, because every
+`duration_held` it could have quoted is a substitution now, and a refusal
+nothing can reach is a sentence that reads as a fact and describes nothing.
+Q35's `expect_verdict="ok"` is the check that measures it, off the payload
+rather than off the prose, for the reason the case comment already gives.
 
 ### Q32's decline was scored as a prescription
 

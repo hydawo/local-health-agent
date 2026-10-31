@@ -453,9 +453,14 @@ def test_an_activity_the_index_does_not_hold_names_the_ones_it_does(box):
 
 def test_a_measure_no_workout_carries_names_what_is_carried(box):
     """Periods present and no figure in them, with the measures the index
-    does hold named: three absences that must not read alike."""
-    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0)
-    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0)
+    does hold named: three absences that must not read alike.
+
+    The rides carry no duration, because a ride that carries one is answered
+    with it instead and this absence is then never built. The test below is
+    that path.
+    """
+    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0, duration=None)
+    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0, duration=None)
     comparison = windows.compare(
         box, spec=windows.SeriesSpec(activity="Cycling", measure=CADENCE_AVG),
         left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
@@ -466,6 +471,61 @@ def test_a_measure_no_workout_carries_names_what_is_carried(box):
     assert f"no workout carries {CADENCE_AVG}" in because
     assert HR_AVG in because
     assert f"no workout carries {CADENCE_AVG}" in windows.render(comparison)
+    assert comparison.substituted is None
+
+
+def test_a_measure_no_workout_carries_is_answered_with_the_duration(box):
+    """The figure asked for is held by nothing and the duration is held on
+    the workout itself, so the duration is what comes back.
+
+    Twice this question lost a draw to the other arrangement: once to the
+    refusal, and once to the sentence added to the refusal saying the figure
+    was reachable by another call. The substitution is named in the payload,
+    since a figure whose provenance the reader cannot see is worse than the
+    refusal it replaced.
+    """
+    _ride(box, date="2023-01-01", key=b"\x01", duration=40.0)
+    _ride(box, date="2023-01-08", key=b"\x02", duration=50.0)
+    _ride(box, date="2024-01-01", key=b"\x03", duration=20.0)
+    _ride(box, date="2024-01-08", key=b"\x04", duration=30.0)
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=CADENCE_AVG),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.median == 45.0
+    assert comparison.right.median == 25.0
+    assert comparison.left.unit == "min"
+    # Whatever the verdict says about these two spans, it is no longer about
+    # a figure the index does not hold.
+    assert comparison.comparable["verdict"] != "missing_measure_on_one_side"
+    swapped = comparison.substituted
+    assert swapped["measure_asked"] == CADENCE_AVG
+    assert swapped["answered_with"] == "duration"
+    assert swapped["workouts_with_a_duration"] == 2
+    assert [m["key"] for m in swapped["measures_held"]] == [HR_AVG]
+    # The label is the figure reported, not the one asked for: a series named
+    # for the measure labels these minutes as a cadence.
+    assert comparison.spec.measure is None
+    assert comparison.label == "Cycling duration"
+    rendered = windows.render(comparison)
+    assert f"no workout carries {CADENCE_AVG}" not in rendered
+    assert "is the duration" in rendered
+
+
+def test_an_anchored_window_substitutes_the_duration_too(box):
+    """Both entry points read through the same swap, so an anchored question,
+    which is the shape the eval asks, is not the one left refusing."""
+    _fact(box, name="knee surgery", date="2023-06-01")
+    _ride(box, date="2023-05-01", key=b"\x01", duration=40.0)
+    _ride(box, date="2023-05-08", key=b"\x02", duration=50.0)
+    _ride(box, date="2023-06-08", key=b"\x03", duration=20.0)
+    _ride(box, date="2023-06-15", key=b"\x04", duration=30.0)
+    comparison = windows.as_comparison(windows.window(
+        box, spec=windows.SeriesSpec(activity="Cycling", measure=CADENCE_AVG),
+        anchor=windows.resolve_anchor(box, fact="knee"),
+        before_days=60, after_days=60, period="week"))
+    assert comparison.substituted["answered_with"] == "duration"
+    assert comparison.left.median == 45.0
+    assert comparison.right.median == 25.0
 
 
 def test_sides_in_different_units_are_never_called_comparable(box):
@@ -624,8 +684,10 @@ def _one_of_each_verdict(box):
     box.commit()
     yield windows.compare(box, spec=spec, left=left, right=right)
     # missing_measure_on_one_side: periods with no value for the measure.
-    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0)
-    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0)
+    # No duration on these two, or the measure is answered with one and this
+    # verdict is never reached.
+    _ride(box, date="2023-01-01", key=b"\x01", hr_avg=140.0, duration=None)
+    _ride(box, date="2024-01-01", key=b"\x02", hr_avg=141.0, duration=None)
     yield windows.compare(
         box, spec=windows.SeriesSpec(activity="Cycling",
                                      measure=CADENCE_AVG),

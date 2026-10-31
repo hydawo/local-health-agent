@@ -21,7 +21,7 @@ does not hold, and from a side a source exclusion emptied.
 from __future__ import annotations
 
 import datetime as _dt
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from health_agent import metrics
 from health_agent.store import derive, queries
@@ -152,6 +152,9 @@ class Window:
     # The spec the window was read with, so `as_comparison` and `render` can
     # say what was narrowed without the layers above passing it back in.
     spec: SeriesSpec | None = None
+    # Set when the figure asked for is carried by no workout and these
+    # figures are a different one the index does hold. `_instead` writes it.
+    substituted: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -166,6 +169,7 @@ class Comparison:
     left_label: str = "earlier"
     right_label: str = "later"
     spec: SeriesSpec | None = None
+    substituted: dict | None = None
 
 
 NOTE = ("These are two spans of time, reported side by side. The tool makes "
@@ -532,6 +536,54 @@ def _clip_span(series, start: str, end: str):
 # The window and the comparison
 # --------------------------------------------------------------------------- #
 
+def _instead(spec: SeriesSpec, sides) -> tuple | None:
+    """The figure to answer with when the one asked for is carried by nothing.
+
+    A measure no workout carries is not the same absence as a figure the index
+    cannot report. The duration of a workout is held on the workout itself, so
+    a call that names no measure reports it, and until now the tool said that
+    in words and left the call to be made: run 13 lost a draw of Q35 to the
+    refusal and run 14 lost one to the sentence explaining it. A sentence in a
+    payload is not a mechanism, which is what prompt rule 1e already bought on
+    the medication list.
+
+    So the duration is read here instead, and `substituted` carries which
+    measure was asked for beside which one answered. Returns None when the
+    measure is held, when nothing was asked for, or when no duration is held
+    either, in which case the refusal naming the measure is the better answer
+    and is the one that stands.
+
+    The caller needs no fallback for a swap that comes back empty: the count
+    read here is of the durations on the same points the swapped figures are
+    then read from, so a non-zero count is the figures existing.
+    """
+    if not spec.measure:
+        return None
+    durations, others = 0, []
+    for side in sides:
+        held = side.coverage.get("held") or {}
+        # `duration_held` is written only where `measure_asked` came back
+        # None, which is the index holding the key on no workout at all.
+        if (held.get("duration_held") or 0) > durations:
+            durations = held["duration_held"]
+            others = held.get("measures_held") or []
+    if not durations:
+        return None
+    return replace(spec, measure=None), {
+        "measure_asked": spec.measure,
+        "answered_with": "duration",
+        "workouts_with_a_duration": durations,
+        # The refusal this replaces named the keys the index does hold, and
+        # that fact is about the request rather than about the figure now
+        # reported, so it travels here instead of being dropped.
+        "measures_held": list(others),
+        "note": (f"No workout in the index carries {spec.measure}, so the "
+                 "figures reported here are each workout's duration, which "
+                 "the index does hold. Report the duration, and say that it "
+                 f"is the duration and that {spec.measure} is not recorded."),
+    }
+
+
 def window(conn, *, spec: SeriesSpec, anchor, before_days: int,
             after_days: int, period: str = "day",
             sample_counts: bool = False) -> Window:
@@ -550,16 +602,25 @@ def window(conn, *, spec: SeriesSpec, anchor, before_days: int,
         _shift(anchor.date, -1)
     after_start, after_end = _shift(anchor.date, 1), _shift(anchor.date,
                                                             after_days)
-    before = _series(conn, spec, before_start, before_end, period,
-                     sample_counts=sample_counts)
-    after = _series(conn, spec, after_start, after_end, period,
-                    sample_counts=sample_counts)
-    return Window(
-        label=spec.label, anchor=anchor,
-        before=_summarize(conn, before, spec, before_start, before_end, period),
-        after=_summarize(conn, after, spec, after_start, after_end, period),
-        before_points=tuple(before.points), after_points=tuple(after.points),
-        spec=spec)
+
+    def read(use: SeriesSpec) -> Window:
+        before = _series(conn, use, before_start, before_end, period,
+                         sample_counts=sample_counts)
+        after = _series(conn, use, after_start, after_end, period,
+                        sample_counts=sample_counts)
+        return Window(
+            label=use.label, anchor=anchor,
+            before=_summarize(conn, before, use, before_start, before_end,
+                              period),
+            after=_summarize(conn, after, use, after_start, after_end, period),
+            before_points=tuple(before.points),
+            after_points=tuple(after.points), spec=use)
+
+    asked = read(spec)
+    instead = _instead(spec, (asked.before, asked.after))
+    if instead is None:
+        return asked
+    return replace(read(instead[0]), substituted=instead[1])
 
 
 def as_comparison(window_: Window, *, sample_counts: bool = False) -> Comparison:
@@ -581,7 +642,8 @@ def as_comparison(window_: Window, *, sample_counts: bool = False) -> Comparison
         left_points=window_.before_points, right_points=window_.after_points,
         comparable=comparable,
         note=_anchored_note(anchor) if anchor else NOTE,
-        left_label="before", right_label="after", spec=window_.spec)
+        left_label="before", right_label="after", spec=window_.spec,
+        substituted=window_.substituted)
 
 
 def compare(conn, *, spec: SeriesSpec, left, right, period: str = "day",
@@ -592,19 +654,28 @@ def compare(conn, *, spec: SeriesSpec, left, right, period: str = "day",
     what it counts. It is off by default so the payload stays the same size
     for a caller that did not ask for it.
     """
-    left_series = _series(conn, spec, left[0], left[1], period,
-                          sample_counts=sample_counts)
-    right_series = _series(conn, spec, right[0], right[1], period,
-                           sample_counts=sample_counts)
-    left_sum = _summarize(conn, left_series, spec, left[0], left[1], period)
-    right_sum = _summarize(conn, right_series, spec, right[0], right[1], period)
-    return Comparison(
-        label=spec.label, left=left_sum, right=right_sum,
-        left_points=tuple(left_series.points),
-        right_points=tuple(right_series.points),
-        comparable=_verdict(left_sum, right_sum, spec=spec,
-                            sample_counts=sample_counts),
-        note=NOTE, spec=spec)
+
+    def read(use: SeriesSpec) -> Comparison:
+        left_series = _series(conn, use, left[0], left[1], period,
+                              sample_counts=sample_counts)
+        right_series = _series(conn, use, right[0], right[1], period,
+                               sample_counts=sample_counts)
+        left_sum = _summarize(conn, left_series, use, left[0], left[1], period)
+        right_sum = _summarize(conn, right_series, use, right[0], right[1],
+                               period)
+        return Comparison(
+            label=use.label, left=left_sum, right=right_sum,
+            left_points=tuple(left_series.points),
+            right_points=tuple(right_series.points),
+            comparable=_verdict(left_sum, right_sum, spec=use,
+                                sample_counts=sample_counts),
+            note=NOTE, spec=use)
+
+    asked = read(spec)
+    instead = _instead(spec, (asked.left, asked.right))
+    if instead is None:
+        return asked
+    return replace(read(instead[0]), substituted=instead[1])
 
 
 # --------------------------------------------------------------------------- #
@@ -631,6 +702,10 @@ def _spec_clauses(sides, spec: SeriesSpec | None) -> list[str]:
 def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
     held = side.coverage.get("held") or {}
     out = []
+    # No clause here about the duration being held instead. `duration_held`
+    # is read by `_instead`, which swaps the figure rather than describing
+    # where to find it, so a refusal that could have named the duration is
+    # never built: run 14 is what a described figure is worth.
     if "measure_asked" in held:
         asked = held["measure_asked"]
         measure = spec.measure if spec else "that measure"
@@ -641,10 +716,7 @@ def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
             out.append(f"no workout carries {measure}"
                        + (f", and the measures held are {others}" if others
                           else ", and the index holds no workout measures "
-                               "at all")
-                       + (", while the duration of each workout is held and a "
-                          "call with no measure reports it"
-                          if held.get("duration_held") else ""))
+                               "at all"))
         else:
             out.append(f"{asked['key']} is carried by "
                        f"{_count(asked['workouts'], 'workouts')} in the "
@@ -906,6 +978,8 @@ def render(comparison: Comparison) -> str:
         lines.append(f"The day of the event itself, {anchor_day}, is in "
                      "neither side, so anything recorded on it is in neither "
                      "count above.")
+    if comparison.substituted:
+        lines.append(comparison.substituted["note"])
     if verdict == "ok":
         lines.append(f"Comparable (ok): {because}.")
     else:

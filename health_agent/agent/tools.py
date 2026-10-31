@@ -807,7 +807,11 @@ def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
     left_points, left_cut = _points_payload(comparison.left_points)
     right_points, right_cut = _points_payload(comparison.right_points)
     payload = {
-        "series": spec.label,
+        # The effective spec, not the one asked for: where the figure asked
+        # for is carried by nothing and the duration answered instead, a
+        # `series` naming the measure labels the figures as something they
+        # are not. `measure_substituted` below says what was asked.
+        "series": (comparison.spec or spec).label,
         "period": period,
         "anchor": anchor_block,
         "left_label": comparison.left_label,
@@ -820,6 +824,11 @@ def _compare_windows_inner(ctx: ToolContext, args: dict) -> dict:
         "rendered": windows.render(comparison),
         "note": comparison.note,
     }
+    if comparison.substituted:
+        # The figure asked for is carried by nothing and this one is. The
+        # block says which was which, because a figure whose provenance the
+        # reader cannot see is worse than the refusal it replaced.
+        payload["measure_substituted"] = comparison.substituted
     if queries.UNLABELLED in (comparison.left.unit, comparison.right.unit):
         payload["unit_note"] = UNIT_NOTE
     if left_cut or right_cut:

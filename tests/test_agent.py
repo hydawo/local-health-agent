@@ -1381,52 +1381,70 @@ def test_the_tool_count_is_eight():
 
 
 def test_compare_windows_unheld_measure_names_the_measures_held(workoutbox):
+    """The keys the index does hold are a fact about the request, so they
+    survive the substitution: they moved out of `because`, which is now about
+    the figure actually reported, and into the block that says what was
+    asked."""
     result = tools.dispatch(workoutbox, "compare_windows", {
         "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
         "before_days": 7, "after_days": 7})
-    because = result["comparable"]["because"]
-    assert result["comparable"]["verdict"] == "missing_measure_on_one_side"
-    assert "no workout carries nope" in because
-    assert f"{_HR}:average" in because
-    assert f"{_HR}:average" in result["rendered"]
-    assert "records of this figure" not in because
+    swapped = result["measure_substituted"]
+    assert swapped["measure_asked"] == "nope"
+    assert [m["key"] for m in swapped["measures_held"]] == [f"{_HR}:average"]
+    assert "records of this figure" not in result["comparable"]["because"]
 
 
-def test_an_unheld_measure_says_the_duration_is_still_there(workoutbox):
+def test_an_unheld_measure_returns_the_duration_rather_than_explaining_it(
+        workoutbox):
     """Run 13's third draw of Q35 told the person none of their 21 cycling
     workouts had a duration recorded, while the other two draws computed that
-    duration from the same index. The model had read `measures_held`, which
-    lists the keys the index carries and said nothing about the figure a
-    measure-free call reports."""
+    duration from the same index. The payload was fixed to say the duration
+    was there, and run 14's first draw read that sentence and answered "no
+    duration values captured" anyway. A sentence in a payload is not a
+    mechanism, so the figure is read here instead."""
     result = tools.dispatch(workoutbox, "compare_windows", {
         "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
         "before_days": 7, "after_days": 7})
-    held = result["comparable"]
-    because = held["because"]
-    assert "duration of each workout is held" in because
-    assert "no measure" in because
-    side = result["left"] if result["left"]["coverage"].get("held") \
-        else result["right"]
-    assert side["coverage"]["held"]["duration_held"] >= 1
-    # The field named for the request echoes the request, so a null beside it
-    # reads as "the index does not hold this key" and never as "no key was
-    # asked for", which is how the same payload's `measure_asked: null` read
-    # to the model in run 13.
-    assert side["coverage"]["held"]["measure_asked_for"] == "nope"
-    assert side["coverage"]["held"]["measure_asked"] is None
+    assert result["comparable"]["verdict"] != "missing_measure_on_one_side"
+    assert result["left"]["median"] is not None
+    assert result["right"]["median"] is not None
+    assert result["left"]["unit"] == "min"
+    swapped = result["measure_substituted"]
+    assert swapped["answered_with"] == "duration"
+    assert swapped["workouts_with_a_duration"] >= 1
+    # The figures are durations, so nothing in the payload may label them
+    # with the key that is carried by nothing.
+    assert result["series"] == "Cycling duration"
+    assert "nope" not in result["rendered"].split("carries nope")[0]
+    # Said once in the rendered text as well, since a reader of that text
+    # alone would otherwise see a duration and the question's own word for it
+    # nowhere.
+    assert "is the duration" in result["rendered"]
 
 
-def test_an_unheld_measure_on_a_duration_free_index_claims_nothing(workoutbox):
-    """The clause is a claim about the index, so it has to come off the index.
-    A measure asked for where no workout carries a duration either must not
-    offer one."""
+def test_a_substitution_that_is_also_empty_leaves_the_refusal_standing(
+        workoutbox):
+    """A swap is worth making only where it answers. With no duration in the
+    window the old refusal is the better payload, because it names the measure
+    and a duration-spec refusal would not."""
     workoutbox.conn.execute("UPDATE workout SET duration = NULL, "
                             "duration_unit = NULL")
     result = tools.dispatch(workoutbox, "compare_windows", {
         "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
         "before_days": 7, "after_days": 7})
-    because = result["comparable"]["because"]
-    assert "duration of each workout is held" not in because
+    assert "measure_substituted" not in result
+    assert "no workout carries nope" in result["comparable"]["because"]
+
+
+def test_an_unheld_measure_on_a_duration_free_index_claims_nothing(workoutbox):
+    """The swap is a claim about the index, so it has to come off the index.
+    A measure asked for where no workout carries a duration either must not
+    be answered with one."""
+    workoutbox.conn.execute("UPDATE workout SET duration = NULL, "
+                            "duration_unit = NULL")
+    result = tools.dispatch(workoutbox, "compare_windows", {
+        "activity": "Cycling", "measure": "nope", "anchor_date": "2023-02-08",
+        "before_days": 7, "after_days": 7})
     side = result["left"] if result["left"]["coverage"].get("held") \
         else result["right"]
     assert "duration_held" not in side["coverage"]["held"]

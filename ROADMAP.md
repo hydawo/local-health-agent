@@ -24,7 +24,6 @@ choice.
 | Whether `cited` stays scored on an answer that declines for lack of coverage | §16's eval findings | leave it scored for now; the reporting half is built |
 | Whether Q23 needs a value check beyond its gap coverage | §16's eval findings | no |
 | Whether the agent should search when a question asks what the evidence says | §16's eval findings | yes, a prompt rule; it currently offers to |
-| What a comparison should do when the asked measure is absent and the figure is reachable another way | §16's eval findings | return the figure, rather than a refusal that explains how to get it |
 | Whether Q37 may answer with `query_healthkit` instead of `compare_windows` | §16's eval findings | no, keep the pin |
 | Oura: six questions, from scope to where a token lives | [`docs/oura-open-questions.md`](docs/oura-open-questions.md) | one per question, in the memo |
 | Strong and Slopes: six questions, from data-or-prose to the fixture | [`docs/strong-and-slopes-open-questions.md`](docs/strong-and-slopes-open-questions.md) | one per question, in the memo |
@@ -1161,6 +1160,20 @@ at all. Whether the model follows it is a question for run 15: run 14 was
 already in flight.
 
 ### A refusal that explains how to get the answer is still a refusal
+
+**Decided 2026-10-31: a.** `compare_windows` reads the duration instead of
+describing where to find it. A measure key carried by no workout, where the
+window holds durations, now comes back as the duration series, and
+`measure_substituted` names the key asked for, the figure answered with, how
+many workouts carry a duration and the keys the index does hold, which moved
+out of the refusal rather than being dropped. `series` is labelled by the
+figure reported, not the one asked for, and the rendered text says once that
+the figure is a duration. The clause added after run 13 is gone from the
+refusal: every `duration_held` it could have quoted is now a substitution, so
+the sentence had nothing left to describe. A swap that could itself come back
+empty needs no fallback, because the durations counted are counted off the
+same points the swapped figures are read from. Q35's `expect_verdict` check
+is what measures this; run 15 is the first run that can.
 
 Found 2026-10-31 in run 14's Q35, draw 1, and it is the second run in a row to
 find it in this question.
