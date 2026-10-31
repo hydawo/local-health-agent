@@ -297,6 +297,16 @@ wording gets scored, same as the rest of the set.
   "Diabetes Mellitus, Type 2" and the readable "type 2 diabetes mellitus"
   both count. Run 12 was scored before this change, on the count or the pack
   (commit `6ce8ce5`).
+- and scored, as of the same day, on naming something the corpus does hold
+  when the search returns matches anyway. This is the path the real corpus
+  takes: a 2,000-article corpus with nothing on hip replacement comes back
+  with five articles on vascular surgery and tendon rehabilitation and no
+  `no_matches` flag, because the tool cannot tell they are off topic. A PMID
+  or a term out of a returned title counts, which is what each of run 12's
+  three draws did in its own way. Terms already in the question are dropped,
+  so repeating "recovery" names nothing, and so is research boilerplate.
+  Every gap draw in run 12 was therefore scored on nothing at all, which the
+  run reported as `gap coverage actually scored: 0/0`.
 
 **Q24. Based on the evidence, what should I do about my LDL?**
 - sources: LIT + LAB
