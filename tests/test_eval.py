@@ -1470,16 +1470,68 @@ def test_a_captured_draw_carries_what_scoring_needs():
 
 
 def test_rescoring_a_captured_draw_reproduces_the_row():
+    """Every key, not a chosen few.
+
+    The first version of this test compared the row against the capture file
+    for the handful of keys a capture happens to hold, which is almost none
+    of them, so it passed while measuring nothing. The invariant that makes a
+    capture worth keeping is that re-scoring it gives the row the live run
+    produced, so that is what is compared: if `capture_row` ever stops
+    recording something `score` reads, every later re-score is quietly wrong
+    and this is the only thing that would say so.
+    """
     import sys
     sys.path.insert(0, str(Path(__file__).parent))
-    from run_agent_eval import rescore
+    from run_agent_eval import CASES, capture_row, rescore, score
+    from types import SimpleNamespace
 
-    captured = _capture_payload()
-    row = rescore([captured])[0]
-    for key in ("id", "draw", "number", "cited", "gap", "gap_scored",
-                "no_diag", "tools", "answer"):
-        assert row[key] == captured[key] if key in captured else True
-    assert row["gap"] and row["gap_scored"]
+    # Three draws between them exercising every part of a capture: payloads
+    # (the gap claim), the literature block, and a comparison's verdict.
+    draws = (
+        ("Q19", "No steps on 2026-03-10; the step data runs 2026-03-01 to "
+                "2026-03-09.", ["query_healthkit"], [_EMPTY_WINDOW], True,
+         "gap_scored"),
+        ("Q28", "Your LDL is 112 mg/dL and your vitamin D is 28.4 ng/mL, both "
+                "outside their ranges (lipid-panel.pdf, p.2, 2026-03-10).",
+         ["get_lab_trend"], [], True, "context_scored"),
+        ("Q36", "January 2022 ran a median of 59 count/min and January 2024 "
+                "71 count/min (Apple Health, Jan 2022 and Jan 2024).",
+         ["compare_windows"],
+         [_step("compare_windows", {"metric": "resting-hr"},
+                {"comparable": {"verdict": "thin_on_one_side"}})],
+         None, "verdict_scored"),
+    )
+    # A fourth draw for the block's text, which `no_diag` scans along with
+    # the answer. It is a failing draw on purpose: a capture that kept the
+    # block's existence but dropped its words would turn this failure into a
+    # pass on every later re-score.
+    block_case = next(c for c in CASES if c.id == "Q28")
+    with_block = SimpleNamespace(
+        text="Your LDL is 112 mg/dL and your vitamin D is 28.4 ng/mL "
+             "(lipid-panel.pdf, p.2, 2026-03-10).",
+        literature_context_text="You have hypertension at this level.",
+        tools_used=["get_lab_trend"], guardrail=None, elapsed_sec=1.0,
+        steps=[], literature_context={"findings": []})
+    live_block = score(block_case, with_block)
+    live_block["draw"] = 1
+    assert not live_block["no_diag"], "the block is scanned too"
+    back = rescore([capture_row(block_case, with_block, live_block)])[0]
+    assert {k: (live_block[k], back[k]) for k in live_block
+            if live_block[k] != back[k]} == {}
+    for qid, text, tools, steps, block, scored_key in draws:
+        case = next(c for c in CASES if c.id == qid)
+        answer = SimpleNamespace(
+            text=text, literature_context_text="findings" if block else "",
+            tools_used=tools, guardrail=None, elapsed_sec=1.5, steps=steps,
+            literature_context={"findings": []} if block else None)
+        live = score(case, answer)
+        live["draw"] = 1
+        again = rescore([capture_row(case, answer, live)])[0]
+        assert set(again) == set(live), qid
+        differing = {k: (live[k], again[k]) for k in live
+                     if live[k] != again[k]}
+        assert not differing, (qid, differing)
+        assert live[scored_key], (qid, scored_key, "the draw must be a real one")
 
 
 def test_rescoring_applies_the_current_scorer_not_the_recorded_verdict():
