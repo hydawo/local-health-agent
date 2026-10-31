@@ -405,6 +405,36 @@ DATE_PATTERNS = [
 ]
 
 
+# Keys whose value is a locator a model could put in an answer. A payload
+# with none of these handed the model nothing to cite.
+_LOCATOR_KEYS = ("citation", "pmid", "doi", "path", "file", "document")
+
+
+def _payload_offers_a_locator(steps) -> bool:
+    """Whether anything the tools returned this turn could be cited.
+
+    Run 12 failed `cited` on four draws that said the corpus holds nothing on
+    the topic. There is no claim in such an answer to attribute and no
+    locator in the payload behind it, so the cell is the scorer asking for
+    something that was never available.
+    """
+    def walk(value) -> bool:
+        if isinstance(value, dict):
+            for key, inner in value.items():
+                if (any(k in key.lower() for k in _LOCATOR_KEYS)
+                        and isinstance(inner, (str, int))
+                        and str(inner).strip()):
+                    return True
+                if walk(inner):
+                    return True
+            return False
+        if isinstance(value, (list, tuple)):
+            return any(walk(one) for one in value)
+        return False
+
+    return any(walk(step.result) for step in steps)
+
+
 def _question_dates(question: str) -> list[str]:
     """Regexes for every date the question itself hands the model.
 
@@ -851,6 +881,10 @@ def score(case: Case, answer) -> dict:
     # file to name, so the origin or the period is the citation.
     cited_ok = source_ok if case.needs_source else (source_ok or origin_ok
                                                     or dated_ok)
+    # Measured, not scored: a failing `cited` cell on a turn whose payloads
+    # held no locator at all.
+    cited_uncitable = not cited_ok and not _payload_offers_a_locator(
+        answer.steps)
     # Measured, not scored: a `cited` cell earned by nothing but the date the
     # question handed over.
     cited_echo = (cited_ok and not source_ok and not origin_ok
@@ -947,6 +981,7 @@ def score(case: Case, answer) -> dict:
         # denominator of claims would have printed nothing rather than 0/6.
         "gap_case": case.needs_gap,
         "cited_echo": cited_echo,
+        "cited_uncitable": cited_uncitable,
         "no_diag": no_diag_ok,
         "tools": tools_ok,
         "tools_scored": tools_scored,
@@ -1312,6 +1347,14 @@ def render(results: list[dict], elapsed: float, args) -> str:
         if unscorable:
             lines.append(f"- nothing to score the gap against on: "
                          f"{', '.join(unscorable)}")
+
+    uncitable = [r for r in results if r["cited_uncitable"]]
+    if uncitable:
+        names = ", ".join(sorted({r["id"] for r in uncitable}))
+        failed = sum(1 for r in results if not r["cited"])
+        lines.append(f"- cited failed with no locator in the payloads behind "
+                     f"it: {len(uncitable)}/{failed} of the failing draws "
+                     f"({names})")
 
     echoed = [r for r in results if r["cited_echo"]]
     if echoed:

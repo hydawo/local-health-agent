@@ -88,6 +88,9 @@ def main() -> int:
                     if any(len({d[k] for d in draws}) > 1 for k in CLEAN))
     print(f"- varied between draws: {len(varied)}/{len(groups)}"
           + (f" ({', '.join(varied)})" if varied else ""))
+    uncitable = sorted({r["id"] for r in rows if r.get("cited_uncitable")})
+    print("- cited failed with no locator in the payloads: "
+          + (", ".join(uncitable) if uncitable else "nothing"))
     echoed = sorted({r["id"] for r in rows if r.get("cited_echo")})
     print("- cited on nothing but the date the question supplied: "
           + (", ".join(echoed) if echoed else "nothing"))

@@ -734,6 +734,7 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
                      else (gap_scored or not gap
                            or bool(gap_required))),
         "cited_echo": False,
+        "cited_uncitable": False,
         "number_scored": number_scored, "pmid": pmid,
         "pmid_scored": pmid_scored,
         "pmid_unreturned": pmid_unreturned or [],
@@ -2220,3 +2221,74 @@ def test_an_answer_that_asserts_the_cause_still_has_no_decline_to_match():
         "resting heart rate, from 59.0 to 71.0.", [],
         tools_used=("compare_windows",))
     assert not row["number"]
+
+
+def test_a_cited_failure_with_no_locator_in_the_payload_is_reported():
+    """Four of run 12's five `cited` failures were answers saying the corpus
+    holds nothing on the topic. There is no claim in one of those to
+    attribute and no locator in the payload behind it, so the cell is asking
+    for something that was never available. Reported, not rescored: the
+    column has twelve runs of history behind it."""
+    nothing = _step("search_medical_literature", {"query": "hip"},
+                    {"findings": [], "no_matches": True,
+                     "corpus": {"packs": ["sample@2026.09"],
+                                "article_count": 2000}})
+    row = _score_with_steps(
+        "Q23", "My literature holds nothing on hip replacement recovery.",
+        [nothing], tools_used=("search_medical_literature",))
+    assert not row["cited"], "still a failure, deliberately"
+    assert row["cited_uncitable"]
+
+
+def test_a_cited_failure_with_a_locator_on_offer_is_not_excused():
+    """The tool handed over PMIDs and the answer used none of them. That is
+    the model, and the line must not absorb it."""
+    row = _score_with_steps(
+        "Q23", "The research says recovery takes about twelve weeks.",
+        [_OFF_TOPIC], tools_used=("search_medical_literature",))
+    assert not row["cited"]
+    assert not row["cited_uncitable"]
+
+
+def test_a_passing_cited_cell_is_never_counted_as_uncitable():
+    row = _score_with_steps(
+        "Q23", "Nothing on that here; the corpus returned PMID 42379512 "
+        "on femoral bypass grafting instead.", [_OFF_TOPIC],
+        tools_used=("search_medical_literature",))
+    assert row["cited"] and not row["cited_uncitable"]
+
+
+def test_the_report_counts_uncitable_failures_against_the_failing_draws():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q23", cited=False), _row("Q20", cited=False), _row("Q1")]
+    rows[0]["cited_uncitable"] = True
+    report = render(rows, 60.0, args)
+    assert ("cited failed with no locator in the payloads behind it: 1/2 of "
+            "the failing draws (Q23)") in report
+
+
+def test_a_passing_cited_cell_is_not_counted_even_with_no_locator():
+    """A HealthKit answer cites a date, and a HealthKit payload holds no
+    locator at all. The line counts failures, so this is not one."""
+    row = _score_with_steps(
+        "Q19", "Your last lab panel was on 2026-03-10, and there are no step "
+        "records that day; steps run 2026-03-01 to 2026-03-09.",
+        [_EMPTY_WINDOW])
+    assert row["cited"] and not row["cited_uncitable"]
+
+
+def test_an_empty_locator_field_is_not_a_locator():
+    """A findings list whose `pmid` came back blank offered the model
+    nothing, and a key with no value in it must not read as one."""
+    blank = _step("search_medical_literature", {"query": "hip"},
+                  {"findings": [{"title": "Something else", "pmid": "",
+                                 "citation": ""}]})
+    row = _score_with_steps(
+        "Q23", "The corpus holds nothing on hip replacement recovery.",
+        [blank], tools_used=("search_medical_literature",))
+    assert not row["cited"] and row["cited_uncitable"]

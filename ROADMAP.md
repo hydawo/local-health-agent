@@ -495,6 +495,49 @@ Q23's `number` cell needs anything beyond the coverage its `gap` cell now
 requires, and how a tag question should be answered at all, which is the
 entry below.
 
+### Four of five `cited` failures are answers that had nothing to cite
+
+Found 2026-10-31 by reading run 12's five failing `cited` draws rather than
+counting them. Four are the same shape: Q23 draws 1 and 2 and Q26 draws 2 and
+3, each an answer saying the local corpus holds nothing on the topic. There is
+no claim in them to attribute, so there is nothing to cite, and the column
+fails them for it. The fifth, Q20 draw 2, is a real miss: it is a
+`needs_source` question answered with values and no report named.
+
+So the column reads 34/37 and most of what it is catching is the model
+declining correctly. This is the unmeasured-check question again, pointed at a
+column with twelve runs of history behind it, which is why it is a decision
+rather than a fix:
+
+- **a. Leave it.** The row stays comparable across every run.
+  *Trade:* the figure under-reports the model, and the reason is invisible in
+  the table.
+- **b. Report it, change nothing.** A line saying how many `cited` cells
+  failed on an answer that made no attributable claim, the way the gap and
+  date-echo lines now work.
+  *Trade:* nothing changes in the score, and a reader has to read two lines
+  instead of one cell.
+- **c. Leave `cited` unscored where the answer declines for lack of
+  coverage.** The gap column already requires that answer to name what the
+  corpus does hold, so `cited` is holding it to a second standard it cannot
+  meet.
+  *Trade:* "declines for lack of coverage" has to be decided from something,
+  and the only honest source is the payload (no findings, or findings the
+  answer named as off topic), which is a second payload-derived rule to
+  maintain.
+
+**Recommend b** now and **c** once the off-topic claim has a run behind it.
+(b) costs one line and makes the figure readable; (c) is right in principle
+and should not be built on top of a claim that has never been measured
+against a real run, which is precisely the mistake design A made.
+
+**(b) built the same day.** A failing `cited` cell is counted as uncitable
+when nothing in that turn's payloads carries a locator: no citation, pmid,
+doi or path with a value in it. The run prints how many of its failing draws
+were that, and names them. The score is untouched, a passing cell is never
+counted, and a turn that was handed PMIDs and used none of them is the model's
+failure and stays one. (c) remains open.
+
 ### A tag question has no tool behind it, and Q14 has been passing on luck
 
 Found 2026-10-31 in run 12's Q14, which asks "which notes did I flag to follow

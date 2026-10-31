@@ -998,6 +998,20 @@ ones that can be re-scored this way, and `gap`, `pmid`, `verdict` and
 `context` are left out rather than approximated: they read payloads the report
 does not carry.
 
+### Four of the five `cited` failures had nothing to cite
+
+Reading them rather than counting them: Q23 draws 1 and 2 and Q26 draws 2 and
+3 are all answers saying the local corpus holds nothing on the topic. There is
+no claim in one of those to attribute, and no locator in the payload behind
+it, so the cell asks for something that was never on offer. The fifth, Q20
+draw 2, is a real miss, a `needs_source` question answered with values and no
+report named.
+
+The score is unchanged and the run now says how many of its failing draws were
+that, and names them. Whether `cited` should be left unscored on an answer
+that declines for lack of coverage is an open decision in the ROADMAP; it
+should not be built on a claim that has only just started being measured.
+
 ### Q14 has been passing on luck since the suite was written
 
 Q14 asks which notes were flagged to follow up on, and one draw of three
