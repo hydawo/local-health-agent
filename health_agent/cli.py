@@ -2004,14 +2004,23 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
                   "as 100-139 — so check these against the original before "
                   "relying on them.")
 
-        numeric = [p.value_num for p in trend.points if p.value_num is not None]
-        if len(numeric) > 1:
-            first, last = numeric[0], numeric[-1]
+        # "latest" is the last point as printed, text or number. Taking the
+        # numeric points only made an older number "latest" over a newer
+        # ">500". The change is measured from the first numeric point, and
+        # only when the latest is a number to measure to.
+        numeric = [p for p in trend.points if p.value_num is not None]
+        last_p = trend.points[-1]
+        if last_p.value_num is not None and len(numeric) > 1:
+            first, last = numeric[0].value_num, last_p.value_num
             delta = last - first
             direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
             print(f"\nfirst {first:g} -> latest {last:g} "
                   f"({direction} {abs(delta):g}"
                   + (f", {abs(delta) / first * 100:.1f}%" if first else "") + ")")
+        elif last_p.value_num is None and numeric:
+            print(f"\nfirst {numeric[0].value_num:g} -> latest "
+                  f"{last_p.value_text or '-'} (no change computed: the "
+                  f"latest result is not a number)")
 
         if len(trend.units_seen) > 1:
             print(f"\nNote: mixed units across reports "

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import shutil
 from pathlib import Path
 
@@ -556,6 +557,30 @@ def test_lab_trend_marks_out_of_range(cli_records):
     assert code == 0
     assert "5.7 *" in out
     assert "outside the reference range" in out
+
+
+def test_lab_trend_first_to_latest_line_does_not_skip_a_text_valued_latest(
+        cli_records, tmp_path):
+    """Sweep finding B2, CLI half. The "first -> latest" line was computed
+    over numeric points only, so a newest result of ">500" vanished and the
+    line named an older number as the latest."""
+    conn = sqlite3.connect(tmp_path / "health.db")
+    doc = conn.execute("SELECT document_id FROM lab_result WHERE "
+                       "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, value_text, unit, flag, collected_date, raw_line, "
+        "extracted_by, via_ocr, dedup_key) VALUES(?,1,'LDL','ldl',NULL,"
+        "'>500','mg/dL','H','2026-06-01','x','pdfplumber',0,?)",
+        (doc, b"b2-text-ldl"))
+    conn.commit()
+    conn.close()
+    code, out = cli_records("labs", "ldl")
+    assert code == 0
+    line = [l for l in out.splitlines() if l.startswith("first ")]
+    assert line, out
+    assert "latest >500" in line[0], line[0]
+    assert "latest 112" not in out
 
 
 def test_lab_trend_disclaims_interpretation(cli_records):

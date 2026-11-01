@@ -94,6 +94,49 @@ def test_returned_to_range_is_a_signal():
     assert signal.evidence["previous"]["value"] == 5.7
 
 
+def _text_point(date, text, flag=None, low=None, high=None, unit="mg/dL"):
+    """A result the lab printed as text: ">500", "see comment"."""
+    p = _point(date, None, low, high, flag, unit=unit)
+    p.value_text = text
+    return p
+
+
+def test_a_newer_text_valued_result_is_the_latest_one():
+    """Sweep finding B2. The signal picked "latest" from the numeric points
+    only, so a triglycerides history ending in ">500" flagged H rendered as
+    "It was 180 flagged H, and 120 inside the printed range" with the
+    ">500" nowhere on the sheet. A clinician sheet reading "returned to
+    range" over a result the lab could not even number is the worst
+    sentence this module can print, and no prompt rule reaches it.
+    """
+    trend = _trend(_point("2025-03-04", 180, 0, 150, "H"),
+                   _point("2025-09-12", 120, 0, 150),
+                   _text_point("2026-03-10", ">500", "H", 0, 150),
+                   key="triglycerides", label="Triglycerides")
+    (signal,) = visit_prep.lab_signals_for(trend)
+    assert signal.kind == "lab_out_of_range"
+    assert signal.evidence["latest"]["date"] == "2026-03-10"
+    assert signal.evidence["latest"]["value_text"] == ">500"
+    text = visit_prep.render(_sheet_with(signal))
+    assert ">500" in text
+    assert "returned" not in text.lower()
+    assert "inside the printed range" not in text
+    assert guardrail.check(text, used_tools=True) == []
+
+
+def test_an_unflagged_text_result_cannot_be_called_in_range():
+    """"see comment" with no flag, newer than an out-of-range value: the
+    sheet cannot say the analyte returned to range, and it cannot say it is
+    near a limit, because the newest result is not a number."""
+    returned = _trend(_point("2025-03-04", 180, 0, 150, "H"),
+                      _text_point("2026-03-10", "see comment", None, 0, 150))
+    assert visit_prep.lab_signals_for(returned) == []
+    near = _trend(_point("2025-03-04", 80, 0, 99),
+                  _point("2025-09-12", 92, 0, 99),
+                  _text_point("2026-03-10", "see comment", None, 0, 99))
+    assert visit_prep.lab_signals_for(near) == []
+
+
 def test_near_limit_needs_proximity_and_movement_toward_it():
     # 0-99 range, span 99, 10% is 9.9: inside the band and rising -> signal
     rising = _trend(_point("2025-09-12", 80, 0, 99), _point("2026-03-10", 92, 0, 99))

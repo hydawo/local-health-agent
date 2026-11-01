@@ -54,6 +54,9 @@ class Signal:
 def _point_evidence(p: LabPoint) -> dict:
     return {
         "value": p.value_num,
+        # What the lab printed when it printed no number: ">500", "see
+        # comment". Carried so a text-valued result can be the latest one.
+        "value_text": p.value_text if p.value_num is None else None,
         "unit": p.unit,
         "date": p.collected_date,
         "range": p.ref_text,
@@ -88,9 +91,18 @@ def _near_limit(latest: LabPoint, previous: LabPoint) -> tuple[str, float] | Non
 
 
 def lab_signals_for(trend: LabTrend) -> list[Signal]:
-    """At most one signal per analyte, from its dated numeric results."""
+    """At most one signal per analyte, from its dated results.
+
+    A result the lab printed as text (">500", "see comment") stays in the
+    ordering. Dropping it made the newest number "latest", and a history
+    ending in ">500" flagged H read as having returned to range. A flagged
+    text result is reported as out of range with the text the lab printed;
+    an unflagged one is not a number, so nothing can be said to have
+    returned to range or to sit near a limit, and the analyte yields no
+    signal.
+    """
     points = [p for p in trend.points
-              if p.value_num is not None and p.collected_date]
+              if (p.value_num is not None or p.value_text) and p.collected_date]
     if not points:
         return []
     points.sort(key=lambda p: p.collected_date)
@@ -105,6 +117,8 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
                       "previous": _point_evidence(previous) if previous else None},
             caveats=_ocr_caveats(*([latest] + ([previous] if previous else []))),
         )]
+    if latest.value_num is None:
+        return []
 
     earlier_out = [p for p in points[:-1] if p.flag or p.out_of_range is True]
     if earlier_out:
@@ -331,6 +345,8 @@ def _sentence_label(label: str) -> str:
 
 def _val(e: dict) -> str:
     unit = f" {e['unit']}" if e.get("unit") and e["unit"] != "%" else (e.get("unit") or "")
+    if e.get("value") is None:
+        return f"{e.get('value_text') or 'no numeric value'}{unit}"
     return f"{_num(e['value'])}{unit}"
 
 
@@ -362,9 +378,12 @@ def _evidence_sentence(s: Signal) -> str:
         else:
             text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)}, "
                     f"with no printed range")
-        if prev:
+        if prev and latest.get("value") is not None and prev.get("value") is not None:
             direction = "down" if latest["value"] < prev["value"] else "up"
             text += f", {direction} from {_val(prev)} on {prev['date']}"
+        elif prev:
+            # One side is text, so there is no direction to state.
+            text += f", after {_val(prev)} on {prev['date']}"
         return f"{text} {_cite(latest, prev)}."
     if s.kind == "lab_returned_to_range":
         latest, prev = e["latest"], e["previous"]
