@@ -106,8 +106,36 @@ def test_the_notes_lookup_needs_no_embeddings(ctx):
     from health_agent.agent.tools import _notes_beside_clinical
     assert _notes_beside_clinical(ctx, "medication")
     assert _notes_beside_clinical(ctx, "condition")
-    # An unknown kind falls back to the whole vocabulary rather than no query.
-    assert _notes_beside_clinical(ctx, "immunization")
+    # No kind (the tool called without one) falls back to the whole
+    # vocabulary rather than no query.
+    assert _notes_beside_clinical(ctx, "")
+
+
+def test_an_allergy_question_searches_for_allergy_words_in_the_notes_only(ctx):
+    """Sweep finding B1. The lookup had vocabulary for medications and
+    conditions only; an allergies question fell through to the union of
+    both, searched for "prescribed" and "diagnosis", and never for
+    "allergy" or "rash". It also ran with no kind filter, so two lab PDF
+    pages took slots the person's own notes should have had, and the
+    payload's own note then told the model that an empty list means the
+    notes hold nothing. The fixture note reads "Penicillin (rash as a
+    child)" and was absent from the allergies answer.
+    """
+    from health_agent.agent.tools import _notes_beside_clinical
+    for kind in ("allergy", "immunization", "procedure"):
+        assert kind in tools._NOTE_VOCABULARY, kind
+    hits = _notes_beside_clinical(ctx, "allergy")
+    assert any("penicillin" in h["text"].lower() for h in hits), hits
+    # The person's own notes and photographed lists, never a lab report or
+    # a health system's record: those have their own payload keys.
+    assert all(h["kind"] in ("note", "image") for h in hits), hits
+    # One passage per document, so a single long note cannot fill every
+    # slot with its unrelated sections.
+    citations = [h["citation"].split(",")[0] for h in hits]
+    assert len(citations) == len(set(citations)), citations
+    # The medications lookup still finds the drug the feed does not hold.
+    meds = _notes_beside_clinical(ctx, "medication")
+    assert any("atorvastatin" in h["text"].lower() for h in meds), meds
 
 
 def test_a_lab_trend_carries_the_citation_rule_with_the_data(ctx):

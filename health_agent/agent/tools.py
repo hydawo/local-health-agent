@@ -1333,34 +1333,58 @@ _FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
 # the tool takes "medications" and the fact table stores "medication", and
 # keying this on the argument made every call fall through to the whole
 # vocabulary instead of the relevant half.
+# Every kind the tool accepts has its own entry. An allergies question once
+# fell through to the union of the two entries that existed, searched for
+# "prescribed" and "diagnosis", and missed the note reading "Penicillin
+# (rash as a child)" while the payload said the notes had been retrieved.
 _NOTE_VOCABULARY = {
     "medication": "medication medications prescription prescribed taking dose mg",
     "condition": "diagnosed diagnosis condition conditions history",
+    "allergy": "allergy allergies allergic reaction rash hives intolerance",
+    "immunization": "immunization immunizations vaccine vaccines vaccinated "
+                    "vaccination shot booster",
+    "procedure": "procedure procedures surgery surgical operation biopsy "
+                 "scan removed",
 }
 MAX_NOTES_BESIDE = 5
+# What the person wrote down or photographed. Lab PDFs and FHIR records are
+# the other side of the two-source contract and have their own keys, so they
+# must not take these slots.
+_PERSONAL_NOTE_KINDS = ("note", "image")
 
 
 def _notes_beside_clinical(ctx: ToolContext, kind: str) -> list[dict]:
     """Passages from this person's own notes and photographed lists that bear on
-    medications or conditions. Empty is a fact about the index, not a failure,
-    and the caller reports it as coverage either way."""
+    the kind asked about. Empty is a fact about the index, not a failure,
+    and the caller reports it as coverage either way.
+
+    One passage per document: a long note has sections on several of these
+    kinds, and without this its medication and condition sections took the
+    slots its allergy section should have had."""
     from ..store import vector_store
 
     terms = (_NOTE_VOCABULARY.get(kind) or
              " ".join(_NOTE_VOCABULARY.values()))
     try:
         hits = vector_store.keyword_search(ctx.conn, terms,
-                                           limit=MAX_NOTES_BESIDE)
+                                           limit=MAX_NOTES_BESIDE * 4,
+                                           kind=_PERSONAL_NOTE_KINDS)
     except Exception:  # pragma: no cover - a missing FTS table must not
         return []      # take down a clinical answer
-    return [
-        {
+    out: list[dict] = []
+    seen: set[int] = set()
+    for h in hits:
+        if h.document_id in seen:
+            continue
+        seen.add(h.document_id)
+        out.append({
             "citation": h.citation,
             "kind": h.kind,
             "text": " ".join(h.text.split())[:MAX_SNIPPET_CHARS],
-        }
-        for h in hits
-    ]
+        })
+        if len(out) == MAX_NOTES_BESIDE:
+            break
+    return out
 
 
 def _attach_personal_notes(ctx: ToolContext, payload: dict, kind: str) -> dict:
