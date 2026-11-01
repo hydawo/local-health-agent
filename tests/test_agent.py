@@ -433,6 +433,32 @@ def test_data_inventory_describes_the_index(ctx):
     assert "followup" in inventory["notes"]["tags"]
 
 
+def test_data_inventory_says_when_a_list_is_cut_short(ctx):
+    """Sweep finding B3. Each inventory list was capped with no marker, and
+    the prompt then said "Anything not listed above is not available". An
+    analyte tested once is ordered last and is the first to fall off, so the
+    model could say "your reports do not include a PSA" about an analyte in
+    the index, before any tool call. Each list now carries an `_and_more`
+    count, and the prompt's sentence is conditioned on it."""
+    full = tools.data_inventory(ctx.conn)
+    n_analytes = len(full["labs"]["analytes_available"])
+    n_metrics = len(full["healthkit"]["metrics_available"])
+    assert n_analytes > 2 and n_metrics > 1
+    assert full["labs"]["analytes_and_more"] == 0
+    assert full["healthkit"]["metrics_and_more"] == 0
+    assert full["notes"]["tags_and_more"] == 0
+    assert full["clinical"]["vital_metrics_and_more"] == 0
+
+    cut = tools.data_inventory(ctx.conn, max_analytes=2, max_metrics=1)
+    assert len(cut["labs"]["analytes_available"]) == 2
+    assert cut["labs"]["analytes_and_more"] == n_analytes - 2
+    assert len(cut["healthkit"]["metrics_available"]) == 1
+    assert cut["healthkit"]["metrics_and_more"] == n_metrics - 1
+
+    prompt = orchestrator.Orchestrator(ctx).system_prompt()
+    assert "_and_more" in prompt
+
+
 # --------------------------------------------------------------------------- #
 # The loop, against a scripted model
 # --------------------------------------------------------------------------- #
@@ -639,7 +665,7 @@ def test_system_prompt_carries_the_data_inventory(ctx):
     prompt = orch.system_prompt()
     assert "resting-hr" in prompt
     assert "hba1c" in prompt
-    assert "Anything not listed above is not available" in prompt
+    assert "anything not listed above is not available" in prompt
 
 
 def test_system_prompt_states_the_hard_constraints(ctx):

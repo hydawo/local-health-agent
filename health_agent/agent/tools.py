@@ -1926,8 +1926,20 @@ def serialize(payload: dict) -> str:
 # Data inventory for the system prompt
 # --------------------------------------------------------------------------- #
 
+def _capped(items: list, cap: int) -> tuple[list, int]:
+    """(the first `cap` items, how many were left off).
+
+    Every inventory list is capped, and the prompt says anything not listed
+    is not available. Without the count those two facts made a false
+    statement: an analyte tested once sorts last, fell off a capped list
+    with no marker, and could be reported as absent before any tool call.
+    """
+    return items[:cap], max(0, len(items) - cap)
+
+
 def data_inventory(conn, *, max_metrics: int = 25,
-                   max_analytes: int = 30) -> dict:
+                   max_analytes: int = 30, max_tags: int = 25,
+                   max_vitals: int = 25) -> dict:
     """A compact description of what this index actually contains.
 
     Injected into the system prompt rather than exposed as a fourth tool. A model
@@ -1935,34 +1947,44 @@ def data_inventory(conn, *, max_metrics: int = 25,
     failed lookup, and sometimes answer about a metric the user doesn't track.
     Telling it up front costs a few hundred tokens once and removes that whole
     failure class.
+
+    Each list is cut at its cap and carries an `<name>_and_more` count of
+    what was left off, so a capped list cannot read as a complete one.
     """
     summary = queries.index_summary(conn)
     notes = queries.note_summary(conn)
     docs = queries.document_summary(conn)
 
     metric_names = []
-    for row in queries.list_types(conn, limit=max_metrics):
+    for row in queries.list_types(conn):
         metric = metrics.lookup(row["type"])
         metric_names.append(metric.aliases[0] if metric and metric.aliases
                             else row["type"])
+    metric_names, metrics_more = _capped(metric_names, max_metrics)
 
-    analytes = [a["analyte_key"] for a in
-                queries.list_analytes(conn, limit=max_analytes)]
-    tags = [t["tag"] for t in queries.list_tags(conn, limit=25)]
+    # `list_analytes` groups by panel too, so one key can appear twice.
+    analytes = list(dict.fromkeys(
+        a["analyte_key"] for a in queries.list_analytes(conn)))
+    analytes, analytes_more = _capped(analytes, max_analytes)
+    tags, tags_more = _capped([t["tag"] for t in queries.list_tags(conn)],
+                              max_tags)
     holdings = queries.clinical_holdings(conn)
     clinical = holdings["facts"]
-    vital_metrics = holdings["vital_metrics"]
+    vital_names, vitals_more = _capped(
+        [m["metric_key"] for m in holdings["vital_metrics"]], max_vitals)
 
     return {
         "healthkit": {
             "records": summary["records"],
             "date_range": [summary["first_date"], summary["last_date"]],
             "metrics_available": metric_names,
+            "metrics_and_more": metrics_more,
         },
         "labs": {
             "reports": docs["documents"],
             "date_range": [docs["doc_first"], docs["doc_last"]],
             "analytes_available": analytes,
+            "analytes_and_more": analytes_more,
         },
         "notes": {
             "count": notes["notes"],
@@ -1972,12 +1994,14 @@ def data_inventory(conn, *, max_metrics: int = 25,
             "images": notes["images"],
             "date_range": [notes["first"], notes["last"]],
             "tags": tags,
+            "tags_and_more": tags_more,
         },
         # Records a health system sent back through the export, as distinct
         # from anything this person typed and from anything their watch
         # recorded. Named here so the model does not guess whether they exist.
         # Every clinical kind the index holds, not just the facts: the system
-        # prompt appends "Anything not listed above is not available", so a
+        # prompt says anything not listed is not available (where no list is
+        # cut short), so a
         # block that omitted the labs and note references would turn this into
         # a false statement about the person's own records.
         "clinical": {
@@ -1988,6 +2012,7 @@ def data_inventory(conn, *, max_metrics: int = 25,
             "clinician_vitals": holdings["vitals"],
             "note_references": holdings["note_references"],
             "date_range": [holdings["first"], holdings["last"]],
-            "vital_metrics_available": [m["metric_key"] for m in vital_metrics[:25]],
+            "vital_metrics_available": vital_names,
+            "vital_metrics_and_more": vitals_more,
         },
     }

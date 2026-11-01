@@ -277,8 +277,11 @@ class Orchestrator:
             f"{SYSTEM_PROMPT}\n\n"
             f"This person's data, as currently indexed:\n"
             f"{json.dumps(inventory, indent=2, default=str)}\n\n"
-            f"Anything not listed above is not available. Use the tools to read "
-            f"actual values; the inventory only tells you what exists."
+            f"Each list above is cut at a cap; its `_and_more` count is how "
+            f"many names were left off, and the tools can reach those. Where "
+            f"that count is 0, anything not listed above is not available. "
+            f"Use the tools to read actual values; the inventory only tells "
+            f"you what exists."
         )
 
     def ask(self, question: str) -> Answer:
