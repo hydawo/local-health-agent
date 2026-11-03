@@ -488,8 +488,17 @@ def test_search_records_returns_citations(ctx):
 
 
 def test_search_records_can_restrict_to_notes(ctx):
+    """Sweep finding D3: `all([])` is true, so this passed on an empty
+    result and on any change that made the filter return nothing. The
+    query is one the fixture answers from both a note and a lab PDF, so
+    the filter has something to exclude, and the result must be
+    non-empty."""
+    unfiltered = tools.dispatch(ctx, "search_records", {"query": "cholesterol"})
+    assert {r["kind"] for r in unfiltered["results"]} >= {"note", "pdf"}, \
+        "the fixture must answer this from both kinds for the filter to be measured"
     result = tools.dispatch(ctx, "search_records",
-                            {"query": "coffee", "kind": "note"})
+                            {"query": "cholesterol", "kind": "note"})
+    assert result["results"], "the filter must return the note hits, not nothing"
     assert all(r["kind"] == "note" for r in result["results"])
 
 
