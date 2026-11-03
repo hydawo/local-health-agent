@@ -1135,6 +1135,32 @@ def test_the_other_kinds_respect_the_same_since(clinical_ctx):
     assert "facts_of_other_kinds" not in result
 
 
+def test_a_vitals_miss_tells_never_recorded_from_outside_the_window(clinical_ctx):
+    """Sweep finding B8. A vital that was never in the clinical feed and a
+    vital recorded outside the range asked about produced the same
+    sentence, and "no clinician has recorded your blood pressure" is what
+    the second one invites. The payload now says which it is, with the
+    held metric's own coverage when it is the window that excluded it."""
+    outside = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                             {"metric": "pulse", "start_date": "2099-01-01"})
+    assert outside["measurements"] == []
+    assert outside["no_data_in_range"] is True
+    assert outside["requested_metric_held"] is True
+    assert outside["requested_metric_coverage"]["n"] >= 1
+    assert outside["requested_metric_coverage"]["first"] == "2023-09-15"
+    assert "outside" in outside["note"].lower()
+    assert "2023-09-15" in outside["note"]
+
+    never = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                           {"metric": "blood pressure"})
+    assert never["measurements"] == []
+    assert never["no_data_in_range"] is True
+    assert never["requested_metric_held"] is False
+    assert never["requested_metric_coverage"] is None
+    assert "never" in never["note"].lower()
+    assert "outside" not in never["note"].lower()
+
+
 def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):
     result = tools.dispatch(clinical_ctx, "get_clinical_vitals",
                             {"start_date": "2099-01-01"})

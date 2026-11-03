@@ -1644,11 +1644,34 @@ def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
                     default=None)
         last = max((m["last"] for m in metrics_available if m["last"]),
                    default=None)
-        what = f"clinician-measured {metric}" if metric else "clinician-measured vitals"
-        payload["note"] = (
-            f"No {what} in the requested range. The index does hold "
-            f"{', '.join(m['metric_key'] for m in metrics_available)}, "
-            f"from {first} to {last}. Say what is absent.")
+        held_list = ", ".join(m["metric_key"] for m in metrics_available)
+        # A vital never in the feed and a vital recorded outside the window
+        # asked about are different absences, and one sentence for both
+        # invited "no clinician has recorded your blood pressure" about a
+        # vital the window excluded.
+        held = next((m for m in metrics_available
+                     if metric and m["metric_key"] == labs.slug(metric)), None)
+        payload["no_data_in_range"] = True
+        payload["requested_metric_held"] = held is not None
+        payload["requested_metric_coverage"] = (
+            {"n": held["n"], "first": held["first"], "last": held["last"]}
+            if held else None)
+        if held:
+            payload["note"] = (
+                f"No clinician-measured {metric} in the requested range, "
+                f"but it exists outside it: {held['n']} reading(s) from "
+                f"{held['first']} to {held['last']}. Say that, and give "
+                f"that range; do not say it was never recorded.")
+        elif metric:
+            payload["note"] = (
+                f"Clinician-measured {metric} was never recorded in these "
+                f"clinical records, in any period. The index does hold "
+                f"{held_list}, from {first} to {last}. Say what is absent.")
+        else:
+            payload["note"] = (
+                f"No clinician-measured vitals in the requested range. The "
+                f"index does hold {held_list}, from {first} to {last}. Say "
+                f"what is absent.")
     return payload
 
 
