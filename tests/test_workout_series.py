@@ -19,15 +19,17 @@ def box(tmp_path):
 
 def _ride(conn, *, date, duration, hr_avg, key, epoch=1772830800.0,
           source="Watch", unit="min", cadence=None, dist_unit="mi",
-          energy=None, energy_unit="kcal", hr_unit="count/min"):
+          energy=None, energy_unit="kcal", hr_unit="count/min",
+          activity="HKWorkoutActivityTypeCycling"):
     cur = conn.execute(
         "INSERT INTO workout(activity_type, duration, duration_unit, "
         "total_distance, total_distance_unit, total_energy, "
         "total_energy_unit, source_name, start_date, "
         "start_epoch, local_date, dedup_key) "
-        "VALUES('HKWorkoutActivityTypeCycling', ?, ?, 10.0, ?, ?, ?, ?, "
+        "VALUES(?, ?, ?, 10.0, ?, ?, ?, ?, "
         "?, ?, ?, ?)",
-        (duration, unit, dist_unit, energy, energy_unit if energy else None,
+        (activity, duration, unit, dist_unit, energy,
+         energy_unit if energy else None,
          source, f"{date}T09:00:00-05:00", epoch, date, key))
     conn.execute(
         "INSERT INTO workout_stat(workout_id, kind, key, value_num, unit) "
@@ -53,6 +55,22 @@ def test_a_week_of_rides_becomes_one_point_with_summed_minutes(box):
     # The measure is summarized by median, never by a figure the model invents.
     assert series.points[0].measures[f"{HR}:average"]["median"] == 140.0
     assert series.points[1].measures[f"{HR}:average"]["median"] == 130.0
+
+
+def test_a_series_is_labelled_by_what_was_found_not_by_the_search_pattern(box):
+    """Sweep finding C7, the series half. The label was the caller's
+    pattern, so a payload read {"series": "ing", "points": [{"workouts":
+    2}]} over one run and one ride."""
+    _ride(box, date="2026-03-02", duration=40.0, hr_avg=140.0, key=b"c1")
+    _ride(box, date="2026-03-03", duration=30.0, hr_avg=150.0, key=b"r1",
+          activity="HKWorkoutActivityTypeRunning")
+    both = queries.workout_series(box, period="week", activity="ing")
+    assert both.label == "Cycling, Running"
+    one = queries.workout_series(box, period="week", activity="Cycl")
+    assert one.label == "Cycling"
+    assert queries.workout_series(box, period="week").label == "Cycling, Running"
+    # Nothing found: the label can only be what was asked for.
+    assert queries.workout_series(box, period="week", activity="Swim").label == "Swim"
 
 
 def test_an_empty_series_still_reports_what_the_index_holds(box):

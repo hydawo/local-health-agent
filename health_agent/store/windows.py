@@ -56,7 +56,7 @@ THIN_ROWS = 2
 # by name rather than silently resolved to one of the choices.
 _UNSPECIFIABLE_DERIVATIONS = ("ratio", "percentile")
 
-_ACTIVITY_PREFIX = "HKWorkoutActivityType"
+_ACTIVITY_PREFIX = queries.ACTIVITY_PREFIX
 
 # How many held measures or activities an absence message names before it
 # stops listing. Enough to point somewhere, short enough to read.
@@ -420,8 +420,18 @@ def _held(conn, spec: SeriesSpec, series) -> dict:
         needle = (spec.activity or "").lower()
         mine = [r for r in rows
                 if needle and needle in (r["activity_type"] or "").lower()]
+        # Every activity the pattern matched, counted each. `activity` is
+        # the one name only when one matched: naming the first row's
+        # activity over a count summed across several printed "2 workouts
+        # of Cycling" over a run and a ride.
+        matched = sorted({_activity_name(r["activity_type"]) for r in mine})
         held["activity_asked"] = (
-            {"activity": _activity_name(mine[0]["activity_type"]),
+            {"activity": matched[0] if len(matched) == 1 else None,
+             "activities": [
+                 {"activity": name,
+                  "workouts": sum(r["n"] for r in mine
+                                  if _activity_name(r["activity_type"]) == name)}
+                 for name in matched],
              "workouts": sum(r["n"] for r in mine),
              "first": min(r["first"] for r in mine if r["first"]),
              "last": max(r["last"] for r in mine if r["last"])}
@@ -434,10 +444,7 @@ def _held(conn, spec: SeriesSpec, series) -> dict:
     return held
 
 
-def _activity_name(activity_type: str | None) -> str:
-    name = activity_type or "workout"
-    return name[len(_ACTIVITY_PREFIX):] if name.startswith(_ACTIVITY_PREFIX) \
-        else name
+_activity_name = queries.activity_name
 
 
 def _summarize(conn, series, spec: SeriesSpec, start: str, end: str,
@@ -742,11 +749,18 @@ def _held_clauses(side: SideSummary, spec: SeriesSpec | None) -> list[str]:
                        f"index, from {asked['first']} to {asked['last']}")
     if "activities_held" in held:
         asked = held.get("activity_asked")
-        if asked:
+        if asked and asked.get("activity"):
             out.append(f"the index holds "
                        f"{_count(asked['workouts'], 'workouts')} of "
                        f"{asked['activity']}, from {asked['first']} to "
                        f"{asked['last']}")
+        elif asked:
+            each = ", ".join(f"{a['activity']} ({_count(a['workouts'], 'workouts')})"
+                             for a in asked["activities"])
+            out.append(f"the index holds "
+                       f"{_count(asked['workouts'], 'workouts')} named like "
+                       f"{spec.activity if spec else 'that'}: {each}, from "
+                       f"{asked['first']} to {asked['last']}")
         elif spec is not None and spec.activity:
             others = ", ".join(
                 f"{a['activity']} ({_count(a['workouts'], 'workouts')})"

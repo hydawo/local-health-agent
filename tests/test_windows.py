@@ -405,6 +405,34 @@ def test_a_multi_source_period_counts_the_attributed_devices_records(box):
     assert "Phone" in windows.render(comparison)
 
 
+def test_an_activity_pattern_matching_several_activities_names_them_all(box):
+    """Sweep finding C7. `_held` named the first matched row's activity
+    while the count summed every activity the substring matched, so
+    `--activity ing` over a run and a ride printed "the index holds 2
+    workouts of Cycling". The same shape as the "Cycling nope" label bug
+    fixed in the duration work."""
+    _ride(box, date="2024-03-01", key=b"c1")
+    _ride(box, date="2024-03-02", key=b"r1",
+          activity="HKWorkoutActivityTypeRunning")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="ing"),
+        left=("2024-03-01", "2024-03-31"), right=("2025-03-01", "2025-03-31"))
+    asked = comparison.right.coverage["held"]["activity_asked"]
+    assert asked["workouts"] == 2
+    assert asked["activity"] is None, "two activities matched, not one"
+    assert asked["activities"] == [{"activity": "Cycling", "workouts": 1},
+                                   {"activity": "Running", "workouts": 1}]
+    text = windows.render(comparison)
+    assert "workouts of Cycling" not in text
+    assert "Cycling" in text and "Running" in text
+    # One activity matched is still named as that activity.
+    one = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycl"),
+        left=("2024-03-01", "2024-03-31"), right=("2025-03-01", "2025-03-31"))
+    asked = one.right.coverage["held"]["activity_asked"]
+    assert asked["activity"] == "Cycling" and asked["workouts"] == 1
+
+
 def test_two_windows_whose_ranges_never_overlap_are_not_comparable(box):
     """T7: the pace ranges never overlap, so no like-for-like comparison is
     available. A rule, not a judgment."""

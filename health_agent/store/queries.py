@@ -761,6 +761,16 @@ def _entry(d) -> dict:
             "reason": d.reason}
 
 
+ACTIVITY_PREFIX = "HKWorkoutActivityType"
+
+
+def activity_name(activity_type: str | None) -> str:
+    """The activity in a reader's words: the HealthKit prefix dropped."""
+    name = activity_type or "workout"
+    return name[len(ACTIVITY_PREFIX):] if name.startswith(ACTIVITY_PREFIX) \
+        else name
+
+
 def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                    indoor=None, source_include=(), source_exclude=(),
                    measures=(), derive_names=(), ratio_of=None,
@@ -809,11 +819,15 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         sample_counts=sample_counts,
         limit=1_000_000)
     total, first, last = workout_coverage(conn)
-    label = activity or "all workouts"
     if not rows:
-        return WorkoutSeries(label=label, period=period, unit=None,
-                             total_records=total, available_from=first,
-                             available_to=last)
+        # Nothing found, so the label can only be what was asked for.
+        return WorkoutSeries(label=activity or "all workouts", period=period,
+                             unit=None, total_records=total,
+                             available_from=first, available_to=last)
+    # The label is what was found, not the search pattern: "ing" over a run
+    # and a ride is two activities, and a payload reading {"series": "ing",
+    # "workouts": 2} named neither.
+    label = ", ".join(sorted({activity_name(r.activity_type) for r in rows}))
 
     buckets: dict[str, list[WorkoutRow]] = {}
     spans: dict[str, tuple[str, str]] = {}
