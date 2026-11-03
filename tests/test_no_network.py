@@ -197,16 +197,46 @@ def test_no_telemetry_on_import(no_network):
     Importing every module in the package must not open a socket — this is what
     would catch a dependency that reports usage at import time.
     """
-    import importlib
-    import pkgutil
+    # Sweep finding D4: run in-process, every module was already imported by
+    # the rest of the suite, and importing a cached module executes no code.
+    # The sweep counted zero uncached modules in a full run. A subprocess
+    # with the same socket guard installed before the package is touched is
+    # the only way the import-time claim is measured, which is the shape the
+    # fetcher-isolation test below already uses.
+    import subprocess
 
-    import health_agent
-
-    package_dir = Path(health_agent.__file__).parent
-    for info in pkgutil.walk_packages([str(package_dir)],
-                                      prefix="health_agent."):
-        # offline_check spawns a subprocess only when called, not on import.
-        importlib.import_module(info.name)
+    code = (
+        "import socket, sys, importlib, pkgutil\n"
+        "real = socket.socket\n"
+        "local = {socket.AF_UNIX} if hasattr(socket, 'AF_UNIX') else set()\n"
+        "class Guarded(real):\n"
+        "    def __init__(self, family=socket.AF_INET, *a, **k):\n"
+        "        if family not in local:\n"
+        "            raise AssertionError('network socket at import')\n"
+        "        super().__init__(family, *a, **k)\n"
+        "def blocked(*a, **k):\n"
+        "    raise AssertionError('network connection at import')\n"
+        "socket.socket = Guarded\n"
+        "socket.create_connection = blocked\n"
+        "socket.getaddrinfo = blocked\n"
+        "socket.gethostbyname = blocked\n"
+        "assert not [m for m in sys.modules if m.startswith('health_agent')]\n"
+        "import health_agent\n"
+        "from pathlib import Path\n"
+        "n = 0\n"
+        "for info in pkgutil.walk_packages("
+        "[str(Path(health_agent.__file__).parent)], prefix='health_agent.'):\n"
+        "    importlib.import_module(info.name)\n"
+        "    n += 1\n"
+        "print('IMPORTED:' + str(n))\n"
+    )
+    completed = subprocess.run([sys.executable, "-c", code],
+                               capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    imported = int(next(
+        line for line in completed.stdout.splitlines()
+        if line.startswith("IMPORTED:"))[len("IMPORTED:"):])
+    assert imported >= 20, f"only {imported} modules were imported fresh"
 
 
 # --------------------------------------------------------------------------- #
