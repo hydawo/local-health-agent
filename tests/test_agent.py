@@ -320,6 +320,32 @@ def test_an_unknown_metric_name_is_an_error_with_suggestions_not_no_data(ctx):
     assert result["no_data_in_range"] is True
 
 
+def test_a_per_period_figure_names_the_device_it_came_from(ctx):
+    """Sweep finding C5. On a day both devices recorded, the tool emitted
+    {"period": "2026-03-02", "value": 6000.0, "samples": 5}: 6000 is the
+    watch's figure and 5 counts both devices' records, and nothing in the
+    point said which device won. The series-level warning named both
+    devices but not which one a given period's figure is. Sleep closed
+    this with `source` and `per_source`; every quantity metric was open."""
+    result = tools.dispatch(ctx, "query_healthkit",
+                            {"metric": "steps", "start_date": "2026-03-01",
+                             "end_date": "2026-03-07"})
+    by_day = {p["period"]: p for p in result["points"]}
+    both = by_day["2026-03-02"]
+    assert both["value"] == 6000.0
+    assert both["source"] == "Fixture Watch"
+    assert both["samples"] == 3, "the watch's own records, not both devices'"
+    assert both["sources"] == ["Fixture Phone", "Fixture Watch"]
+    assert both["per_source"] == {"Fixture Watch": 6000.0,
+                                  "Fixture Phone": 5500.0}
+    single = by_day["2026-03-03"]
+    assert single["source"] == "Fixture Watch"
+    assert "sources" not in single and "per_source" not in single
+    # The range total counts what the figures were built from.
+    assert result["overall"]["total_samples"] == sum(
+        p["samples"] for p in result["points"])
+
+
 def test_missing_data_returns_coverage_not_emptiness(ctx):
     """Absence is data. Without the coverage fields a model will reach for the
     nearest numbers it can see and present them as an answer."""

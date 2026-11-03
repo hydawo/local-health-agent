@@ -57,6 +57,36 @@ class SeriesPoint:
     sources: tuple[str, ...]
     per_source: dict[str, float]
     category: str | None = None
+    # Records per source behind `per_source`. `n` is every source's records
+    # added together, which is the wrong count beside a figure that is one
+    # source's; `point_attribution` reads this to say whose it is.
+    per_source_n: dict[str, int] = field(default_factory=dict)
+
+
+def point_attribution(point: "SeriesPoint", agg: str,
+                      combine: str) -> tuple[str | None, int]:
+    """(source, records) behind a point's figure.
+
+    When the combine rule took one source's figure (the largest total, the
+    extreme min or max), that source is named and its own record count
+    returned. When the figure is a blend of sources (a sample-weighted
+    mean, or an explicit sum across devices), no one source owns it and
+    the count is every source's. One source is always its own figure.
+
+    One place, shared by the tool payload and the window comparison, so
+    "6,000 steps, 5 records" cannot be printed where 6,000 is one device's
+    figure and 5 counts both devices' records.
+    """
+    valued = {s: v for s, v in point.per_source.items() if v is not None}
+    if len(valued) <= 1:
+        src = next(iter(valued), None) if valued else (
+            point.sources[0] if len(point.sources) == 1 else None)
+        return src, point.per_source_n.get(src, point.n) if src else point.n
+    if agg == "avg" or combine == "sum":
+        return None, point.n
+    pick = min if agg == "min" else max
+    src = pick(valued, key=lambda s: valued[s])
+    return src, point.per_source_n.get(src, point.n)
 
 
 @dataclass
@@ -969,8 +999,10 @@ def metric_series(
         buckets.items(), key=lambda item: (item[0][0], item[0][1] or "")
     ):
         per_source: dict[str, float] = {}
+        per_source_n: dict[str, int] = {}
         for src, acc in by_source.items():
             per_source[src or "(unknown)"] = _source_value(acc, agg)
+            per_source_n[src or "(unknown)"] = acc["n"]
         # Any aggregate: an average blended from two devices is presented
         # as one measurement just as surely as a sum is doubled by them.
         # Counting additive aggregates only left the default aggregate for
@@ -990,6 +1022,7 @@ def metric_series(
                 sources=tuple(sorted(s or "(unknown)" for s in by_source)),
                 per_source=per_source,
                 category=category,
+                per_source_n=per_source_n,
             )
         )
 

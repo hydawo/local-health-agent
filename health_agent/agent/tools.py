@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _replace
 from typing import Any
 
 from .. import labs, metrics
@@ -176,7 +176,13 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
             )
         return payload
 
-    points = result.points
+    # Each point says whose figure it is and how many of that device's
+    # records stand behind it. `p.n` counts every device's records, and
+    # beside one device's figure that is the wrong number (C5).
+    attributed = [(p, *queries.point_attribution(p, result.agg, result.combine))
+                  for p in result.points]
+    counted = [_replace(p, n=n) for p, _, n in attributed]
+    points = attributed
     truncated = False
     if len(points) > MAX_SERIES_POINTS:
         points = points[-MAX_SERIES_POINTS:]
@@ -195,11 +201,17 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
         # unreliable arithmetic engines, and a wrong number delivered fluently is
         # this project's worst failure mode — so any figure the model might
         # otherwise compute is precomputed and handed to it.
-        "overall": _overall(result.points, result.agg),
+        "overall": _overall(counted, result.agg),
         "points": [
-            {"period": p.period, "value": p.value, "samples": p.n,
-             **({"category": p.category} if p.category else {})}
-            for p in points
+            {"period": p.period, "value": p.value, "samples": n,
+             # Which device the figure is. None when it is a blend of
+             # several, in which case `sources` and `per_source` say what
+             # each one reported.
+             "source": src,
+             **({"category": p.category} if p.category else {}),
+             **({"sources": list(p.sources), "per_source": p.per_source}
+                if len(p.sources) > 1 else {})}
+            for p, src, n in points
         ],
         "available_from": result.available_from,
         "available_to": result.available_to,
