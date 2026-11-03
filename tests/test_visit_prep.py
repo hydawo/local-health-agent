@@ -137,6 +137,36 @@ def test_an_unflagged_text_result_cannot_be_called_in_range():
     assert visit_prep.lab_signals_for(near) == []
 
 
+def test_two_sources_disagreeing_on_one_draw_are_not_a_trend():
+    """Sweep finding C3. `lab_signals_for` sorted on the date alone, so a
+    PDF reading of 130 and a FHIR reading of 160 for the same draw became
+    "latest" and "previous": "It was 160 on 2026-03-10, up from 130 on
+    2026-03-10". Reverse the insert order and the sheet said the opposite.
+    `lab_trend` keeps both rows and reports the disagreement; the sheet
+    never read it. Now the draw is reported as two records that disagree,
+    whichever order they arrive in."""
+    from dataclasses import replace
+    pdf = replace(_point("2026-03-10", 130, 0, 99, "H"), source="pdf")
+    fhir = replace(_point("2026-03-10", 160, 0, 99, "H"), source="fhir",
+                   path="/r/clinical-records/Observation-1.json", page_no=0)
+    older = _point("2025-09-12", 120, 0, 99, "H")
+    for order in ((older, pdf, fhir), (older, fhir, pdf)):
+        (signal,) = visit_prep.lab_signals_for(_trend(*order))
+        assert signal.kind == "lab_sources_disagree", order
+        text = visit_prep.render(_sheet_with(signal))
+        assert "130" in text and "160" in text
+        assert "up from" not in text and "down from" not in text
+        assert "disagree" in text.lower()
+        assert guardrail.check(text, used_tools=True) == []
+    # An earlier draw that two records disagree on is not silently taken as
+    # "previous" either: the signal says so.
+    newer = _point("2026-06-01", 140, 0, 99, "H")
+    (signal,) = visit_prep.lab_signals_for(_trend(older, pdf, fhir, newer))
+    assert signal.kind == "lab_out_of_range"
+    text = visit_prep.render(_sheet_with(signal))
+    assert "2026-03-10" in text and "disagree" in text.lower()
+
+
 def test_near_limit_needs_proximity_and_movement_toward_it():
     # 0-99 range, span 99, 10% is 9.9: inside the band and rising -> signal
     rising = _trend(_point("2025-09-12", 80, 0, 99), _point("2026-03-10", 92, 0, 99))

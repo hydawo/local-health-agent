@@ -105,9 +105,26 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
               if (p.value_num is not None or p.value_text) and p.collected_date]
     if not points:
         return []
-    points.sort(key=lambda p: p.collected_date)
-    latest = points[-1]
-    previous = points[-2] if len(points) > 1 else None
+    # One draw can arrive twice, from a scanned report and from the health
+    # system's record, and the two can disagree. `lab_trend` keeps both
+    # rows on purpose. Sorting on the date alone made them "latest" and
+    # "previous", and the sheet printed "160, up from 130" for one draw, in
+    # whichever order the rows were inserted. So the draws are grouped by
+    # date, and a date whose records disagree is never one side of a trend.
+    by_date: dict[str, list[LabPoint]] = {}
+    for p in sorted(points, key=lambda p: p.collected_date):
+        by_date.setdefault(p.collected_date, []).append(p)
+    dates = sorted(by_date)
+    latest_group = by_date[dates[-1]]
+    if _disagree(latest_group):
+        return [Signal(
+            kind="lab_sources_disagree", subject=trend.key, label=trend.label,
+            evidence={"date": dates[-1],
+                      "reported": [_point_evidence(p) for p in latest_group]},
+            caveats=_ocr_caveats(*latest_group),
+        )]
+    latest = latest_group[-1]
+    previous = by_date[dates[-2]][-1] if len(dates) > 1 else None
     latest_out = bool(latest.flag) or latest.out_of_range is True
 
     if latest_out:
@@ -115,19 +132,23 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
             kind="lab_out_of_range", subject=trend.key, label=trend.label,
             evidence={"latest": _point_evidence(latest),
                       "previous": _point_evidence(previous) if previous else None},
-            caveats=_ocr_caveats(*([latest] + ([previous] if previous else []))),
+            caveats=(_ocr_caveats(*([latest] + ([previous] if previous else [])))
+                     + (_disagreement_caveats(by_date[dates[-2]])
+                        if previous else [])),
         )]
     if latest.value_num is None:
         return []
 
-    earlier_out = [p for p in points[:-1] if p.flag or p.out_of_range is True]
+    earlier = [p for d in dates[:-1] for p in by_date[d]]
+    earlier_out = [p for p in earlier if p.flag or p.out_of_range is True]
     if earlier_out:
         last_out = earlier_out[-1]
         return [Signal(
             kind="lab_returned_to_range", subject=trend.key, label=trend.label,
             evidence={"latest": _point_evidence(latest),
                       "previous": _point_evidence(last_out)},
-            caveats=_ocr_caveats(latest, last_out),
+            caveats=(_ocr_caveats(latest, last_out)
+                     + _disagreement_caveats(by_date[last_out.collected_date])),
         )]
 
     if previous is not None:
@@ -139,9 +160,26 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
                 evidence={"latest": _point_evidence(latest),
                           "previous": _point_evidence(previous),
                           "limit_side": side, "limit": limit},
-                caveats=_ocr_caveats(latest, previous),
+                caveats=(_ocr_caveats(latest, previous)
+                         + _disagreement_caveats(by_date[dates[-2]])),
             )]
     return []
+
+
+def _disagree(group: list[LabPoint]) -> bool:
+    """True when the records of one draw report more than one value."""
+    return len({(p.value_num, p.value_text, p.unit) for p in group}) > 1
+
+
+def _disagreement_caveats(group: list[LabPoint]) -> list[str]:
+    """A note for a draw whose records disagree, when that draw is the
+    earlier side of a comparison. The value shown is one record's; the
+    note names the others rather than hiding them."""
+    if not _disagree(group):
+        return []
+    said = "; ".join(f"{_val(_point_evidence(p))} in {p.citation}" for p in group)
+    return [f"Two records disagree about the {group[0].collected_date} draw "
+            f"({said}); the figure above is one of them."]
 
 
 def lab_signals(conn) -> list[Signal]:
@@ -272,8 +310,9 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
 # Reading order for the rendered sheet: the values furthest from routine
 # come first, near-limit and returned-to-range follow, metric shifts last.
 # Stable within a kind, so `sorted` alone gives a deterministic order.
-_KIND_ORDER = {"lab_out_of_range": 0, "lab_near_limit": 1,
-              "lab_returned_to_range": 2, "metric_shift": 3}
+_KIND_ORDER = {"lab_out_of_range": 0, "lab_sources_disagree": 1,
+              "lab_near_limit": 2, "lab_returned_to_range": 3,
+              "metric_shift": 4}
 
 
 @dataclass
@@ -312,6 +351,7 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
 # these templates to it.
 QUESTION_TEMPLATES = {
     "lab_out_of_range": "**Ask whether your {label} needs follow-up.**",
+    "lab_sources_disagree": "**Ask which record of your {label} is right.**",
     "lab_returned_to_range": "**Ask whether your {label} should keep being checked.**",
     "lab_near_limit": "**Ask whether your {label} is worth watching.**",
     "metric_shift": "**Ask about your {label}.**",
@@ -385,6 +425,12 @@ def _evidence_sentence(s: Signal) -> str:
             # One side is text, so there is no direction to state.
             text += f", after {_val(prev)} on {prev['date']}"
         return f"{text} {_cite(latest, prev)}."
+    if s.kind == "lab_sources_disagree":
+        said = " and as ".join(
+            f"{_val(r)}{_flagged(r)} in {', '.join(r['citation'].split(', ')[:2])}"
+            for r in e["reported"])
+        return (f"The {e['date']} draw is recorded as {said}. The two records "
+                f"disagree, and this tool cannot say which is right.")
     if s.kind == "lab_returned_to_range":
         latest, prev = e["latest"], e["previous"]
         range_clause = (f"inside the printed range of {_range(latest)}"
