@@ -104,9 +104,20 @@ def test_the_block_catches_our_own_client(no_network):
     block it must fail, which confirms the guard sees real call paths."""
     from health_agent import ollama_client
 
-    with pytest.raises(Exception) as exc:
+    # Sweep finding D2: `pytest.raises(Exception)` with `exc.value is not
+    # None` accepted every exception, so a `raise NotImplementedError` at
+    # the top of list_models would have passed without the guard being
+    # reached. The guard's own exception has to be the one raised, or the
+    # cause behind the client's own wrapper.
+    with pytest.raises((NetworkAttempted,
+                        ollama_client.OllamaUnavailable)) as exc:
         ollama_client.list_models("http://localhost:11434", timeout=1)
-    assert exc.value is not None
+    chain, seen = exc.value, []
+    while chain is not None:
+        seen.append(chain)
+        chain = chain.__cause__ or chain.__context__
+    assert any(isinstance(e, NetworkAttempted) for e in seen), \
+        f"the guard was never reached: {[type(e).__name__ for e in seen]}"
 
 
 # --------------------------------------------------------------------------- #
