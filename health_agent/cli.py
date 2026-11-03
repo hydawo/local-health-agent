@@ -31,6 +31,7 @@ from . import (__version__, agent, config, consent, embeddings, labs, metrics,
 from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
+from .agent.tools import notes_beside_clinical as _notes_beside_clinical
 from .literature import store as literature_store
 from .store import (queries, sqlite_schema, vector_store, windows,
                     workout_stats)
@@ -1889,6 +1890,8 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
                              if (n := coverage.get(s)))
             print(f"No {args.kind.strip().lower()} in the index. It holds "
                   f"{held}.")
+            _print_notes_beside_clinical(conn, kind or "",
+                                         args.kind.strip().lower())
             return 0
         print(_table(["kind", "name", "status", "date", "detail"],
                      [[r["kind"], _clip(r["name"], _CLINICAL_NAME_W),
@@ -1898,9 +1901,31 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
                       for r in rows]))
         print(f"\n{len(rows):,} record(s). Source: the clinical-records "
               f"folder of your Apple Health export.")
+        _print_notes_beside_clinical(
+            conn, kind or "", args.kind.strip().lower() if args.kind else "")
         return 0
     finally:
         conn.close()
+
+
+def _print_notes_beside_clinical(conn: sqlite3.Connection, kind: str,
+                                 label: str = "") -> None:
+    """The feed is what a health system sent, not what the person takes or
+    reacts to. The agent tool fetches the person's own notes beside every
+    clinical answer; this prints the same search here, so `clinical --kind
+    allergies` cannot show a feed with no penicillin while a note records
+    one."""
+    notes = _notes_beside_clinical(conn, kind)
+    what = f"on {label or kind}" if kind else "on medications and conditions"
+    if not notes:
+        print(f"\nYour own notes hold nothing {what}: a search of them found "
+              f"no passage. The feed above is not the whole of what you take "
+              f"or have been told.")
+        return
+    print(f"\nFrom your own notes {what}, which the feed does not include:")
+    for note in notes:
+        print(f"  {note['citation']}")
+        print(f"    {_clip(note['text'], 110)}")
 
 
 def _vital_value(row: dict) -> str:

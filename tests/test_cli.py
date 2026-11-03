@@ -203,6 +203,7 @@ def cli_records(tmp_path, capsys):
         return code, captured.out
 
     run.err = ""
+    run.index = index
     run("ingest", str(FIXTURES), "--no-ocr", "--no-embed")
     capsys.readouterr()
     return run
@@ -294,6 +295,29 @@ def test_clinical_filters_by_kind(cli_records):
     assert code == 0
     assert "Left anterior cruciate ligament tear" in out
     assert "ibuprofen" not in out
+
+
+def test_clinical_prints_the_persons_own_notes_beside_the_feed(cli_records):
+    """Sweep finding B9. `clinical --kind allergies` printed the health
+    system's feed only, so the fixture's "Penicillin (rash as a child)"
+    note never appeared under an allergies listing. The agent tool runs a
+    notes companion on every call (rule 1e, performed rather than
+    requested); the CLI surface had no equivalent."""
+    code, out = cli_records("clinical", "--kind", "allergies")
+    assert code == 0
+    assert "Pollen" in out                       # the feed
+    assert "Penicillin" in out                   # the person's own note
+    assert "medications-and-conditions.md" in out
+    assert "notes" in out.lower()
+    # And when the feed has nothing of that kind, the notes still show.
+    conn = sqlite3.connect(cli_records.index)
+    conn.execute("DELETE FROM clinical_fact WHERE kind = 'allergy'")
+    conn.commit()
+    conn.close()
+    code, out = cli_records("clinical", "--kind", "allergies")
+    assert code == 0
+    assert "No allergies in the index" in out
+    assert "Penicillin" in out
 
 
 def test_clinical_rejects_an_unknown_kind(cli_records):

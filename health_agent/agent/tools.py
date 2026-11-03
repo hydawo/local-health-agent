@@ -1437,9 +1437,17 @@ _PERSONAL_NOTE_KINDS = ("note", "image")
 
 
 def _notes_beside_clinical(ctx: ToolContext, kind: str) -> list[dict]:
+    return notes_beside_clinical(ctx.conn, kind)
+
+
+def notes_beside_clinical(conn, kind: str) -> list[dict]:
     """Passages from this person's own notes and photographed lists that bear on
     the kind asked about. Empty is a fact about the index, not a failure,
     and the caller reports it as coverage either way.
+
+    Public, on a connection, so the CLI's `clinical` command runs the same
+    companion search the tool does and the two surfaces cannot disagree
+    about what the person's own notes hold.
 
     One passage per document: a long note has sections on several of these
     kinds, and without this its medication and condition sections took the
@@ -1449,7 +1457,7 @@ def _notes_beside_clinical(ctx: ToolContext, kind: str) -> list[dict]:
     terms = (_NOTE_VOCABULARY.get(kind) or
              " ".join(_NOTE_VOCABULARY.values()))
     try:
-        hits = vector_store.keyword_search(ctx.conn, terms,
+        hits = vector_store.keyword_search(conn, terms,
                                            limit=MAX_NOTES_BESIDE * 4,
                                            kind=_PERSONAL_NOTE_KINDS)
     except Exception:  # pragma: no cover - a missing FTS table must not
