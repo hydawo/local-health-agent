@@ -583,6 +583,63 @@ def test_lab_trend_marks_out_of_range(cli_records):
     assert "outside the reference range" in out
 
 
+def test_lab_trend_marks_a_value_with_no_printed_range(cli_records):
+    """Sweep finding B5. The FHIR LDL of 118 carries no range, and used to
+    print with no mark under a legend that said a star means out of range,
+    which read as "118 and not flagged"."""
+    code, out = cli_records("labs", "ldl")
+    assert code == 0
+    assert "118 ?" in out
+    assert "128 *" in out
+    assert "? no reference range printed on that report" in out
+    assert "* outside the reference range printed on that report" in out
+
+
+def test_lab_trend_marks_a_value_that_is_not_a_number(cli_records):
+    """"see comment" used to print with no mark, which read as within range."""
+    code, out = cli_records("labs", "hba1c")
+    assert code == 0
+    assert "see comment ~" in out
+    assert "~ not a number as printed" in out
+    assert "? no reference range" not in out
+
+
+def test_lab_trend_legend_names_only_the_marks_in_the_table(cli_records):
+    code, out = cli_records("labs", "glucose")
+    assert code == 0
+    assert "* outside" not in out
+    assert "? no reference range" not in out
+    assert "~ not a number" not in out
+
+
+def test_lab_trend_a_flagged_text_value_is_starred(cli_records, tmp_path):
+    """">500" with an H flag is out of range by the lab's own judgement."""
+    conn = sqlite3.connect(tmp_path / "health.db")
+    doc = conn.execute("SELECT document_id FROM lab_result WHERE "
+                       "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, value_text, unit, flag, collected_date, raw_line, "
+        "extracted_by, via_ocr, dedup_key) VALUES(?,1,'LDL','ldl',NULL,"
+        "'>500','mg/dL','H','2026-06-01','x','pdfplumber',0,?)",
+        (doc, b"b5-text-ldl"))
+    conn.commit()
+    conn.close()
+    code, out = cli_records("labs", "ldl")
+    assert ">500 *" in out
+    assert "~ not a number" not in out
+
+
+def test_lab_trend_json_carries_range_status(cli_records):
+    code, out = cli_records("labs", "ldl", "--json")
+    payload = json.loads(out)
+    assert code == 0
+    by_date = {p["collected_date"]: p for p in payload["points"]}
+    assert by_date["2024-11-06"]["range_status"] == "no_printed_range"
+    assert by_date["2024-11-06"]["out_of_range"] is None
+    assert by_date["2026-03-10"]["range_status"] == "out_of_range"
+
+
 def test_lab_trend_first_to_latest_line_does_not_skip_a_text_valued_latest(
         cli_records, tmp_path):
     """Sweep finding B2, CLI half. The "first -> latest" line was computed

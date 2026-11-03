@@ -1062,6 +1062,17 @@ def metric_series(
 # Documents and lab results (milestone 2)
 # --------------------------------------------------------------------------- #
 
+# The four situations `out_of_range`'s null used to cover as one (sweep
+# finding B5). `out_of_range` keeps its tri-state meaning because the eval
+# scorers read it; `range_status` is the field that says which null this is.
+RANGE_STATUSES = ("in_range", "out_of_range", "no_printed_range", "not_numeric")
+
+# A flag that says the lab judged the value normal. Anything else a lab prints
+# in the flag column (H, L, A, HH, Critical, Abnormal) is its judgement that
+# the value is not.
+_NORMAL_FLAGS = frozenset({"N", "NORMAL", "NORM", "WNL"})
+
+
 @dataclass
 class LabPoint:
     collected_date: str | None
@@ -1113,6 +1124,31 @@ class LabPoint:
         if self.ref_high is not None and self.value_num > self.ref_high:
             return True
         return False
+
+    @property
+    def range_status(self) -> str:
+        """Which of `RANGE_STATUSES` this result is.
+
+        `out_of_range` answers "is the number outside the parsed range?" and
+        says None for four different reasons. This says which: `in_range` and
+        `out_of_range` when a number was compared with a parsed range;
+        `no_printed_range` when a number had no range to compare with,
+        whether the report printed none or printed one that did not parse
+        (by decision, the same situation: nothing to compare against);
+        `not_numeric` when the value is text and was never compared.
+
+        A lab flag is the lab's own judgement and makes the result
+        `out_of_range` whatever else parsed, so ">500 H" is not `not_numeric`
+        and "112 H" with no printed range is not `no_printed_range`. A flag
+        that says normal is not that judgement and is ignored here.
+        """
+        if self.flag and self.flag.strip().upper() not in _NORMAL_FLAGS:
+            return "out_of_range"
+        if self.value_num is None:
+            return "not_numeric"
+        if self.ref_low is None and self.ref_high is None:
+            return "no_printed_range"
+        return "out_of_range" if self.out_of_range else "in_range"
 
 
 @dataclass

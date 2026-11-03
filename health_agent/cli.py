@@ -1990,6 +1990,26 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+# The star column of the labs table (sweep finding B5). One mark per
+# `range_status` that is not a plain in-range number. The value column prints
+# the value as the report did; the mark says whether it was compared with a
+# printed range, and if not, why not, so "no range printed" cannot read as
+# "within range".
+_RANGE_MARKS = {
+    "out_of_range": " *",
+    "no_printed_range": " ?",
+    "not_numeric": " ~",
+}
+_RANGE_LEGEND = {
+    "out_of_range": "* outside the reference range printed on that report, "
+                    "or flagged by the lab",
+    "no_printed_range": "? no reference range printed on that report, so the "
+                        "value was compared with nothing",
+    "not_numeric": "~ not a number as printed, so the value was compared with "
+                   "nothing",
+}
+
+
 def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
@@ -2013,7 +2033,7 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
         for point in trend.points:
             value = (f"{point.value_num:g}" if point.value_num is not None
                      else (point.value_text or "-"))
-            marker = " *" if point.out_of_range is True else ""
+            marker = _RANGE_MARKS.get(point.range_status, "")
             rows.append([
                 point.collected_date or "unknown",
                 value + marker,
@@ -2025,8 +2045,16 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
         print(_table(["collected", "value", "unit", "reference", "flag",
                       "source"], rows))
 
-        if any(p.out_of_range for p in trend.points):
-            print("\n* outside the reference range printed on that report")
+        # One legend line per mark that appears, so a table with nothing to
+        # say about ranges says nothing, and a table with no range to compare
+        # against says that rather than nothing.
+        present = {p.range_status for p in trend.points}
+        legend = [_RANGE_LEGEND[status] for status in queries.RANGE_STATUSES
+                  if status in present and status in _RANGE_LEGEND]
+        if legend:
+            print()
+            for line in legend:
+                print(line)
 
         if any(p.via_ocr for p in trend.points):
             print("\n[OCR] read from a scanned page with no text layer. OCR "
@@ -2143,6 +2171,7 @@ def _trend_as_dict(trend: queries.LabTrend) -> dict:
                 "ref_text": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
+                "range_status": p.range_status,
                 "via_ocr": p.via_ocr,
                 "citation": p.citation,
                 "source_path": p.path,

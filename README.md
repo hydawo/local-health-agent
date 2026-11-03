@@ -631,7 +631,10 @@ is stored once. Every stored value keeps the source line it came from.
 **Nothing is interpreted.** `labs` marks a value as outside the reference range
 *the lab printed on that report*, and mixed units across labs are shown as
 printed and never converted. Converting without knowing the assay is how you get
-confidently wrong numbers.
+confidently wrong numbers. A value the report printed no range for is marked
+`?`, and a value that is not a number (`see comment`, `>500` without a flag) is
+marked `~`, so the absence of a star never reads as a normal result; the tool
+payload carries the same distinction as `range_status`.
 
 **OCR-derived values are marked.** Scanned reports with no
 text layer go through OCR, which reads result values and H/L flags reliably but

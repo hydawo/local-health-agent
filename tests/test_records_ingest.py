@@ -491,6 +491,58 @@ def test_out_of_range_is_none_without_a_printed_range(records_index):
     assert point.out_of_range is None
 
 
+def _point(value_num=None, value_text=None, ref_low=None, ref_high=None,
+           ref_text=None, flag=None):
+    return queries.LabPoint(
+        collected_date="2026-01-01", value_num=value_num, value_text=value_text,
+        unit=None, ref_low=ref_low, ref_high=ref_high, ref_text=ref_text,
+        flag=flag, analyte="X", path="/tmp/x.pdf", page_no=1, raw_line="",
+    )
+
+
+@pytest.mark.parametrize("point,status,boolean", [
+    # A parsed range and a number: compared.
+    (_point(5.7, ref_low=4.8, ref_high=5.6, ref_text="4.8-5.6"), "out_of_range", True),
+    (_point(5.4, ref_low=4.8, ref_high=5.6, ref_text="4.8-5.6"), "in_range", False),
+    (_point(118.0, ref_high=99.0, ref_text="<99"), "out_of_range", True),
+    # A number the report printed no range for: compared with nothing.
+    (_point(118.0), "no_printed_range", None),
+    # A range that was printed but could not be parsed is the same situation
+    # as none printed, by decision: there is still nothing to compare with.
+    (_point(118.0, ref_text="see note"), "no_printed_range", None),
+    # A lab flag is the lab's own judgement and counts whether or not the
+    # value or range parsed.
+    (_point(value_text=">500", flag="H"), "out_of_range", None),
+    (_point(112.0, flag="H"), "out_of_range", None),
+    (_point(5.0, ref_low=4.8, ref_high=5.6, ref_text="4.8-5.6", flag="L"), "out_of_range", False),
+    # Text with no flag was never compared, with or without a printed range.
+    (_point(value_text="see comment"), "not_numeric", None),
+    (_point(value_text="see comment", ref_low=4.8, ref_high=5.6, ref_text="4.8-5.6"), "not_numeric", None),
+    # A flag that says normal is not the lab calling it abnormal.
+    (_point(value_text=">500", flag="N"), "not_numeric", None),
+    (_point(118.0, flag="Normal"), "no_printed_range", None),
+])
+def test_range_status_names_the_four_situations_null_used_to_cover(point, status, boolean):
+    """Sweep finding B5. `out_of_range` is kept as it was for the eval
+    scorers; `range_status` sits beside it so an absent range cannot read as
+    a normal result."""
+    assert point.range_status == status
+    assert point.out_of_range is boolean
+
+
+def test_range_status_values_are_the_four_agreed_ones():
+    assert queries.RANGE_STATUSES == ("in_range", "out_of_range",
+                                      "no_printed_range", "not_numeric")
+
+
+def test_fixture_text_valued_result_is_not_numeric(records_index):
+    conn, _ = records_index
+    trend = queries.lab_trend(conn, "hba1c")
+    statuses = {p.range_status for p in trend.points}
+    assert {"in_range", "out_of_range"} <= statuses
+    assert all(p.range_status in queries.RANGE_STATUSES for p in trend.points)
+
+
 def test_missing_analyte_reports_coverage(records_index):
     conn, _ = records_index
     trend = queries.lab_trend(conn, "psa")

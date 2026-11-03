@@ -364,6 +364,61 @@ def test_metric_absent_entirely_says_so(ctx):
     assert "not substitute a related metric" in result["note"]
 
 
+def _with_probe_rows(ctx, rows):
+    """Insert synthetic lab_result rows for one call, then remove them, so
+    the session-scoped index is unchanged for every other test."""
+    doc = ctx.conn.execute("SELECT document_id FROM lab_result WHERE "
+                           "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    keys = []
+    for i, (value_num, value_text, flag, date) in enumerate(rows):
+        key = f"b5-probe-{i}".encode()
+        keys.append(key)
+        ctx.conn.execute(
+            "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+            "value_num, value_text, unit, flag, collected_date, raw_line, "
+            "extracted_by, via_ocr, dedup_key) VALUES(?,1,'Ferritin','ferritin',"
+            "?,?,'ng/mL',?,?,'x','pdfplumber',0,?)",
+            (doc, value_num, value_text, flag, date, key))
+    ctx.conn.commit()
+    try:
+        yield
+    finally:
+        ctx.conn.executemany("DELETE FROM lab_result WHERE dedup_key=?",
+                             [(k,) for k in keys])
+        ctx.conn.commit()
+
+
+def test_lab_payloads_carry_range_status_beside_out_of_range(ctx):
+    """Sweep finding B5. `out_of_range` keeps its tri-state meaning for the
+    scorers; `range_status` says which of the four situations a null was."""
+    rows = [(118.0, None, None, "2026-04-01"),        # no printed range
+            (None, "see comment", None, "2026-05-01"),  # not a number
+            (None, ">500", "H", "2026-06-01")]          # text, but flagged
+    probe = _with_probe_rows(ctx, rows)
+    next(probe)
+    try:
+        single = tools.dispatch(ctx, "get_lab_trend", {"analyte": "ferritin"})
+        batch = tools.dispatch(ctx, "get_lab_trend", {"analytes": ["ferritin", "ldl"]})
+    finally:
+        next(probe, None)
+
+    points = single["points"][-3:]
+    assert [p["range_status"] for p in points] == [
+        "no_printed_range", "not_numeric", "out_of_range"]
+    assert [p["out_of_range"] for p in points] == [None, None, None]
+    assert "range_status" in single["range_status_note"]
+
+    results = batch["analytes"]["ferritin"]["results"][-3:]
+    assert [r["range_status"] for r in results] == [
+        "no_printed_range", "not_numeric", "out_of_range"]
+    assert [r["out_of_range"] for r in results] == [None, None, None]
+    ldl = batch["analytes"]["ldl"]["results"][-1]
+    assert ldl["range_status"] == "out_of_range" and ldl["out_of_range"] is True
+    assert "range_status" in batch["range_status_note"]
+    # The precomputed block is unchanged in meaning: by parsed range only.
+    assert {f["analyte"] for f in batch["out_of_range_on_latest_report"]} == {"ldl"}
+
+
 def test_get_lab_trend_carries_citations_and_ranges(ctx):
     result = tools.dispatch(ctx, "get_lab_trend", {"analyte": "ldl"})
     points = result["points"]

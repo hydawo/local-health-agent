@@ -302,6 +302,23 @@ CITATION_NOTE = (
     "on its own is not a citation. " + SAME_SENTENCE_RULE
 )
 
+# Sweep finding B5. `out_of_range` is null for four different reasons, and a
+# null printed beside a value reads as "not flagged". `range_status` names
+# the reason; this note says what each name means so the model does not fill
+# the gap with "within range". Worded as statements, not directions: a
+# payload sentence outranks a prompt rule when the model is choosing its next
+# move, so nothing here tells it what to do.
+RANGE_STATUS_NOTE = (
+    "range_status compares each value with the reference range printed on "
+    "its own report. in_range and out_of_range are the result of that "
+    "comparison. no_printed_range means the report printed no range the "
+    "value could be compared with, so the value is neither in range nor out "
+    "of it, and a value with that status was never called normal by anyone. "
+    "not_numeric means the value is text and was compared with nothing. A "
+    "flag printed by the lab counts as out_of_range on its own, because the "
+    "flag is the lab's judgement."
+)
+
 # The literature tool's own note. A module-level constant rather than a literal
 # inside the payload so that the one rule about where a citation sits can be
 # asserted in every place that teaches it; the guardrail reads PMIDs, so this
@@ -1022,6 +1039,7 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
                 "reference_range": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
+                "range_status": p.range_status,
                 "citation": p.citation,
                 "source": p.source,
                 **({"via_ocr": True} if p.via_ocr else {}),
@@ -1032,6 +1050,7 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
     if truncated:
         payload["truncated"] = True
     payload["citation_note"] = CITATION_NOTE
+    payload["range_status_note"] = RANGE_STATUS_NOTE
     siblings = queries.panel_siblings(ctx.conn, trend.key)
     payload["other_analytes_in_this_panel"] = [s["analyte_key"] for s in siblings]
     # Coverage, stated as a fact and nothing more. The first version of this
@@ -1117,6 +1136,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
                     "reference_range": p.ref_text,
                     "flag": p.flag,
                     "out_of_range": p.out_of_range,
+                    "range_status": p.range_status,
                     "citation": p.citation,
                     "source": p.source,
                     **({"via_ocr": True} if p.via_ocr else {}),
@@ -1139,6 +1159,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
     payload: dict = {
         "analytes": found,
         "citation_note": CITATION_NOTE,
+        "range_status_note": RANGE_STATUS_NOTE,
         # Precomputed so the model doesn't have to scan every result itself and
         # risk missing one — the same principle as `overall` for time series.
         "out_of_range_on_latest_report": flagged,
