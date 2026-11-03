@@ -935,9 +935,12 @@ def metric_series(
     if combine == "auto":
         combine = "max" if agg in ADDITIVE else "weighted"
 
-    # (period, category) -> source -> accumulator
+    # (period, category) -> source -> accumulator. `sum` starts as None,
+    # like min and max: a category metric's rows carry no numeric value,
+    # and a sum that started at 0.0 made every stand-hour and sleep-stage
+    # total print as 0.0, which the schema docstring forbids.
     buckets: dict[tuple[str, str | None], dict[str | None, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"n": 0, "sum": 0.0, "dur": 0.0,
+        lambda: defaultdict(lambda: {"n": 0, "sum": None, "dur": 0.0,
                                      "min": None, "max": None})
     )
     spans: dict[str, tuple[str, str]] = {}
@@ -950,7 +953,7 @@ def metric_series(
         acc = buckets[key][row["source_name"]]
         acc["n"] += row["n"] or 0
         if row["sum_value"] is not None:
-            acc["sum"] += row["sum_value"]
+            acc["sum"] = (acc["sum"] or 0.0) + row["sum_value"]
         if row["duration_sec"] is not None:
             acc["dur"] += row["duration_sec"]
         if row["min_value"] is not None:
@@ -1637,7 +1640,9 @@ def _source_value(acc: dict, agg: str) -> float | None:
     if agg == "max":
         return acc["max"]
     if agg == "avg":
-        return acc["sum"] / acc["n"] if acc["n"] else None
+        if acc["sum"] is None or not acc["n"]:
+            return None
+        return acc["sum"] / acc["n"]
     raise ValueError(agg)
 
 
@@ -1652,11 +1657,13 @@ def _combine(by_source: dict, agg: str, combine: str) -> float | None:
         return max(values)
     if agg == "avg":
         # Sample-weighted across sources: a source contributing 400 samples
-        # should not be averaged 1:1 with one contributing 3.
-        total_n = sum(a["n"] for a in by_source.values())
+        # should not be averaged 1:1 with one contributing 3. Only sources
+        # that carried a value count; a source with none has no mean.
+        valued = [a for a in by_source.values() if a["sum"] is not None]
+        total_n = sum(a["n"] for a in valued)
         if not total_n:
             return None
-        return sum(a["sum"] for a in by_source.values()) / total_n
+        return sum(a["sum"] for a in valued) / total_n
     # Additive aggregates: sum or max across sources (see module docstring).
     if combine == "sum":
         return sum(values)

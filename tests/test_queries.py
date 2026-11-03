@@ -125,6 +125,23 @@ def test_sleep_aggregates_by_duration_per_stage(ingested):
     assert by_key[("2026-03-05", "HKCategoryValueSleepAnalysisAsleepREM")] == 2700.0
 
 
+@pytest.mark.parametrize("agg", ["sum", "avg"])
+def test_a_category_metric_has_no_sum_and_no_mean(ingested, agg):
+    """Sweep finding C1. The per-source accumulator started at sum 0.0 and
+    only added when a row carried a value, so a category metric, whose rows
+    carry none, summed to 0.0 and averaged to 0.0 / n. min and max were
+    None on the same rows. Three docstrings forbid a non-numeric value
+    quietly becoming 0.0; `health-agent metric sleep --agg sum` printed
+    0.00 for every stage, and the tool returned 0.0 beside "use this value
+    directly"."""
+    conn, _ = ingested
+    result = series(conn, "sleep", agg=agg)
+    assert result.points, "the fixture holds sleep rows"
+    assert all(p.value is None for p in result.points), [
+        (p.period, p.category, p.value) for p in result.points]
+    assert all(v is None for p in result.points for v in p.per_source.values())
+
+
 def test_a_night_two_devices_recorded_is_the_larger_one_not_the_sum(ingested):
     """Issue 22. Adding a watch's and a ring's seconds together returned
     about twice the deep sleep and twice the asleep hours for one night.
