@@ -316,7 +316,7 @@ def test_a_second_sleep_device_is_not_a_change_in_sleep(tmp_path):
     sqlite_schema.rebuild_daily_metrics(conn)
     conn.commit()
 
-    label, unit, values = visit_prep._daily_values(conn, "sleep")
+    label, unit, values, sources = visit_prep._daily_values(conn, "sleep")
     assert values["2026-05-01"] == 7 * 3600
     # The night both devices covered is the larger one's seven hours, not
     # thirteen. Thirteen is what summing them returned.
@@ -324,6 +324,62 @@ def test_a_second_sleep_device_is_not_a_change_in_sleep(tmp_path):
     signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
     assert not [s for s in signals if "Sleep" in s.subject
                 or "sleep" in s.subject.lower()]
+    conn.close()
+
+
+def _two_device_index(tmp_path, records):
+    """records: (type, unit, source, date, value). Every value invented."""
+    from health_agent.ingest import healthkit
+    from health_agent.store import sqlite_schema
+    body = "".join(
+        f' <Record type="HKQuantityTypeIdentifier{t}" sourceName="{src}" '
+        f'unit="{u}" creationDate="{d} 08:05:00 -0500" '
+        f'startDate="{d} 08:00:00 -0500" endDate="{d} 08:00:00 -0500" '
+        f'value="{v}"/>\n' for t, u, src, d, v in records)
+    export = tmp_path / "export.xml"
+    export.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n'
+        ' <ExportDate value="2026-06-30 09:00:00 -0400"/>\n'
+        f'{body}</HealthData>\n')
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    healthkit.ingest_file(conn, export)
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+    return conn
+
+
+def test_a_new_device_is_named_when_a_shift_spans_a_device_change(tmp_path):
+    """Sweep finding C4. `_daily_values` dropped the source, so a person who
+    moved from a phone to a watch mid-window had the level move with the
+    device and the sheet reported a change in them, naming no device
+    anywhere. Sleep was protected by a test, not by the code. The shift is
+    still printed, because it may be real, but it names the devices on each
+    side and says a device change can move the level on its own."""
+    prior = [("StepCount", "count", "Synthetic Phone", d, "5000")
+             for d in _days(date(2026, 5, 1), 30)]
+    recent = [("StepCount", "count", "Synthetic Watch", d, "8000")
+              for d in _days(date(2026, 5, 31), 30)]
+    conn = _two_device_index(tmp_path, prior + recent)
+    signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
+    (signal,) = [s for s in signals if s.subject == "HKQuantityTypeIdentifierStepCount"]
+    assert signal.evidence["recent_sources"] == ["Synthetic Watch"]
+    assert signal.evidence["prior_sources"] == ["Synthetic Phone"]
+    assert signal.caveats, "a device change must be said on the sheet"
+    text = visit_prep.render(_sheet_with(signal))
+    assert "Synthetic Phone" in text and "Synthetic Watch" in text
+    assert guardrail.check(text, used_tools=True) == []
+    conn.close()
+
+    # The same shift on one device carries no such note.
+    same = [("StepCount", "count", "Synthetic Watch", d, v)
+            for d, v in [(d, "5000") for d in _days(date(2026, 5, 1), 30)]
+            + [(d, "8000") for d in _days(date(2026, 5, 31), 30)]]
+    conn = _two_device_index(tmp_path / "same", same) if (tmp_path / "same").mkdir() is None else None
+    signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
+    (signal,) = [s for s in signals if s.subject == "HKQuantityTypeIdentifierStepCount"]
+    assert signal.evidence["recent_sources"] == signal.evidence["prior_sources"] == ["Synthetic Watch"]
+    assert signal.caveats == []
     conn.close()
 
 

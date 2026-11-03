@@ -248,16 +248,38 @@ def _days(n: int) -> str:
     return f"{n} day" if n == 1 else f"{n} days"
 
 
-def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float]]:
-    """(label, unit, {date: value}) for one metric, sleep via nights."""
+def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float],
+                                             dict[str, tuple[str, ...]]]:
+    """(label, unit, {date: value}, {date: sources}) for one metric, sleep
+    via nights.
+
+    The sources travel with the values. Without them a person who moved
+    from a phone to a watch mid-window had the level move with the device,
+    and the sheet reported a change in them, naming no device anywhere.
+    """
     if alias == "sleep":
         nights = queries.sleep_nights(conn)
-        return "Sleep", "s", {n["night"]: n["asleep_seconds"] for n in nights
-                              if n["asleep_seconds"]}
+        kept = [n for n in nights if n["asleep_seconds"]]
+        return ("Sleep", "s", {n["night"]: n["asleep_seconds"] for n in kept},
+                {n["night"]: (n["source"],) for n in kept})
     metric = metrics.resolve(alias)
     series = queries.metric_series(conn, metric, period="day")
-    values = {p.period_start: p.value for p in series.points if p.value is not None}
-    return metric.label, series.unit, values
+    points = [p for p in series.points if p.value is not None]
+    return (metric.label, series.unit,
+            {p.period_start: p.value for p in points},
+            {p.period_start: p.sources for p in points})
+
+
+def _device_caveat(label: str, recent: list[str], prior: list[str]) -> list[str]:
+    """Said on the sheet when the two windows were recorded by different
+    devices, because a change of device can move the level on its own."""
+    if recent == prior:
+        return []
+    return [f"The recent {label.lower()} figures come from "
+            f"{', '.join(recent) or 'an unnamed device'} and the earlier "
+            f"ones from {', '.join(prior) or 'an unnamed device'}. A change "
+            f"of device can move the level on its own, so this may be the "
+            f"device rather than you."]
 
 
 def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], dict | None]:
@@ -266,7 +288,7 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
     window: dict | None = None
     need = max(1, int(window_days * MIN_WINDOW_FRACTION))
     for alias, threshold in SHIFT_THRESHOLDS.items():
-        label, unit, values = _daily_values(conn, alias)
+        label, unit, values, sources = _daily_values(conn, alias)
         if not values:
             gaps.append(f"{label}: none in the export")
             continue
@@ -276,6 +298,10 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
         prior_end = recent_start - timedelta(days=1)
         recent = [v for d, v in values.items() if recent_start.isoformat() <= d <= last.isoformat()]
         prior = [v for d, v in values.items() if prior_start.isoformat() <= d <= prior_end.isoformat()]
+        recent_sources = sorted({s for d, ss in sources.items() for s in ss
+                                 if recent_start.isoformat() <= d <= last.isoformat()})
+        prior_sources = sorted({s for d, ss in sources.items() for s in ss
+                                if prior_start.isoformat() <= d <= prior_end.isoformat()})
         if window is None or last.isoformat() > window["recent_end"]:
             window = {"recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                       "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat()}
@@ -302,7 +328,9 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
                 "recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                 "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat(),
                 "threshold_text": _threshold_text(alias, unit),
+                "recent_sources": recent_sources, "prior_sources": prior_sources,
             },
+            caveats=_device_caveat(label, recent_sources, prior_sources),
         ))
     return signals, gaps, window
 
