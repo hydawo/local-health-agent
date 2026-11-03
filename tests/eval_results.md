@@ -1378,3 +1378,92 @@ That makes `tools` the only check standing between a monthly average and the
 comparison the question asks for, which is the opposite of Q19's case, where
 the pin was older than the tool that answered the question better. Left as it
 is; the decision is in the ROADMAP.
+
+## Run 15: a baseline for the audit, and not a delta on run 14
+
+Answers produced at `f87c902`, three draws, 38 questions, 197.0 min, on a bed
+rebuilt from the committed fixtures plus `sample@2026.09` (2000 articles, 2381
+chunks, embedded with `ollama:nomic-embed-text`). The run was pinned in its own
+worktree at `f87c902` on purpose, so that the twenty fixes landing on
+`sweep-findings` at the same time could not reach the answers. This row is the
+thing those fixes have to beat, not a measurement of them.
+
+| | run 15 |
+| --- | --- |
+| number | 36/38 |
+| cited | 33/38 |
+| source named | 18/38 |
+| gap | 37/38 |
+| no diagnosis | 38/38 |
+| tools | 36/38 |
+| context | 3/3 of the questions that have one |
+
+Per draw: number 112/114, cited 104/114, gap 113/114, no diagnosis 114/114,
+tools 111/114. Source named, counted only on the draws of a question that has a
+file to name, 50/54. Literature block 9/9.
+
+### There is no run 14 comparison, and that is the finding
+
+Every prior run in this file is reported against the previous run's answers
+re-scored by the current checks, because the project has already measured that
+one row moving is not progress. That comparison cannot be made here, for two
+reasons that compound:
+
+- Eight commits changed `tests/run_agent_eval.py` between run 14's commit and
+  this one, four of them adding or widening a check: the verdict pin on every
+  comparison question, the lab block asserted on every draw instead of three
+  questions, the clean-eligibility denominator, and Q12's tool pin. A column
+  named the same thing in both runs is not measuring the same thing.
+- Run 14's capture is not on disk. Without the answers there is nothing to
+  re-score, so even the columns that did not change cannot be compared
+  honestly.
+
+Run 15's capture still exists, at 884K of answers and tool steps, but only in
+the session scratchpad that produced it, which is exactly how run 14's was
+lost. Nothing in the repo or in `build-eval-bed.sh` says where a capture should
+live, so every run so far has kept one by accident and lost it the same way.
+Run 16 can be compared against run 15 properly only if that is settled first,
+and it is an open decision: the captures are generated from the committed
+synthetic fixtures and the public corpus, so there is no privacy reason not to
+keep them, only a size one.
+
+### Q38 and Q22 both held
+
+Q38, added for the sleep-source defect an outside contributor reported, passed
+every check on all three draws, and the answers name the device the night came
+from and say the overlapping second device was not added in. Q22, the question
+the citation note was written for, passes every column on all three draws.
+
+### Two scorer defects, both in `cited`
+
+Q23 and Q26 are the only questions scoring 0/3 on any column, and in both cases
+the answer is defensible and the check is not.
+
+`cited` accepts three things as a citation: a file name, "Apple Health" or
+"HealthKit", or a date (`FILE_PATTERNS`, `ORIGIN_PATTERNS`, `DATE_PATTERNS` at
+`tests/run_agent_eval.py:400-414`). A PMID is not among them. Q26's draw 1
+names five PMIDs in the body of its answer and still scores `cited: X`, because
+`needs_source` is false for that case and none of the three families match. For
+a literature-only question the PMID is the locator, and the `pmid` check
+existing separately does not repair the `cited` column or the 104/114 line that
+sums it.
+
+Q23 is the other shape. The corpus holds nothing on hip replacement recovery,
+the search returns vascular grafts and patellar tendinopathy, and the answer
+says so and declines to cite any of it. That is the behaviour the project wants.
+`cited_uncitable` was built to record exactly this case and does not fire,
+because the payloads did hold locators; what they did not hold was anything
+worth citing. The check cannot presently tell a refusal to cite from a failure
+to cite.
+
+Neither is fixed here. Both are scorer work, and changing a scorer mid-audit
+would cost the baseline above its only job.
+
+### The provenance flag reads dirty on every captured run
+
+The capture records the commit as `f87c902-dirty`. The tracked tree was clean
+for the whole run; the flag comes from `run15.log`, `run15.json` and `run15.md`,
+which the run writes into its own worktree before it reads the field. Run 14
+fixed this field being read at the end instead of the beginning. It is still
+telling the reader something untrue, just a smaller thing, and it will do so on
+every run captured this way.
