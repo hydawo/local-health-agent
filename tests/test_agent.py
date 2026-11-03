@@ -200,8 +200,53 @@ def test_batched_lab_lookup_precomputes_out_of_range(ctx):
 def test_batched_lookup_reports_analytes_with_no_results(ctx):
     result = tools.dispatch(ctx, "get_lab_trend",
                             {"analytes": ["ldl", "psa"]})
-    assert result["no_results_for"] == ["psa"]
+    assert set(result["no_results_for"]) == {"psa"}
     assert "ldl" in result["analytes"]
+
+
+def test_batched_lookup_says_why_each_absent_analyte_is_absent(ctx):
+    """Sweep finding B4. `no_results_for` was a bare list of names: it could
+    not say whether the analyte was never tested, tested outside the window
+    asked about, or a name the registry does not know, slugged silently.
+    "LDL is the only value out of range, PSA and troponin were normal" is
+    the sentence that invites. Each absent analyte now carries the same
+    coverage the single-analyte path builds, and the out-of-range list
+    carries the analytes it was computed over."""
+    result = tools.dispatch(ctx, "get_lab_trend", {
+        "analytes": ["ldl", "psa", "made up thing"],
+        "start_date": "2099-01-01"})
+    absent = result["no_results_for"]
+    assert absent["ldl"]["reason"] == "outside_requested_range"
+    assert absent["ldl"]["total_results_for_analyte"] > 0
+    assert absent["ldl"]["available_from"] and absent["ldl"]["available_to"]
+    assert absent["psa"]["reason"] == "never_tested"
+    assert absent["psa"]["total_results_for_analyte"] == 0
+    assert absent["made_up_thing"]["reason"] == "unrecognised_name"
+    assert absent["made_up_thing"]["requested_as"] == "made up thing"
+    # Nothing was found, so this is a no-data answer, not a clean report.
+    assert result["no_data"] is True
+    assert result["out_of_range_on_latest_report"] == []
+    assert result["latest_report_checked_for"] == []
+    assert "analytes_present_in_reports" in result
+
+    some = tools.dispatch(ctx, "get_lab_trend", {"analytes": ["ldl", "psa"]})
+    assert some["latest_report_checked_for"] == ["ldl"]
+    assert "no_data" not in some
+
+
+def test_batched_lookup_on_an_index_with_no_labs_says_no_data(labs_only_ctx):
+    """Reproduced on an empty index in the sweep: `out_of_range_on_latest_report:
+    []` under a note saying every result carries a citation, with no
+    `no_data` flag, reads as "nothing is out of range on your latest
+    report" when no report exists."""
+    conn = labs_only_ctx.conn
+    conn.execute("DELETE FROM lab_result")
+    conn.commit()
+    result = tools.dispatch(labs_only_ctx, "get_lab_trend",
+                            {"analytes": ["ldl", "hdl"]})
+    assert result["no_data"] is True
+    assert result["analytes_present_in_reports"] == []
+    assert result["no_results_for"]["ldl"]["reason"] == "never_tested"
 
 
 def test_batched_lookup_accepts_a_comma_separated_string(ctx):

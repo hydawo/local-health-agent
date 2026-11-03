@@ -1033,15 +1033,34 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
     requested = requested[:MAX_BATCH_ANALYTES]
 
     found: dict[str, dict] = {}
-    missing: list[str] = []
+    # Keyed by resolved analyte, each a coverage object. A bare list of
+    # names could not say whether the analyte was never tested, tested
+    # outside the window asked about, or a name the registry does not know
+    # and slugged silently, and "PSA and troponin were normal" is what a
+    # bare name under an out-of-range list invites.
+    missing: dict[str, dict] = {}
     flagged: list[dict] = []
+    windowed = bool(args.get("start_date") or args.get("end_date"))
 
     for name in requested:
         key, _ = labs.resolve_key(name)
         trend = queries.lab_trend(ctx.conn, key, start=args.get("start_date"),
                                   end=args.get("end_date"))
         if trend.is_empty:
-            missing.append(key)
+            if labs.lookup(name) is None and not trend.total_results:
+                reason = "unrecognised_name"
+            elif trend.total_results and windowed:
+                reason = "outside_requested_range"
+            else:
+                reason = "never_tested"
+            missing[key] = {
+                "requested_as": name,
+                "label": trend.label,
+                "reason": reason,
+                "total_results_for_analyte": trend.total_results,
+                "available_from": trend.available_from,
+                "available_to": trend.available_to,
+            }
             continue
         points = trend.points[-MAX_BATCH_POINTS:]
         found[key] = {
@@ -1079,9 +1098,26 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
         # Precomputed so the model doesn't have to scan every result itself and
         # risk missing one — the same principle as `overall` for time series.
         "out_of_range_on_latest_report": flagged,
+        # The denominator: "only LDL is out of range" is true of these
+        # analytes and of nothing else.
+        "latest_report_checked_for": sorted(found),
     }
     if missing:
         payload["no_results_for"] = missing
+        payload["no_results_note"] = (
+            "Each entry under no_results_for says why: never_tested means "
+            "the reports hold no result for it at all, "
+            "outside_requested_range means results exist on the dates "
+            "given, and unrecognised_name means the name was not one this "
+            "registry knows. None of them is a normal result.")
+    if not found:
+        payload["no_data"] = True
+        payload["analytes_present_in_reports"] = [
+            a["analyte_key"] for a in queries.list_analytes(ctx.conn, limit=60)]
+        payload["note"] = (
+            "None of the requested analytes has a result in the requested "
+            "range, so there is no latest report to judge. Say so. Do not "
+            "infer a value from a different analyte.")
     if truncated_list:
         payload["truncated_request"] = (
             f"Only the first {MAX_BATCH_ANALYTES} analytes were looked up.")
