@@ -473,6 +473,29 @@ def test_search_with_no_match_says_so(ctx):
     assert "rather than answering from general knowledge" in result["note"]
 
 
+def test_a_keyword_miss_says_the_words_were_not_found_not_that_the_notes_are_silent(ctx):
+    """Sweep finding B7. With no embeddings the search falls back to
+    keywords, and a keyword miss carried no `method`, so the model could
+    not tell it from a semantic miss and the note told it to say the
+    notes do not cover the subject. "hypertension" misses a note reading
+    "Blood pressure on the high side of normal" and another naming
+    lisinopril for blood pressure; "your notes do not mention any blood
+    pressure concern" is what that invites. The CLI already prints a
+    tag-match hint on the same path; the tool now carries it too."""
+    result = tools.dispatch(ctx, "search_records", {"query": "hypertension"})
+    assert result["no_matches"] is True
+    assert result["method"] == "keyword"
+    assert "contains the words" in result["note"].lower()
+    assert "do not cover" not in result["note"]
+    assert "rather than answering from general knowledge" in result["note"]
+    # A query naming a tag: frontmatter is stripped before chunking, so the
+    # tag is not body text and cannot match here. The payload says so.
+    tagged = tools.dispatch(ctx, "search_records", {"query": "caffeine"})
+    assert tagged["no_matches"] is True
+    assert tagged["tags_matching_query"] == ["caffeine"]
+    assert "caffeine is a tag" in tagged["note"]
+
+
 def test_search_result_count_is_capped(ctx):
     result = tools.dispatch(ctx, "search_records",
                             {"query": "cholesterol", "limit": 999})

@@ -1148,6 +1148,24 @@ def list_tags(conn: sqlite3.Connection, limit: int | None = None) -> list[dict]:
     return [dict(r) for r in conn.execute(sql, params)]
 
 
+def tags_matching(conn: sqlite3.Connection, query: str) -> list[str]:
+    """Tags whose name appears among the query's words.
+
+    Frontmatter is stripped before chunking, so a tag is not body text and
+    a search for it misses. The CLI and the search tool both use this to
+    say so rather than letting a miss read as "the notes hold nothing".
+    """
+    import re
+
+    words = {w.lower() for w in re.findall(r"[A-Za-z0-9/-]{2,}", query)}
+    if not words:
+        return []
+    return [
+        row["tag"] for row in conn.execute("SELECT DISTINCT tag FROM document_tag")
+        if row["tag"] in words
+    ]
+
+
 def notes_by_tag(conn: sqlite3.Connection, tag: str) -> list[dict]:
     return [dict(r) for r in conn.execute(
         "SELECT d.id, d.path, d.title, d.doc_date FROM document d "

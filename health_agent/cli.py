@@ -2202,16 +2202,9 @@ def cmd_search(args: argparse.Namespace, cfg: config.Config) -> int:
 
 
 def _tags_matching(conn: sqlite3.Connection, query: str) -> list[str]:
-    """Tags whose name appears among the query's words."""
-    import re
-
-    words = {w.lower() for w in re.findall(r"[A-Za-z0-9/-]{2,}", query)}
-    if not words:
-        return []
-    return [
-        row["tag"] for row in conn.execute("SELECT DISTINCT tag FROM document_tag")
-        if row["tag"] in words
-    ]
+    """Tags whose name appears among the query's words. Shared with the
+    search tool, which prints the same hint on the same miss."""
+    return queries.tags_matching(conn, query)
 
 
 def cmd_embed(args: argparse.Namespace, cfg: config.Config) -> int:

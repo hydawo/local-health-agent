@@ -1189,13 +1189,36 @@ def _search_records(ctx: ToolContext, args: dict) -> dict:
             "SELECT COUNT(*) AS n FROM chunk").fetchone()["n"]
         tags = [r["tag"] for r in ctx.conn.execute(
             "SELECT DISTINCT tag FROM document_tag ORDER BY tag")]
+        matched_tags = queries.tags_matching(ctx.conn, query)
+        # A keyword miss is a fact about these words, not about the subject:
+        # "hypertension" misses a note reading "blood pressure on the high
+        # side of normal". Without `method` the model could not tell the
+        # two apart, and the note told it to say the notes do not cover it.
+        if method == "keyword":
+            note = (f"No indexed chunk contains the words {query!r}. This "
+                    f"was a word match, not a search by meaning, so the "
+                    f"notes may still cover the subject in other words. Say "
+                    f"that these words were not found, and try other wording "
+                    f"before saying the notes are silent on it, rather than "
+                    f"answering from general knowledge.")
+        else:
+            note = ("Nothing matched by meaning. Say that the documents and "
+                    "notes do not cover this, rather than answering from "
+                    "general knowledge.")
+        if matched_tags:
+            note += (f" {', '.join(matched_tags)} "
+                     f"{'is a tag' if len(matched_tags) == 1 else 'are tags'} "
+                     f"on this person's notes, not text inside them, so "
+                     f"notes on this subject exist and this search could "
+                     f"not see them.")
         return {
             "results": [],
             "no_matches": True,
+            "method": method,
             "chunks_indexed": total,
             "tags_available": tags,
-            "note": ("Nothing matched. Say that the documents and notes do not "
-                     "cover this, rather than answering from general knowledge."),
+            "tags_matching_query": matched_tags,
+            "note": note,
         }
 
     return {
