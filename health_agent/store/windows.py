@@ -132,6 +132,12 @@ class SideSummary:
     # The verdict does not read it: how few samples is too few is a judgment,
     # and this block states numbers.
     sample_depth: dict | None = None
+    # Which devices recorded this side, and how many of its periods held
+    # more than one. Read off the series rather than dropped: a comparison
+    # whose two sides came from different devices was reported comparable
+    # with no device named anywhere.
+    sources_seen: tuple = ()
+    multi_source_periods: int = 0
     # The range asked for, beside the bucketed span in `first` and `last`,
     # which is clipped to it.
     window_start: str | None = None
@@ -485,10 +491,23 @@ def _summarize(conn, series, spec: SeriesSpec, start: str, end: str,
         units_seen=tuple(sorted(seen)),
         unit_mixed=mixed,
         counted=counted,
-        counted_n=sum(getattr(p, "n", 0) or 0 for p in series.points),
+        counted_n=_counted_records(series),
         sample_depth=_side_depth(series.points),
         window_start=start, window_end=end,
-        coverage=coverage)
+        coverage=coverage,
+        sources_seen=tuple(getattr(series, "sources_seen", ()) or ()),
+        multi_source_periods=int(getattr(series, "multi_source_periods", 0) or 0))
+
+
+def _counted_records(series) -> int:
+    """The records behind the side's figures: on a metric series, each
+    period's attributed device's own count, by the same rule the tool
+    payload uses, so "6,000 steps, 5 records" cannot be printed where 5
+    counts a second device whose figure was not taken."""
+    if getattr(series, "agg", None) is None:
+        return sum(getattr(p, "n", 0) or 0 for p in series.points)
+    return sum(queries.point_attribution(p, series.agg, series.combine)[1]
+               for p in series.points)
 
 
 def _side_depth(points) -> dict | None:
@@ -791,6 +810,16 @@ def _verdict(left: SideSummary, right: SideSummary, *,
         "left_units_seen": left.units_seen,
         "right_units_seen": right.units_seen,
         "left_coverage": left.coverage, "right_coverage": right.coverage,
+        "left_sources": list(left.sources_seen),
+        "right_sources": list(right.sources_seen),
+        "left_multi_source_periods": left.multi_source_periods,
+        "right_multi_source_periods": right.multi_source_periods,
+        # True when a device recorded one side and not the other. A change
+        # of device can move the level on its own, so the verdict's reason
+        # says so when it applies.
+        "devices_differ": bool(left.sources_seen and right.sources_seen
+                               and set(left.sources_seen)
+                               != set(right.sources_seen)),
     }
     if sample_counts:
         block[f"left_{left.counted}"] = left.counted_n
@@ -878,7 +907,32 @@ def _verdict(left: SideSummary, right: SideSummary, *,
 
     return {**block, "verdict": "ok",
             "because": "both sides carry values in the same unit over enough "
-                       "periods, and their ranges overlap"}
+                       "periods, and their ranges overlap"
+                       + _device_clause(left, right, names)}
+
+
+def _device_clause(left: SideSummary, right: SideSummary,
+                   names: tuple) -> str:
+    """The devices behind each side, said when they are not the same set or
+    when a side blended or chose between devices in some period."""
+    differ = (left.sources_seen and right.sources_seen
+              and set(left.sources_seen) != set(right.sources_seen))
+    multi = left.multi_source_periods or right.multi_source_periods
+    if not differ and not multi:
+        return ""
+    parts = []
+    if differ:
+        parts.append(f"the {names[0]} side was measured by "
+                     f"{', '.join(left.sources_seen)} and the {names[1]} side "
+                     f"by {', '.join(right.sources_seen)}, and a change of "
+                     f"device can move the level on its own")
+    for name, side in zip(names, (left, right)):
+        if side.multi_source_periods:
+            parts.append(f"{_count(side.multi_source_periods, 'periods')} on "
+                         f"the {name} side had more than one device "
+                         f"({', '.join(side.sources_seen)}) and the figure "
+                         f"shown is one device's or a blend of them")
+    return "; " + "; ".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -948,9 +1002,14 @@ def _side_line(name: str, side: SideSummary, spec: SeriesSpec | None) -> str:
     named = " with no unit named" if side.unit == UNLABELLED else ""
     tail = (f", {_count(side.empty_periods, 'periods')} with no data."
             if side.empty_periods else ".")
+    # "measured by", not "recorded by": the eval's gap scorer looks for
+    # "no ... recorded", and "no unit named ... recorded by" would hand the
+    # model the scorer's own words (tests/test_scorer_contract.py).
+    by = (f", measured by {', '.join(side.sources_seen)}"
+          if side.sources_seen else "")
     return (f"{name}: {span}{basis}, median {side.median:g}{unit}{named}, "
             f"range {side.min:g} to {side.max:g}{unit}"
-            + _depth_clause(side) + tail)
+            + _depth_clause(side) + by + tail)
 
 
 def render(comparison: Comparison) -> str:

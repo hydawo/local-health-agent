@@ -728,6 +728,8 @@ def _side_payload(summary, *, sample_counts: bool = False) -> dict:
         # workout side counts workouts, and "samples" named neither.
         "counted": summary.counted,
         "coverage": summary.coverage,
+        "sources": list(summary.sources_seen),
+        "multi_source_periods": summary.multi_source_periods,
     }
     if sample_counts:
         out[summary.counted] = summary.counted_n
