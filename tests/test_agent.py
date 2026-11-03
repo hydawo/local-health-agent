@@ -298,6 +298,28 @@ def test_query_healthkit_warns_about_multiple_devices(ctx):
     assert "double-counts" in result["multi_source_warning"]
 
 
+def test_an_unknown_metric_name_is_an_error_with_suggestions_not_no_data(ctx):
+    """Sweep finding B6. A name the registry does not know ("blood pressure",
+    "bp") was wrapped as an unregistered identifier and came back as "There
+    is no blood pressure data in this index at all", while the index held
+    systolic and diastolic under their registered names. The CLI already
+    prints suggestions on this path; the tool did not. An unknown name is
+    now an `unknown_metric` error naming what it might have meant, distinct
+    from a zero-coverage answer about a metric that exists."""
+    for name in ("blood pressure", "bp", "blood-pressure-systolic"):
+        result = tools.dispatch(ctx, "query_healthkit", {"metric": name})
+        assert result.get("error") == "unknown_metric", (name, result)
+        assert "no_data_in_range" not in result, name
+        assert "systolic" in result["did_you_mean"], (name, result)
+        assert "diastolic" in result["did_you_mean"], (name, result)
+        assert "not a metric name" in result["note"], result["note"]
+    # A registered metric the index does not hold is still a coverage answer,
+    # not an error: that is the other half of the distinction.
+    result = tools.dispatch(ctx, "query_healthkit", {"metric": "vo2max"})
+    assert "error" not in result
+    assert result["no_data_in_range"] is True
+
+
 def test_missing_data_returns_coverage_not_emptiness(ctx):
     """Absence is data. Without the coverage fields a model will reach for the
     nearest numbers it can see and present them as an answer."""

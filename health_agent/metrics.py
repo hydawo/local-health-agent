@@ -21,6 +21,8 @@ correct default aggregation for the common ones.
 
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from enum import Enum
 
@@ -203,6 +205,17 @@ def suggest(name: str, limit: int = 5) -> list[Metric]:
     for metric in REGISTRY:
         haystack = " ".join((metric.identifier, metric.label, *metric.aliases)).lower()
         if key in haystack:
+            out.append(metric)
+        if len(out) >= limit:
+            break
+    if out:
+        return out
+    # The whole phrase missed ("blood-pressure-systolic"): try its words,
+    # so a name built from registered words still points at them.
+    words = [w for w in re.split(r"[\s\-/]+", key) if len(w) > 2]
+    for metric in REGISTRY:
+        haystack = " ".join((metric.identifier, metric.label, *metric.aliases)).lower()
+        if any(w in haystack for w in words):
             out.append(metric)
         if len(out) >= limit:
             break

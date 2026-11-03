@@ -109,6 +109,30 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
         return {"error": "metric is required"}
 
     metric = metrics.resolve(name)
+    if metrics.lookup(name) is None and not queries.type_coverage(
+            ctx.conn, metric.identifier)[0]:
+        # A name the registry does not know and the index does not hold is
+        # not a metric with no data, it is a name that resolved to nothing.
+        # "blood pressure" came back as "There is no blood pressure data in
+        # this index at all" while systolic and diastolic sat under their
+        # registered names. The CLI prints suggestions here; so does this.
+        close = [m.aliases[0] if m.aliases else m.identifier
+                 for m in metrics.suggest(name)]
+        held = [t["type"] for t in queries.list_types(
+            ctx.conn, search=name.split()[0].lower(), limit=5)] if name.split() else []
+        return {
+            "error": "unknown_metric",
+            "metric_requested": name,
+            "did_you_mean": close,
+            "similar_types_in_index": held,
+            "note": (
+                f"{name!r} is not a metric name this tool knows, so nothing "
+                f"was looked up and nothing can be said about whether the "
+                f"data exists. did_you_mean lists registered names that "
+                f"resemble it; the inventory in the system prompt lists what "
+                f"the index holds."
+            ),
+        }
     if metric.identifier == "HKCategoryTypeIdentifierSleepAnalysis":
         return _query_sleep(ctx, args)
     period = (args.get("period") or "day").lower()
