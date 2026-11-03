@@ -1663,10 +1663,13 @@ def test_the_report_names_the_questions_those_columns_do_not_measure():
     args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
     rows = [_row("Q20"), _row("Q22", number_scored=False, tools_scored=False)]
     report = render(rows, 60.0, args)
-    assert "correct number actually scored: 1/2 draws (Q22 has no value to "
-    assert "correct number actually scored: 1/2" in report
-    assert "expected tools actually scored: 1/2" in report
-    assert "Q22" in report
+    # Sweep finding D1: this line was a bare string literal with no `in
+    # report`, which is always true, and its wording was stale against what
+    # the report prints. It asserts the full line now.
+    assert ("correct number actually scored: 1/2 draws (nothing to check on "
+            "Q22)") in report
+    assert ("expected tools actually scored: 1/2 draws (nothing to check on "
+            "Q22)") in report
 
 
 def test_the_four_tools_added_are_each_the_only_route_to_the_answer():
