@@ -971,7 +971,11 @@ def metric_series(
         per_source: dict[str, float] = {}
         for src, acc in by_source.items():
             per_source[src or "(unknown)"] = _source_value(acc, agg)
-        if len(by_source) > 1 and agg in ADDITIVE:
+        # Any aggregate: an average blended from two devices is presented
+        # as one measurement just as surely as a sum is doubled by them.
+        # Counting additive aggregates only left the default aggregate for
+        # every discrete metric with no warning at all.
+        if len(by_source) > 1:
             multi_source += 1
         value = _combine(by_source, agg, combine)
         total_n = sum(acc["n"] for acc in by_source.values())

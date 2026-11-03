@@ -212,12 +212,18 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
             f"window rather than the whole history."
         )
     if result.multi_source_periods and not args.get("source"):
+        if result.agg in queries.ADDITIVE:
+            how = ("Values shown take the largest single source rather than "
+                   "adding devices together, because summing overlapping "
+                   "devices double-counts. Mention this if the total matters.")
+        else:
+            how = ("Values shown for those periods are a sample-weighted "
+                   "blend of the devices, not one device's measurement, and "
+                   "the devices may not agree. Say which devices contributed "
+                   "rather than presenting the figure as one reading.")
         payload["multi_source_warning"] = (
             f"{result.multi_source_periods} period(s) had more than one recording "
-            f"device ({', '.join(result.sources_seen)}). Values shown take the "
-            f"largest single source rather than adding devices together, because "
-            f"summing overlapping devices double-counts. Mention this if the "
-            f"total matters."
+            f"device ({', '.join(result.sources_seen)}). {how}"
         )
     if len(result.units_seen) > 1:
         # Said in words, because one of these can be the unlabelled sentinel

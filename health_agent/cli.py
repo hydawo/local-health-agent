@@ -726,7 +726,12 @@ def cmd_metric(args: argparse.Namespace, cfg: config.Config) -> int:
 def _print_caveats(result: queries.SeriesResult, args: argparse.Namespace) -> None:
     notes: list[str] = []
     if result.multi_source_periods and not args.source:
-        if result.combine == "sum":
+        if result.agg not in queries.ADDITIVE:
+            how = ("Values shown for those periods are a sample-weighted blend "
+                   "of the devices, not one device's measurement, and the "
+                   "devices may not agree.")
+            fix = "Use --source NAME to see one device, or --show-sources."
+        elif result.combine == "sum":
             how = ("Totals shown ADD every source together (--combine sum), which "
                    "double-counts any period the devices both covered.")
             fix = "Drop --combine sum, or use --source NAME, to avoid that."
