@@ -218,6 +218,122 @@ def test_a_paraphrased_diagnosis_slips_through():
 
 
 # --------------------------------------------------------------------------- #
+# The negative form (sweep finding A1)
+# --------------------------------------------------------------------------- #
+
+# A sentence that tells the person what they do NOT have. No index in this
+# project can support one of these: an absence from the records that were
+# read is not an absence from the person. Each must be flagged.
+NEGATIVE_CLAIMS = [
+    "You have not been diagnosed with hypertension.",
+    "You haven't been diagnosed with anything of concern.",
+    "You have never been diagnosed with diabetes.",
+    "You were never diagnosed with hypothyroidism.",
+    "You have no history of diabetes.",
+    "You have no known history of heart disease.",
+    "You do not have a history of kidney disease.",
+    "You have no record of anemia.",
+    "You are not allergic to penicillin.",
+    "You aren't allergic to any medications.",
+    "You have no known allergies.",
+    "You do not have a penicillin allergy.",
+    "You do not have anemia.",
+    "You don't have diabetes.",
+    "You no longer have hypertension.",
+    "You have no vitamin D deficiency.",
+    "You are not diabetic.",
+    "You aren't hypertensive.",
+    "You are not deficient in iron.",
+    "Based on these values, you do not have prediabetes.",
+    # Reading values as proof of an absence is the mirror of reading them as
+    # proof of a condition, and is flagged with or without a source named.
+    "Your results indicate that you do not have insulin resistance.",
+    "These numbers show you don't have metabolic syndrome.",
+    "Your labs confirm that you do not have anemia.",
+]
+
+# A negative that names the record source it read is a report of that
+# source, which is the one thing a negative can legitimately be. Each must
+# pass.
+SOURCED_NEGATIVES = [
+    "Your allergy list does not include penicillin.",
+    "There is no record of a hypertension diagnosis in your clinical notes.",
+    "Your medication list does not include a statin.",
+    "Your problem list does not include diabetes.",
+    "Your clinical records do not have a diabetes diagnosis in them.",
+    "You have no history of diabetes in your clinical records.",
+    "Your notes show you have not been diagnosed with hypertension.",
+    "According to your chart, you have not been diagnosed with anemia.",
+    "The records list no penicillin allergy, so you are not allergic to "
+    "penicillin as far as these files show.",
+    "Nothing in your export mentions a thyroid condition.",
+]
+
+
+def _diagnosis(flags):
+    return [f for f in flags if f.category is Category.DIAGNOSIS]
+
+
+@pytest.mark.parametrize("text", NEGATIVE_CLAIMS)
+def test_a_negative_claim_with_no_source_named_is_flagged(text):
+    flags = _diagnosis(guardrail.check(text, used_tools=True))
+    assert flags, f"not flagged: {text!r}"
+
+
+@pytest.mark.parametrize("text", SOURCED_NEGATIVES)
+def test_a_negative_that_names_the_record_source_is_not_flagged(text):
+    flags = [f for f in guardrail.check(text, used_tools=True)
+             if f.category is not Category.REFUSAL]
+    assert flags == [], f"false positive on {text!r}: {[str(f) for f in flags]}"
+
+
+def test_the_source_must_be_named_in_the_same_sentence():
+    """A citation is a property of the sentence, not the turn: naming the
+    allergy list in one sentence does not vouch for a bare denial in the next.
+    """
+    text = ("Your allergy list does not include penicillin. "
+            "You are not allergic to penicillin.")
+    flags = _diagnosis(guardrail.check(text, used_tools=True))
+    assert len(flags) == 1
+    assert "not allergic" in flags[0].excerpt
+
+
+def test_a_negative_claim_is_serious_enough_to_trigger_a_rewrite():
+    seen = []
+
+    def rewrite(instruction):
+        seen.append(instruction)
+        return "Your clinical notes do not mention hypertension."
+
+    text, result = guardrail.apply("You have not been diagnosed with hypertension.",
+                                   tools_used=["search_records"], rewrite=rewrite)
+    assert result.rewritten
+    assert seen and "denies" in seen[0]
+    assert "clinical notes" in text
+
+
+@pytest.mark.parametrize("text", SAFE_PHRASES + [
+    # Negations that are not about the person's health.
+    "You do not have any lab reports from 2024 in this index.",
+    "You have no workouts logged in March.",
+    "You have not uploaded a FHIR export.",
+    "You are not out of range on any analyte in the latest report.",
+    # The positive patterns must keep firing.
+    "You have hypertension.",
+])
+def test_the_negative_patterns_do_not_fire_on_ordinary_reporting(text):
+    flags = [f for f in guardrail.check(text, used_tools=True)
+             if f.category is Category.DIAGNOSIS and "denies" in f.label]
+    assert flags == [], f"false positive on {text!r}: {[str(f) for f in flags]}"
+
+
+def test_the_positive_patterns_are_unchanged_by_the_negative_ones():
+    for text, category in UNSAFE_PHRASES:
+        flags = guardrail.check(text)
+        assert category in {f.category for f in flags}, text
+
+
+# --------------------------------------------------------------------------- #
 # uncited_medical_claim
 # --------------------------------------------------------------------------- #
 
