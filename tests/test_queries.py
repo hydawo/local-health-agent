@@ -103,6 +103,57 @@ def test_source_filter(ingested):
     assert result.multi_source_periods == 0
 
 
+def _two_device_index(tmp_path, records):
+    """records: (type, unit, source, date, value). Every value invented."""
+    body = "".join(
+        f' <Record type="HKQuantityTypeIdentifier{t}" sourceName="{src}" '
+        f'unit="{u}" creationDate="{d} 08:05:00 -0500" '
+        f'startDate="{d} 08:00:00 -0500" endDate="{d} 08:00:00 -0500" '
+        f'value="{v}"/>\n' for t, u, src, d, v in records)
+    export = tmp_path / "export.xml"
+    export.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n'
+        ' <ExportDate value="2026-06-30 09:00:00 -0400"/>\n'
+        f'{body}</HealthData>\n')
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    healthkit.ingest_file(conn, export)
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+    return conn
+
+
+def test_two_devices_on_an_averaged_metric_are_counted_as_multi_source(tmp_path):
+    """Sweep finding C2, issue 22's sibling. The multi-source counter only
+    ran for additive aggregates, and avg is the default for every discrete
+    metric, so a watch reading 62 and a ring reading 70 on one day came
+    back as 66.0 with multi_source_periods 0 and no warning anywhere. The
+    figure is not doubled, but a number blended from two devices was
+    presented as one measurement."""
+    from health_agent.agent import tools
+    conn = _two_device_index(tmp_path, [
+        ("RestingHeartRate", "count/min", "Synthetic Watch", "2026-03-02", "62"),
+        ("RestingHeartRate", "count/min", "Synthetic Ring", "2026-03-02", "70"),
+        ("RestingHeartRate", "count/min", "Synthetic Watch", "2026-03-03", "61"),
+    ])
+    result = series(conn, "resting-hr")
+    assert result.agg == "avg"
+    assert result.points[0].value == 66.0
+    assert result.points[0].per_source == {"Synthetic Watch": 62.0,
+                                           "Synthetic Ring": 70.0}
+    assert result.multi_source_periods == 1
+    assert result.sources_seen == ("Synthetic Ring", "Synthetic Watch")
+
+    ctx = tools.ToolContext(conn=conn, vector_path=tmp_path / "vectors")
+    payload = tools.dispatch(ctx, "query_healthkit", {"metric": "resting-hr"})
+    warning = payload["multi_source_warning"]
+    assert "Synthetic Ring" in warning and "Synthetic Watch" in warning
+    # The warning must describe what an average does, not what a sum does.
+    assert "largest single source" not in warning
+    assert "blend" in warning.lower()
+    conn.close()
+
+
 def test_single_source_days_are_unaffected(ingested):
     conn, _ = ingested
     result = series(conn, "steps", start="2026-03-03", end="2026-03-03")
@@ -123,6 +174,23 @@ def test_sleep_aggregates_by_duration_per_stage(ingested):
     assert by_key[("2026-03-05", "HKCategoryValueSleepAnalysisAsleepCore")] == 7200.0
     assert by_key[("2026-03-05", "HKCategoryValueSleepAnalysisAsleepDeep")] == 2700.0
     assert by_key[("2026-03-05", "HKCategoryValueSleepAnalysisAsleepREM")] == 2700.0
+
+
+@pytest.mark.parametrize("agg", ["sum", "avg"])
+def test_a_category_metric_has_no_sum_and_no_mean(ingested, agg):
+    """Sweep finding C1. The per-source accumulator started at sum 0.0 and
+    only added when a row carried a value, so a category metric, whose rows
+    carry none, summed to 0.0 and averaged to 0.0 / n. min and max were
+    None on the same rows. Three docstrings forbid a non-numeric value
+    quietly becoming 0.0; `health-agent metric sleep --agg sum` printed
+    0.00 for every stage, and the tool returned 0.0 beside "use this value
+    directly"."""
+    conn, _ = ingested
+    result = series(conn, "sleep", agg=agg)
+    assert result.points, "the fixture holds sleep rows"
+    assert all(p.value is None for p in result.points), [
+        (p.period, p.category, p.value) for p in result.points]
+    assert all(v is None for p in result.points for v in p.per_source.values())
 
 
 def test_a_night_two_devices_recorded_is_the_larger_one_not_the_sum(ingested):

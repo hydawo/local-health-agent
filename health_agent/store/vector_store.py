@@ -31,7 +31,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from ..logging_setup import get_logger
 
@@ -339,8 +339,10 @@ def semantic_search(conn: sqlite3.Connection, store: VectorStore,
 
 
 def keyword_search(conn: sqlite3.Connection, query: str, limit: int = 5,
-                   kind: str | None = None) -> list[SearchHit]:
-    """FTS5 fallback used when no embeddings exist for the active model."""
+                   kind: str | Sequence[str] | None = None) -> list[SearchHit]:
+    """FTS5 fallback used when no embeddings exist for the active model.
+
+    `kind` is one document kind or several; several means any of them."""
     match = _fts_query(query)
     if not match:
         return []
@@ -354,8 +356,9 @@ def keyword_search(conn: sqlite3.Connection, query: str, limit: int = 5,
     )
     params: list = [match]
     if kind:
-        sql += "AND d.kind = ? "
-        params.append(kind)
+        kinds = [kind] if isinstance(kind, str) else list(kind)
+        sql += f"AND d.kind IN ({','.join('?' * len(kinds))}) "
+        params.extend(kinds)
     sql += "ORDER BY rank LIMIT ?"
     params.append(limit)
 

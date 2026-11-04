@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime as _dt
 import json
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace as _replace
 from typing import Any
 
 from .. import labs, metrics
@@ -109,6 +109,30 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
         return {"error": "metric is required"}
 
     metric = metrics.resolve(name)
+    if metrics.lookup(name) is None and not queries.type_coverage(
+            ctx.conn, metric.identifier)[0]:
+        # A name the registry does not know and the index does not hold is
+        # not a metric with no data, it is a name that resolved to nothing.
+        # "blood pressure" came back as "There is no blood pressure data in
+        # this index at all" while systolic and diastolic sat under their
+        # registered names. The CLI prints suggestions here; so does this.
+        close = [m.aliases[0] if m.aliases else m.identifier
+                 for m in metrics.suggest(name)]
+        held = [t["type"] for t in queries.list_types(
+            ctx.conn, search=name.split()[0].lower(), limit=5)] if name.split() else []
+        return {
+            "error": "unknown_metric",
+            "metric_requested": name,
+            "did_you_mean": close,
+            "similar_types_in_index": held,
+            "note": (
+                f"{name!r} is not a metric name this tool knows, so nothing "
+                f"was looked up and nothing can be said about whether the "
+                f"data exists. did_you_mean lists registered names that "
+                f"resemble it; the inventory in the system prompt lists what "
+                f"the index holds."
+            ),
+        }
     if metric.identifier == "HKCategoryTypeIdentifierSleepAnalysis":
         return _query_sleep(ctx, args)
     period = (args.get("period") or "day").lower()
@@ -152,7 +176,13 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
             )
         return payload
 
-    points = result.points
+    # Each point says whose figure it is and how many of that device's
+    # records stand behind it. `p.n` counts every device's records, and
+    # beside one device's figure that is the wrong number (C5).
+    attributed = [(p, *queries.point_attribution(p, result.agg, result.combine))
+                  for p in result.points]
+    counted = [_replace(p, n=n) for p, _, n in attributed]
+    points = attributed
     truncated = False
     if len(points) > MAX_SERIES_POINTS:
         points = points[-MAX_SERIES_POINTS:]
@@ -171,11 +201,17 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
         # unreliable arithmetic engines, and a wrong number delivered fluently is
         # this project's worst failure mode — so any figure the model might
         # otherwise compute is precomputed and handed to it.
-        "overall": _overall(result.points, result.agg),
+        "overall": _overall(counted, result.agg),
         "points": [
-            {"period": p.period, "value": p.value, "samples": p.n,
-             **({"category": p.category} if p.category else {})}
-            for p in points
+            {"period": p.period, "value": p.value, "samples": n,
+             # Which device the figure is. None when it is a blend of
+             # several, in which case `sources` and `per_source` say what
+             # each one reported.
+             "source": src,
+             **({"category": p.category} if p.category else {}),
+             **({"sources": list(p.sources), "per_source": p.per_source}
+                if len(p.sources) > 1 else {})}
+            for p, src, n in points
         ],
         "available_from": result.available_from,
         "available_to": result.available_to,
@@ -188,12 +224,18 @@ def _query_healthkit(ctx: ToolContext, args: dict) -> dict:
             f"window rather than the whole history."
         )
     if result.multi_source_periods and not args.get("source"):
+        if result.agg in queries.ADDITIVE:
+            how = ("Values shown take the largest single source rather than "
+                   "adding devices together, because summing overlapping "
+                   "devices double-counts. Mention this if the total matters.")
+        else:
+            how = ("Values shown for those periods are a sample-weighted "
+                   "blend of the devices, not one device's measurement, and "
+                   "the devices may not agree. Say which devices contributed "
+                   "rather than presenting the figure as one reading.")
         payload["multi_source_warning"] = (
             f"{result.multi_source_periods} period(s) had more than one recording "
-            f"device ({', '.join(result.sources_seen)}). Values shown take the "
-            f"largest single source rather than adding devices together, because "
-            f"summing overlapping devices double-counts. Mention this if the "
-            f"total matters."
+            f"device ({', '.join(result.sources_seen)}). {how}"
         )
     if len(result.units_seen) > 1:
         # Said in words, because one of these can be the unlabelled sentinel
@@ -258,6 +300,23 @@ CITATION_NOTE = (
     "Every result above carries a `citation`. Reproduce it verbatim at least "
     "once for each report you draw on; in a table, give it a column. A date "
     "on its own is not a citation. " + SAME_SENTENCE_RULE
+)
+
+# Sweep finding B5. `out_of_range` is null for four different reasons, and a
+# null printed beside a value reads as "not flagged". `range_status` names
+# the reason; this note says what each name means so the model does not fill
+# the gap with "within range". Worded as statements, not directions: a
+# payload sentence outranks a prompt rule when the model is choosing its next
+# move, so nothing here tells it what to do.
+RANGE_STATUS_NOTE = (
+    "range_status compares each value with the reference range printed on "
+    "its own report. in_range and out_of_range are the result of that "
+    "comparison. no_printed_range means the report printed no range the "
+    "value could be compared with, so the value is neither in range nor out "
+    "of it, and a value with that status was never called normal by anyone. "
+    "not_numeric means the value is text and was compared with nothing. A "
+    "flag printed by the lab counts as out_of_range on its own, because the "
+    "flag is the lab's judgement."
 )
 
 # The literature tool's own note. A module-level constant rather than a literal
@@ -686,6 +745,8 @@ def _side_payload(summary, *, sample_counts: bool = False) -> dict:
         # workout side counts workouts, and "samples" named neither.
         "counted": summary.counted,
         "coverage": summary.coverage,
+        "sources": list(summary.sources_seen),
+        "multi_source_periods": summary.multi_source_periods,
     }
     if sample_counts:
         out[summary.counted] = summary.counted_n
@@ -978,6 +1039,7 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
                 "reference_range": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
+                "range_status": p.range_status,
                 "citation": p.citation,
                 "source": p.source,
                 **({"via_ocr": True} if p.via_ocr else {}),
@@ -988,6 +1050,7 @@ def _get_lab_trend(ctx: ToolContext, args: dict) -> dict:
     if truncated:
         payload["truncated"] = True
     payload["citation_note"] = CITATION_NOTE
+    payload["range_status_note"] = RANGE_STATUS_NOTE
     siblings = queries.panel_siblings(ctx.conn, trend.key)
     payload["other_analytes_in_this_panel"] = [s["analyte_key"] for s in siblings]
     # Coverage, stated as a fact and nothing more. The first version of this
@@ -1033,15 +1096,34 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
     requested = requested[:MAX_BATCH_ANALYTES]
 
     found: dict[str, dict] = {}
-    missing: list[str] = []
+    # Keyed by resolved analyte, each a coverage object. A bare list of
+    # names could not say whether the analyte was never tested, tested
+    # outside the window asked about, or a name the registry does not know
+    # and slugged silently, and "PSA and troponin were normal" is what a
+    # bare name under an out-of-range list invites.
+    missing: dict[str, dict] = {}
     flagged: list[dict] = []
+    windowed = bool(args.get("start_date") or args.get("end_date"))
 
     for name in requested:
         key, _ = labs.resolve_key(name)
         trend = queries.lab_trend(ctx.conn, key, start=args.get("start_date"),
                                   end=args.get("end_date"))
         if trend.is_empty:
-            missing.append(key)
+            if labs.lookup(name) is None and not trend.total_results:
+                reason = "unrecognised_name"
+            elif trend.total_results and windowed:
+                reason = "outside_requested_range"
+            else:
+                reason = "never_tested"
+            missing[key] = {
+                "requested_as": name,
+                "label": trend.label,
+                "reason": reason,
+                "total_results_for_analyte": trend.total_results,
+                "available_from": trend.available_from,
+                "available_to": trend.available_to,
+            }
             continue
         points = trend.points[-MAX_BATCH_POINTS:]
         found[key] = {
@@ -1054,6 +1136,7 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
                     "reference_range": p.ref_text,
                     "flag": p.flag,
                     "out_of_range": p.out_of_range,
+                    "range_status": p.range_status,
                     "citation": p.citation,
                     "source": p.source,
                     **({"via_ocr": True} if p.via_ocr else {}),
@@ -1076,12 +1159,30 @@ def _get_lab_trends_batch(ctx: ToolContext, names: list, args: dict) -> dict:
     payload: dict = {
         "analytes": found,
         "citation_note": CITATION_NOTE,
+        "range_status_note": RANGE_STATUS_NOTE,
         # Precomputed so the model doesn't have to scan every result itself and
         # risk missing one — the same principle as `overall` for time series.
         "out_of_range_on_latest_report": flagged,
+        # The denominator: "only LDL is out of range" is true of these
+        # analytes and of nothing else.
+        "latest_report_checked_for": sorted(found),
     }
     if missing:
         payload["no_results_for"] = missing
+        payload["no_results_note"] = (
+            "Each entry under no_results_for says why: never_tested means "
+            "the reports hold no result for it at all, "
+            "outside_requested_range means results exist on the dates "
+            "given, and unrecognised_name means the name was not one this "
+            "registry knows. None of them is a normal result.")
+    if not found:
+        payload["no_data"] = True
+        payload["analytes_present_in_reports"] = [
+            a["analyte_key"] for a in queries.list_analytes(ctx.conn, limit=60)]
+        payload["note"] = (
+            "None of the requested analytes has a result in the requested "
+            "range, so there is no latest report to judge. Say so. Do not "
+            "infer a value from a different analyte.")
     if truncated_list:
         payload["truncated_request"] = (
             f"Only the first {MAX_BATCH_ANALYTES} analytes were looked up.")
@@ -1129,13 +1230,36 @@ def _search_records(ctx: ToolContext, args: dict) -> dict:
             "SELECT COUNT(*) AS n FROM chunk").fetchone()["n"]
         tags = [r["tag"] for r in ctx.conn.execute(
             "SELECT DISTINCT tag FROM document_tag ORDER BY tag")]
+        matched_tags = queries.tags_matching(ctx.conn, query)
+        # A keyword miss is a fact about these words, not about the subject:
+        # "hypertension" misses a note reading "blood pressure on the high
+        # side of normal". Without `method` the model could not tell the
+        # two apart, and the note told it to say the notes do not cover it.
+        if method == "keyword":
+            note = (f"No indexed chunk contains the words {query!r}. This "
+                    f"was a word match, not a search by meaning, so the "
+                    f"notes may still cover the subject in other words. Say "
+                    f"that these words were not found, and try other wording "
+                    f"before saying the notes are silent on it, rather than "
+                    f"answering from general knowledge.")
+        else:
+            note = ("Nothing matched by meaning. Say that the documents and "
+                    "notes do not cover this, rather than answering from "
+                    "general knowledge.")
+        if matched_tags:
+            note += (f" {', '.join(matched_tags)} "
+                     f"{'is a tag' if len(matched_tags) == 1 else 'are tags'} "
+                     f"on this person's notes, not text inside them, so "
+                     f"notes on this subject exist and this search could "
+                     f"not see them.")
         return {
             "results": [],
             "no_matches": True,
+            "method": method,
             "chunks_indexed": total,
             "tags_available": tags,
-            "note": ("Nothing matched. Say that the documents and notes do not "
-                     "cover this, rather than answering from general knowledge."),
+            "tags_matching_query": matched_tags,
+            "note": note,
         }
 
     return {
@@ -1333,34 +1457,66 @@ _FACT_KIND_PLURAL = {v: k for k, v in _FACT_KIND_ARG.items()}
 # the tool takes "medications" and the fact table stores "medication", and
 # keying this on the argument made every call fall through to the whole
 # vocabulary instead of the relevant half.
+# Every kind the tool accepts has its own entry. An allergies question once
+# fell through to the union of the two entries that existed, searched for
+# "prescribed" and "diagnosis", and missed the note reading "Penicillin
+# (rash as a child)" while the payload said the notes had been retrieved.
 _NOTE_VOCABULARY = {
     "medication": "medication medications prescription prescribed taking dose mg",
     "condition": "diagnosed diagnosis condition conditions history",
+    "allergy": "allergy allergies allergic reaction rash hives intolerance",
+    "immunization": "immunization immunizations vaccine vaccines vaccinated "
+                    "vaccination shot booster",
+    "procedure": "procedure procedures surgery surgical operation biopsy "
+                 "scan removed",
 }
 MAX_NOTES_BESIDE = 5
+# What the person wrote down or photographed. Lab PDFs and FHIR records are
+# the other side of the two-source contract and have their own keys, so they
+# must not take these slots.
+_PERSONAL_NOTE_KINDS = ("note", "image")
 
 
 def _notes_beside_clinical(ctx: ToolContext, kind: str) -> list[dict]:
+    return notes_beside_clinical(ctx.conn, kind)
+
+
+def notes_beside_clinical(conn, kind: str) -> list[dict]:
     """Passages from this person's own notes and photographed lists that bear on
-    medications or conditions. Empty is a fact about the index, not a failure,
-    and the caller reports it as coverage either way."""
+    the kind asked about. Empty is a fact about the index, not a failure,
+    and the caller reports it as coverage either way.
+
+    Public, on a connection, so the CLI's `clinical` command runs the same
+    companion search the tool does and the two surfaces cannot disagree
+    about what the person's own notes hold.
+
+    One passage per document: a long note has sections on several of these
+    kinds, and without this its medication and condition sections took the
+    slots its allergy section should have had."""
     from ..store import vector_store
 
     terms = (_NOTE_VOCABULARY.get(kind) or
              " ".join(_NOTE_VOCABULARY.values()))
     try:
-        hits = vector_store.keyword_search(ctx.conn, terms,
-                                           limit=MAX_NOTES_BESIDE)
+        hits = vector_store.keyword_search(conn, terms,
+                                           limit=MAX_NOTES_BESIDE * 4,
+                                           kind=_PERSONAL_NOTE_KINDS)
     except Exception:  # pragma: no cover - a missing FTS table must not
         return []      # take down a clinical answer
-    return [
-        {
+    out: list[dict] = []
+    seen: set[int] = set()
+    for h in hits:
+        if h.document_id in seen:
+            continue
+        seen.add(h.document_id)
+        out.append({
             "citation": h.citation,
             "kind": h.kind,
             "text": " ".join(h.text.split())[:MAX_SNIPPET_CHARS],
-        }
-        for h in hits
-    ]
+        })
+        if len(out) == MAX_NOTES_BESIDE:
+            break
+    return out
 
 
 def _attach_personal_notes(ctx: ToolContext, payload: dict, kind: str) -> dict:
@@ -1537,11 +1693,34 @@ def _get_clinical_vitals(ctx: ToolContext, args: dict) -> dict:
                     default=None)
         last = max((m["last"] for m in metrics_available if m["last"]),
                    default=None)
-        what = f"clinician-measured {metric}" if metric else "clinician-measured vitals"
-        payload["note"] = (
-            f"No {what} in the requested range. The index does hold "
-            f"{', '.join(m['metric_key'] for m in metrics_available)}, "
-            f"from {first} to {last}. Say what is absent.")
+        held_list = ", ".join(m["metric_key"] for m in metrics_available)
+        # A vital never in the feed and a vital recorded outside the window
+        # asked about are different absences, and one sentence for both
+        # invited "no clinician has recorded your blood pressure" about a
+        # vital the window excluded.
+        held = next((m for m in metrics_available
+                     if metric and m["metric_key"] == labs.slug(metric)), None)
+        payload["no_data_in_range"] = True
+        payload["requested_metric_held"] = held is not None
+        payload["requested_metric_coverage"] = (
+            {"n": held["n"], "first": held["first"], "last": held["last"]}
+            if held else None)
+        if held:
+            payload["note"] = (
+                f"No clinician-measured {metric} in the requested range, "
+                f"but it exists outside it: {held['n']} reading(s) from "
+                f"{held['first']} to {held['last']}. Say that, and give "
+                f"that range; do not say it was never recorded.")
+        elif metric:
+            payload["note"] = (
+                f"Clinician-measured {metric} was never recorded in these "
+                f"clinical records, in any period. The index does hold "
+                f"{held_list}, from {first} to {last}. Say what is absent.")
+        else:
+            payload["note"] = (
+                f"No clinician-measured vitals in the requested range. The "
+                f"index does hold {held_list}, from {first} to {last}. Say "
+                f"what is absent.")
     return payload
 
 
@@ -1902,8 +2081,20 @@ def serialize(payload: dict) -> str:
 # Data inventory for the system prompt
 # --------------------------------------------------------------------------- #
 
+def _capped(items: list, cap: int) -> tuple[list, int]:
+    """(the first `cap` items, how many were left off).
+
+    Every inventory list is capped, and the prompt says anything not listed
+    is not available. Without the count those two facts made a false
+    statement: an analyte tested once sorts last, fell off a capped list
+    with no marker, and could be reported as absent before any tool call.
+    """
+    return items[:cap], max(0, len(items) - cap)
+
+
 def data_inventory(conn, *, max_metrics: int = 25,
-                   max_analytes: int = 30) -> dict:
+                   max_analytes: int = 30, max_tags: int = 25,
+                   max_vitals: int = 25) -> dict:
     """A compact description of what this index actually contains.
 
     Injected into the system prompt rather than exposed as a fourth tool. A model
@@ -1911,34 +2102,44 @@ def data_inventory(conn, *, max_metrics: int = 25,
     failed lookup, and sometimes answer about a metric the user doesn't track.
     Telling it up front costs a few hundred tokens once and removes that whole
     failure class.
+
+    Each list is cut at its cap and carries an `<name>_and_more` count of
+    what was left off, so a capped list cannot read as a complete one.
     """
     summary = queries.index_summary(conn)
     notes = queries.note_summary(conn)
     docs = queries.document_summary(conn)
 
     metric_names = []
-    for row in queries.list_types(conn, limit=max_metrics):
+    for row in queries.list_types(conn):
         metric = metrics.lookup(row["type"])
         metric_names.append(metric.aliases[0] if metric and metric.aliases
                             else row["type"])
+    metric_names, metrics_more = _capped(metric_names, max_metrics)
 
-    analytes = [a["analyte_key"] for a in
-                queries.list_analytes(conn, limit=max_analytes)]
-    tags = [t["tag"] for t in queries.list_tags(conn, limit=25)]
+    # `list_analytes` groups by panel too, so one key can appear twice.
+    analytes = list(dict.fromkeys(
+        a["analyte_key"] for a in queries.list_analytes(conn)))
+    analytes, analytes_more = _capped(analytes, max_analytes)
+    tags, tags_more = _capped([t["tag"] for t in queries.list_tags(conn)],
+                              max_tags)
     holdings = queries.clinical_holdings(conn)
     clinical = holdings["facts"]
-    vital_metrics = holdings["vital_metrics"]
+    vital_names, vitals_more = _capped(
+        [m["metric_key"] for m in holdings["vital_metrics"]], max_vitals)
 
     return {
         "healthkit": {
             "records": summary["records"],
             "date_range": [summary["first_date"], summary["last_date"]],
             "metrics_available": metric_names,
+            "metrics_and_more": metrics_more,
         },
         "labs": {
             "reports": docs["documents"],
             "date_range": [docs["doc_first"], docs["doc_last"]],
             "analytes_available": analytes,
+            "analytes_and_more": analytes_more,
         },
         "notes": {
             "count": notes["notes"],
@@ -1948,12 +2149,14 @@ def data_inventory(conn, *, max_metrics: int = 25,
             "images": notes["images"],
             "date_range": [notes["first"], notes["last"]],
             "tags": tags,
+            "tags_and_more": tags_more,
         },
         # Records a health system sent back through the export, as distinct
         # from anything this person typed and from anything their watch
         # recorded. Named here so the model does not guess whether they exist.
         # Every clinical kind the index holds, not just the facts: the system
-        # prompt appends "Anything not listed above is not available", so a
+        # prompt says anything not listed is not available (where no list is
+        # cut short), so a
         # block that omitted the labs and note references would turn this into
         # a false statement about the person's own records.
         "clinical": {
@@ -1964,6 +2167,7 @@ def data_inventory(conn, *, max_metrics: int = 25,
             "clinician_vitals": holdings["vitals"],
             "note_references": holdings["note_references"],
             "date_range": [holdings["first"], holdings["last"]],
-            "vital_metrics_available": [m["metric_key"] for m in vital_metrics[:25]],
+            "vital_metrics_available": vital_names,
+            "vital_metrics_and_more": vitals_more,
         },
     }

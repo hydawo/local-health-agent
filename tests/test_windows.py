@@ -345,6 +345,94 @@ def test_a_source_exclusion_reaches_the_series_and_is_named_when_it_empties_a_si
 # The verdict
 # --------------------------------------------------------------------------- #
 
+def test_a_comparison_names_the_devices_on_each_side(box):
+    """Sweep finding C6. `SideSummary` was built from `point.value` alone:
+    the devices seen, the multi-source period count and the per-source
+    figures were never read, and `counted_n` summed every device's
+    records. A comparison whose before and after came from different
+    devices was reported comparable: ok with no device named anywhere,
+    and the CLI printed "6,000 count | 5 records" where 6,000 was one
+    device's figure and 5 both devices' records."""
+    for day, value in (("2023-01-01", 60.0), ("2023-01-02", 61.0),
+                       ("2023-01-03", 60.0), ("2023-01-04", 62.0)):
+        _daily(box, date=day, value=value, source="Phone")
+    for day, value in (("2024-01-01", 61.0), ("2024-01-02", 63.0),
+                       ("2024-01-03", 62.0), ("2024-01-04", 61.0)):
+        _daily(box, date=day, value=value, source="Watch")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr"),
+        left=("2023-01-01", "2023-01-31"), right=("2024-01-01", "2024-01-31"))
+    assert comparison.left.sources_seen == ("Phone",)
+    assert comparison.right.sources_seen == ("Watch",)
+    block = comparison.comparable
+    assert block["left_sources"] == ["Phone"]
+    assert block["right_sources"] == ["Watch"]
+    assert block["devices_differ"] is True
+    assert "Phone" in block["because"] and "Watch" in block["because"]
+    text = windows.render(comparison)
+    assert "Phone" in text and "Watch" in text
+
+    # The same device on both sides is not flagged.
+    same = windows.compare(
+        box, spec=windows.SeriesSpec(metric="resting-hr",
+                                     source_exclude=("Phone",)),
+        left=("2024-01-01", "2024-01-02"), right=("2024-01-03", "2024-01-04"))
+    assert same.comparable["devices_differ"] is False
+    assert "Phone" not in same.comparable["because"]
+
+
+def test_a_multi_source_period_counts_the_attributed_devices_records(box):
+    """Steps on one day from a watch (3 records, 6000) and a phone (2
+    records, 5500): the figure is the watch's, so the records behind it are
+    the watch's 3, not 5."""
+    steps = "HKQuantityTypeIdentifierStepCount"
+    for src, n, total in (("Watch", 3, 6000.0), ("Phone", 2, 5500.0)):
+        box.execute(
+            "INSERT INTO daily_metric(local_date, type, source_name, unit, n, "
+            "sum_value, avg_value, min_value, max_value) "
+            "VALUES('2024-03-02', ?, ?, 'count', ?, ?, ?, ?, ?)",
+            (steps, src, n, total, total / n, total / n, total / n))
+    _daily(box, date="2024-03-03", value=8500.0, metric_type=steps,
+           unit="count", source="Watch")
+    box.commit()
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(metric="steps"),
+        left=("2024-03-02", "2024-03-02"), right=("2024-03-03", "2024-03-03"))
+    assert comparison.left.multi_source_periods == 1
+    assert comparison.left.sources_seen == ("Phone", "Watch")
+    assert comparison.left.counted_n == 3
+    assert comparison.right.counted_n == 1
+    assert "Phone" in windows.render(comparison)
+
+
+def test_an_activity_pattern_matching_several_activities_names_them_all(box):
+    """Sweep finding C7. `_held` named the first matched row's activity
+    while the count summed every activity the substring matched, so
+    `--activity ing` over a run and a ride printed "the index holds 2
+    workouts of Cycling". The same shape as the "Cycling nope" label bug
+    fixed in the duration work."""
+    _ride(box, date="2024-03-01", key=b"c1")
+    _ride(box, date="2024-03-02", key=b"r1",
+          activity="HKWorkoutActivityTypeRunning")
+    comparison = windows.compare(
+        box, spec=windows.SeriesSpec(activity="ing"),
+        left=("2024-03-01", "2024-03-31"), right=("2025-03-01", "2025-03-31"))
+    asked = comparison.right.coverage["held"]["activity_asked"]
+    assert asked["workouts"] == 2
+    assert asked["activity"] is None, "two activities matched, not one"
+    assert asked["activities"] == [{"activity": "Cycling", "workouts": 1},
+                                   {"activity": "Running", "workouts": 1}]
+    text = windows.render(comparison)
+    assert "workouts of Cycling" not in text
+    assert "Cycling" in text and "Running" in text
+    # One activity matched is still named as that activity.
+    one = windows.compare(
+        box, spec=windows.SeriesSpec(activity="Cycl"),
+        left=("2024-03-01", "2024-03-31"), right=("2025-03-01", "2025-03-31"))
+    asked = one.right.coverage["held"]["activity_asked"]
+    assert asked["activity"] == "Cycling" and asked["workouts"] == 1
+
+
 def test_two_windows_whose_ranges_never_overlap_are_not_comparable(box):
     """T7: the pace ranges never overlap, so no like-for-like comparison is
     available. A rule, not a judgment."""

@@ -94,6 +94,79 @@ def test_returned_to_range_is_a_signal():
     assert signal.evidence["previous"]["value"] == 5.7
 
 
+def _text_point(date, text, flag=None, low=None, high=None, unit="mg/dL"):
+    """A result the lab printed as text: ">500", "see comment"."""
+    p = _point(date, None, low, high, flag, unit=unit)
+    p.value_text = text
+    return p
+
+
+def test_a_newer_text_valued_result_is_the_latest_one():
+    """Sweep finding B2. The signal picked "latest" from the numeric points
+    only, so a triglycerides history ending in ">500" flagged H rendered as
+    "It was 180 flagged H, and 120 inside the printed range" with the
+    ">500" nowhere on the sheet. A clinician sheet reading "returned to
+    range" over a result the lab could not even number is the worst
+    sentence this module can print, and no prompt rule reaches it.
+    """
+    trend = _trend(_point("2025-03-04", 180, 0, 150, "H"),
+                   _point("2025-09-12", 120, 0, 150),
+                   _text_point("2026-03-10", ">500", "H", 0, 150),
+                   key="triglycerides", label="Triglycerides")
+    (signal,) = visit_prep.lab_signals_for(trend)
+    assert signal.kind == "lab_out_of_range"
+    assert signal.evidence["latest"]["date"] == "2026-03-10"
+    assert signal.evidence["latest"]["value_text"] == ">500"
+    text = visit_prep.render(_sheet_with(signal))
+    assert ">500" in text
+    assert "returned" not in text.lower()
+    assert "inside the printed range" not in text
+    assert guardrail.check(text, used_tools=True) == []
+
+
+def test_an_unflagged_text_result_cannot_be_called_in_range():
+    """"see comment" with no flag, newer than an out-of-range value: the
+    sheet cannot say the analyte returned to range, and it cannot say it is
+    near a limit, because the newest result is not a number."""
+    returned = _trend(_point("2025-03-04", 180, 0, 150, "H"),
+                      _text_point("2026-03-10", "see comment", None, 0, 150))
+    assert visit_prep.lab_signals_for(returned) == []
+    near = _trend(_point("2025-03-04", 80, 0, 99),
+                  _point("2025-09-12", 92, 0, 99),
+                  _text_point("2026-03-10", "see comment", None, 0, 99))
+    assert visit_prep.lab_signals_for(near) == []
+
+
+def test_two_sources_disagreeing_on_one_draw_are_not_a_trend():
+    """Sweep finding C3. `lab_signals_for` sorted on the date alone, so a
+    PDF reading of 130 and a FHIR reading of 160 for the same draw became
+    "latest" and "previous": "It was 160 on 2026-03-10, up from 130 on
+    2026-03-10". Reverse the insert order and the sheet said the opposite.
+    `lab_trend` keeps both rows and reports the disagreement; the sheet
+    never read it. Now the draw is reported as two records that disagree,
+    whichever order they arrive in."""
+    from dataclasses import replace
+    pdf = replace(_point("2026-03-10", 130, 0, 99, "H"), source="pdf")
+    fhir = replace(_point("2026-03-10", 160, 0, 99, "H"), source="fhir",
+                   path="/r/clinical-records/Observation-1.json", page_no=0)
+    older = _point("2025-09-12", 120, 0, 99, "H")
+    for order in ((older, pdf, fhir), (older, fhir, pdf)):
+        (signal,) = visit_prep.lab_signals_for(_trend(*order))
+        assert signal.kind == "lab_sources_disagree", order
+        text = visit_prep.render(_sheet_with(signal))
+        assert "130" in text and "160" in text
+        assert "up from" not in text and "down from" not in text
+        assert "disagree" in text.lower()
+        assert guardrail.check(text, used_tools=True) == []
+    # An earlier draw that two records disagree on is not silently taken as
+    # "previous" either: the signal says so.
+    newer = _point("2026-06-01", 140, 0, 99, "H")
+    (signal,) = visit_prep.lab_signals_for(_trend(older, pdf, fhir, newer))
+    assert signal.kind == "lab_out_of_range"
+    text = visit_prep.render(_sheet_with(signal))
+    assert "2026-03-10" in text and "disagree" in text.lower()
+
+
 def test_near_limit_needs_proximity_and_movement_toward_it():
     # 0-99 range, span 99, 10% is 9.9: inside the band and rising -> signal
     rising = _trend(_point("2025-09-12", 80, 0, 99), _point("2026-03-10", 92, 0, 99))
@@ -243,7 +316,7 @@ def test_a_second_sleep_device_is_not_a_change_in_sleep(tmp_path):
     sqlite_schema.rebuild_daily_metrics(conn)
     conn.commit()
 
-    label, unit, values = visit_prep._daily_values(conn, "sleep")
+    label, unit, values, sources = visit_prep._daily_values(conn, "sleep")
     assert values["2026-05-01"] == 7 * 3600
     # The night both devices covered is the larger one's seven hours, not
     # thirteen. Thirteen is what summing them returned.
@@ -251,6 +324,62 @@ def test_a_second_sleep_device_is_not_a_change_in_sleep(tmp_path):
     signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
     assert not [s for s in signals if "Sleep" in s.subject
                 or "sleep" in s.subject.lower()]
+    conn.close()
+
+
+def _two_device_index(tmp_path, records):
+    """records: (type, unit, source, date, value). Every value invented."""
+    from health_agent.ingest import healthkit
+    from health_agent.store import sqlite_schema
+    body = "".join(
+        f' <Record type="HKQuantityTypeIdentifier{t}" sourceName="{src}" '
+        f'unit="{u}" creationDate="{d} 08:05:00 -0500" '
+        f'startDate="{d} 08:00:00 -0500" endDate="{d} 08:00:00 -0500" '
+        f'value="{v}"/>\n' for t, u, src, d, v in records)
+    export = tmp_path / "export.xml"
+    export.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n<HealthData locale="en_US">\n'
+        ' <ExportDate value="2026-06-30 09:00:00 -0400"/>\n'
+        f'{body}</HealthData>\n')
+    conn = sqlite_schema.connect(tmp_path / "health.db", create=True)
+    sqlite_schema.initialize(conn)
+    healthkit.ingest_file(conn, export)
+    sqlite_schema.rebuild_daily_metrics(conn)
+    conn.commit()
+    return conn
+
+
+def test_a_new_device_is_named_when_a_shift_spans_a_device_change(tmp_path):
+    """Sweep finding C4. `_daily_values` dropped the source, so a person who
+    moved from a phone to a watch mid-window had the level move with the
+    device and the sheet reported a change in them, naming no device
+    anywhere. Sleep was protected by a test, not by the code. The shift is
+    still printed, because it may be real, but it names the devices on each
+    side and says a device change can move the level on its own."""
+    prior = [("StepCount", "count", "Synthetic Phone", d, "5000")
+             for d in _days(date(2026, 5, 1), 30)]
+    recent = [("StepCount", "count", "Synthetic Watch", d, "8000")
+              for d in _days(date(2026, 5, 31), 30)]
+    conn = _two_device_index(tmp_path, prior + recent)
+    signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
+    (signal,) = [s for s in signals if s.subject == "HKQuantityTypeIdentifierStepCount"]
+    assert signal.evidence["recent_sources"] == ["Synthetic Watch"]
+    assert signal.evidence["prior_sources"] == ["Synthetic Phone"]
+    assert signal.caveats, "a device change must be said on the sheet"
+    text = visit_prep.render(_sheet_with(signal))
+    assert "Synthetic Phone" in text and "Synthetic Watch" in text
+    assert guardrail.check(text, used_tools=True) == []
+    conn.close()
+
+    # The same shift on one device carries no such note.
+    same = [("StepCount", "count", "Synthetic Watch", d, v)
+            for d, v in [(d, "5000") for d in _days(date(2026, 5, 1), 30)]
+            + [(d, "8000") for d in _days(date(2026, 5, 31), 30)]]
+    conn = _two_device_index(tmp_path / "same", same) if (tmp_path / "same").mkdir() is None else None
+    signals, _, _ = visit_prep.metric_signals(conn, window_days=30)
+    (signal,) = [s for s in signals if s.subject == "HKQuantityTypeIdentifierStepCount"]
+    assert signal.evidence["recent_sources"] == signal.evidence["prior_sources"] == ["Synthetic Watch"]
+    assert signal.caveats == []
     conn.close()
 
 

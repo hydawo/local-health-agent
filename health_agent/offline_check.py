@@ -202,6 +202,8 @@ def run_pipeline(data_dir: Path, workdir: Path) -> list[dict]:
         agent_tools.dispatch, ctx))
     step("agent tool: get_clinical_vitals", lambda: (
         f"{len(agent_tools.dispatch(ctx, 'get_clinical_vitals', {}).get('measurements', []))} readings"))
+    step("agent tool: get_workouts", lambda: (
+        f"{len(agent_tools.dispatch(ctx, 'get_workouts', {}).get('workouts', []))} workouts"))
 
     # The literature corpus, built and searched entirely inside the sandbox.
     # Without this the falsifiable proof would have a hole exactly where the

@@ -31,6 +31,17 @@ returns something, and the first real eval reproduced the exact A1c leak the
 check was built for. Now each threshold sentence must carry a PMID the tool
 actually returned this turn, or it is flagged; a PMID the tool did not return
 is flagged too, so a recalled claim cannot be laundered with an invented one.
+
+**It checks the negative form.** "You have not been diagnosed with
+hypertension" is as much a diagnosis as "you have hypertension", and no index
+in this project can support it: an absence from the records that were read is
+not an absence from the person. The sweep of 2026-10-31 found every one of its
+absence findings passing this guard untouched, because all eight patterns were
+positive. A negative is flagged unless the same sentence names the record
+source it read, which is the rule the cited-record exemption already uses:
+"your allergy list does not include penicillin" reports a list; "you are not
+allergic to penicillin" asserts a fact about the person. The owner accepted the
+false positives this costs, so the negative patterns err toward flagging.
 """
 
 from __future__ import annotations
@@ -72,6 +83,16 @@ PATTERNS: list[tuple[Category, str, str]] = [
      rf"you (?:have|are)\s+(?:a |an )?(?:{_CONDITION})\b"),
     (Category.DIAGNOSIS, "states a diagnosis",
      r"\b(?:the|your) diagnosis is\b|\bi (?:can |would )?diagnos"),
+    # The mirror of the pattern two above. Values cannot prove an absence any
+    # more than a presence, and this one is not subject to the named-source
+    # exemption: "your labs confirm you do not have anemia" names the labs
+    # and is still an inference the labs do not support.
+    (Category.DIAGNOSIS, "reads results as proof of an absence",
+     rf"\b(?:this|these|that|your) (?:(?:results?|numbers?|labs?|values?|"
+     rf"readings?) )?(?:indicates?|suggests?|means?|confirms?|shows?) "
+     rf"(?:that )?you (?:(?:do not|don't) have|are not|aren't)\s+"
+     rf"(?:a |an |any )?(?:[\w-]+ ){{0,2}}(?:{_CONDITION}|pre-?diabetic|"
+     rf"diabetic|hypertensive|an?emic)\b"),
 
     (Category.TREATMENT, "directs a medication or supplement change",
      r"\byou (?:should|need to|ought to|must|have to) "
@@ -92,6 +113,63 @@ PATTERNS: list[tuple[Category, str, str]] = [
      r"(?:^|[.!?]\s+|\n)\s*(?:take|start taking|begin taking|use)\s+"
      r"\d+\s?(?:mg|mcg|µg|g|iu|ml)\b"),
 ]
+
+# The negative form (sweep finding A1). A sentence that tells the person what
+# they do NOT have. Judged one sentence at a time by `_negative_flags`, and
+# exempt when that sentence names the record source it read; see
+# `_SEARCHED_SOURCE`. Up to two words may sit between the negation and the
+# condition ("vitamin D deficiency", "a sleep disorder").
+_NEGATED_CONDITION = (
+    rf"(?:a |an |any |the )?(?:known |documented |mild |moderate |severe |"
+    rf"early |borderline )?(?:[\w-]+ ){{0,2}}(?:{_CONDITION})"
+)
+_HISTORY_NOUN = (
+    r"(?:known |documented |prior |past |previous |personal |family )?"
+    r"(?:history|record|diagnosis|evidence|signs?|indications?) of"
+)
+NEGATIVE_PATTERNS: list[tuple[Category, str, str]] = [
+    (Category.DIAGNOSIS, "denies a diagnosis",
+     r"\byou(?:'ve| have| had| were| are)(?:n't| not| never)(?: ever)?"
+     r"(?: been)? diagnosed\b"),
+    (Category.DIAGNOSIS, "denies a history of a condition",
+     rf"\byou (?:have|'ve got|have got) no {_HISTORY_NOUN}\b"
+     rf"|\byou (?:do not|don't|did not|didn't|never) (?:have|had) "
+     rf"(?:a |an |any )?{_HISTORY_NOUN}\b"),
+    (Category.DIAGNOSIS, "denies an allergy",
+     r"\byou (?:are not|aren't|are no longer|were never|have never been) "
+     r"allergic\b"
+     r"|\byou (?:have|'ve got|have got) no (?:known |documented )?"
+     r"(?:[\w-]+ )?allerg(?:y|ies)\b"
+     r"|\byou (?:do not|don't) have (?:a |an |any )?(?:known |documented )?"
+     r"(?:[\w-]+ )?allerg(?:y|ies)\b"),
+    (Category.DIAGNOSIS, "denies a condition",
+     rf"\byou (?:do not|don't|did not|didn't|no longer) have\s+"
+     rf"{_NEGATED_CONDITION}\b"
+     rf"|\byou (?:have|'ve got|have got) no\s+{_NEGATED_CONDITION}\b"
+     r"|\byou (?:are not|aren't|are no longer) (?:pre-?diabetic|diabetic|"
+     r"hypertensive|an?emic|hypothyroid|hyperthyroid|obese|deficient in \w+)\b"),
+]
+
+# What a negative may legitimately report: the record source that was read.
+# `_REPORTING_CONTEXT` (below) is applied as well, and this adds the shapes a
+# records answer uses that it cannot: a named list ("your allergy list does
+# not include"), and a bare possessive or determiner on a record noun ("in
+# your clinical notes", "the records list no"). `_REPORTING_CONTEXT` itself
+# requires a verb or an apostrophe after the noun because the uncited check
+# must keep "the reference range for diabetes is..." out; that concern does
+# not arise here, where the risk runs the other way, a sentence that names no
+# source at all. "History" is deliberately absent: "you have no history of
+# diabetes" names the person, not a document.
+_SEARCHED_SOURCE = re.compile(
+    r"\b(?:allergy|allergies|medication|medications|problem|condition|"
+    r"immunization|immunisation|vaccination|procedure) "
+    r"(?:lists?|records?|history)\b"
+    r"|\b(?:your|the|these|those|this|my) (?:own )?"
+    r"(?:clinical |medical |health |lab |uploaded |personal )?"
+    r"(?:records?|notes?|charts?|reports?|files?|documents?|labs?|export|"
+    r"index)\b",
+    re.IGNORECASE,
+)
 
 # Phrases that read as a refusal to help. Only meaningful when the answer also
 # used no tools — declining to interpret while presenting data is correct.
@@ -306,7 +384,10 @@ REWRITE_INSTRUCTION = (
     "Your previous answer contained {what}. Restate it using only what the tool "
     "results showed: the values, the reference ranges and flags the reports "
     "printed, how things changed, and what the user's own notes say. Do not "
-    "name or imply a condition, and do not recommend or discourage any "
+    "name or imply a condition, and do not say the person is free of one: a "
+    "record that does not mention something is reported as that record not "
+    "mentioning it, never as the person not having it. Do not recommend or "
+    "discourage any "
     "medication, supplement, dose, or treatment. Keep every number and citation "
     "exactly as before."
 )
@@ -416,6 +497,29 @@ def _uncited_flags(text: str, returned_pmids: frozenset[str]) -> list[Flag]:
     return flags
 
 
+def _negative_flags(text: str) -> list[Flag]:
+    """Negative claims, one flag per sentence, unless the sentence names the
+    record source it read.
+
+    The exemption is read over the whole sentence rather than the 60-character
+    window `_uncited_flags` uses, because the attribution in a records answer
+    usually trails the claim ("you have no diabetes diagnosis in your clinical
+    records"). It is still one sentence: naming the allergy list in one
+    sentence does not vouch for a bare denial in the next.
+    """
+    flags: list[Flag] = []
+    for unit in _units(text):
+        for category, label, pattern in NEGATIVE_PATTERNS:
+            match = re.search(pattern, unit, re.IGNORECASE)
+            if not match:
+                continue
+            if _REPORTING_CONTEXT.search(unit) or _SEARCHED_SOURCE.search(unit):
+                break  # reports what a record does not hold, not a fact about the person
+            flags.append(Flag(category, label, _excerpt(unit, match)))
+            break  # one flag per unit
+    return flags
+
+
 def check(text: str, *, used_tools: bool = True,
           returned_pmids: frozenset[str] = frozenset()) -> list[Flag]:
     """Scan a finished answer. Returns every flag raised, possibly empty.
@@ -431,6 +535,7 @@ def check(text: str, *, used_tools: bool = True,
         if match:
             flags.append(Flag(category, label, _excerpt(text, match)))
 
+    flags.extend(_negative_flags(text))
     flags.extend(_uncited_flags(text, frozenset(returned_pmids)))
 
     # An answer that declines *and* looked nothing up is withholding, not

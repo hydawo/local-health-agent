@@ -106,8 +106,36 @@ def test_the_notes_lookup_needs_no_embeddings(ctx):
     from health_agent.agent.tools import _notes_beside_clinical
     assert _notes_beside_clinical(ctx, "medication")
     assert _notes_beside_clinical(ctx, "condition")
-    # An unknown kind falls back to the whole vocabulary rather than no query.
-    assert _notes_beside_clinical(ctx, "immunization")
+    # No kind (the tool called without one) falls back to the whole
+    # vocabulary rather than no query.
+    assert _notes_beside_clinical(ctx, "")
+
+
+def test_an_allergy_question_searches_for_allergy_words_in_the_notes_only(ctx):
+    """Sweep finding B1. The lookup had vocabulary for medications and
+    conditions only; an allergies question fell through to the union of
+    both, searched for "prescribed" and "diagnosis", and never for
+    "allergy" or "rash". It also ran with no kind filter, so two lab PDF
+    pages took slots the person's own notes should have had, and the
+    payload's own note then told the model that an empty list means the
+    notes hold nothing. The fixture note reads "Penicillin (rash as a
+    child)" and was absent from the allergies answer.
+    """
+    from health_agent.agent.tools import _notes_beside_clinical
+    for kind in ("allergy", "immunization", "procedure"):
+        assert kind in tools._NOTE_VOCABULARY, kind
+    hits = _notes_beside_clinical(ctx, "allergy")
+    assert any("penicillin" in h["text"].lower() for h in hits), hits
+    # The person's own notes and photographed lists, never a lab report or
+    # a health system's record: those have their own payload keys.
+    assert all(h["kind"] in ("note", "image") for h in hits), hits
+    # One passage per document, so a single long note cannot fill every
+    # slot with its unrelated sections.
+    citations = [h["citation"].split(",")[0] for h in hits]
+    assert len(citations) == len(set(citations)), citations
+    # The medications lookup still finds the drug the feed does not hold.
+    meds = _notes_beside_clinical(ctx, "medication")
+    assert any("atorvastatin" in h["text"].lower() for h in meds), meds
 
 
 def test_a_lab_trend_carries_the_citation_rule_with_the_data(ctx):
@@ -172,8 +200,53 @@ def test_batched_lab_lookup_precomputes_out_of_range(ctx):
 def test_batched_lookup_reports_analytes_with_no_results(ctx):
     result = tools.dispatch(ctx, "get_lab_trend",
                             {"analytes": ["ldl", "psa"]})
-    assert result["no_results_for"] == ["psa"]
+    assert set(result["no_results_for"]) == {"psa"}
     assert "ldl" in result["analytes"]
+
+
+def test_batched_lookup_says_why_each_absent_analyte_is_absent(ctx):
+    """Sweep finding B4. `no_results_for` was a bare list of names: it could
+    not say whether the analyte was never tested, tested outside the window
+    asked about, or a name the registry does not know, slugged silently.
+    "LDL is the only value out of range, PSA and troponin were normal" is
+    the sentence that invites. Each absent analyte now carries the same
+    coverage the single-analyte path builds, and the out-of-range list
+    carries the analytes it was computed over."""
+    result = tools.dispatch(ctx, "get_lab_trend", {
+        "analytes": ["ldl", "psa", "made up thing"],
+        "start_date": "2099-01-01"})
+    absent = result["no_results_for"]
+    assert absent["ldl"]["reason"] == "outside_requested_range"
+    assert absent["ldl"]["total_results_for_analyte"] > 0
+    assert absent["ldl"]["available_from"] and absent["ldl"]["available_to"]
+    assert absent["psa"]["reason"] == "never_tested"
+    assert absent["psa"]["total_results_for_analyte"] == 0
+    assert absent["made_up_thing"]["reason"] == "unrecognised_name"
+    assert absent["made_up_thing"]["requested_as"] == "made up thing"
+    # Nothing was found, so this is a no-data answer, not a clean report.
+    assert result["no_data"] is True
+    assert result["out_of_range_on_latest_report"] == []
+    assert result["latest_report_checked_for"] == []
+    assert "analytes_present_in_reports" in result
+
+    some = tools.dispatch(ctx, "get_lab_trend", {"analytes": ["ldl", "psa"]})
+    assert some["latest_report_checked_for"] == ["ldl"]
+    assert "no_data" not in some
+
+
+def test_batched_lookup_on_an_index_with_no_labs_says_no_data(labs_only_ctx):
+    """Reproduced on an empty index in the sweep: `out_of_range_on_latest_report:
+    []` under a note saying every result carries a citation, with no
+    `no_data` flag, reads as "nothing is out of range on your latest
+    report" when no report exists."""
+    conn = labs_only_ctx.conn
+    conn.execute("DELETE FROM lab_result")
+    conn.commit()
+    result = tools.dispatch(labs_only_ctx, "get_lab_trend",
+                            {"analytes": ["ldl", "hdl"]})
+    assert result["no_data"] is True
+    assert result["analytes_present_in_reports"] == []
+    assert result["no_results_for"]["ldl"]["reason"] == "never_tested"
 
 
 def test_batched_lookup_accepts_a_comma_separated_string(ctx):
@@ -225,6 +298,54 @@ def test_query_healthkit_warns_about_multiple_devices(ctx):
     assert "double-counts" in result["multi_source_warning"]
 
 
+def test_an_unknown_metric_name_is_an_error_with_suggestions_not_no_data(ctx):
+    """Sweep finding B6. A name the registry does not know ("blood pressure",
+    "bp") was wrapped as an unregistered identifier and came back as "There
+    is no blood pressure data in this index at all", while the index held
+    systolic and diastolic under their registered names. The CLI already
+    prints suggestions on this path; the tool did not. An unknown name is
+    now an `unknown_metric` error naming what it might have meant, distinct
+    from a zero-coverage answer about a metric that exists."""
+    for name in ("blood pressure", "bp", "blood-pressure-systolic"):
+        result = tools.dispatch(ctx, "query_healthkit", {"metric": name})
+        assert result.get("error") == "unknown_metric", (name, result)
+        assert "no_data_in_range" not in result, name
+        assert "systolic" in result["did_you_mean"], (name, result)
+        assert "diastolic" in result["did_you_mean"], (name, result)
+        assert "not a metric name" in result["note"], result["note"]
+    # A registered metric the index does not hold is still a coverage answer,
+    # not an error: that is the other half of the distinction.
+    result = tools.dispatch(ctx, "query_healthkit", {"metric": "vo2max"})
+    assert "error" not in result
+    assert result["no_data_in_range"] is True
+
+
+def test_a_per_period_figure_names_the_device_it_came_from(ctx):
+    """Sweep finding C5. On a day both devices recorded, the tool emitted
+    {"period": "2026-03-02", "value": 6000.0, "samples": 5}: 6000 is the
+    watch's figure and 5 counts both devices' records, and nothing in the
+    point said which device won. The series-level warning named both
+    devices but not which one a given period's figure is. Sleep closed
+    this with `source` and `per_source`; every quantity metric was open."""
+    result = tools.dispatch(ctx, "query_healthkit",
+                            {"metric": "steps", "start_date": "2026-03-01",
+                             "end_date": "2026-03-07"})
+    by_day = {p["period"]: p for p in result["points"]}
+    both = by_day["2026-03-02"]
+    assert both["value"] == 6000.0
+    assert both["source"] == "Fixture Watch"
+    assert both["samples"] == 3, "the watch's own records, not both devices'"
+    assert both["sources"] == ["Fixture Phone", "Fixture Watch"]
+    assert both["per_source"] == {"Fixture Watch": 6000.0,
+                                  "Fixture Phone": 5500.0}
+    single = by_day["2026-03-03"]
+    assert single["source"] == "Fixture Watch"
+    assert "sources" not in single and "per_source" not in single
+    # The range total counts what the figures were built from.
+    assert result["overall"]["total_samples"] == sum(
+        p["samples"] for p in result["points"])
+
+
 def test_missing_data_returns_coverage_not_emptiness(ctx):
     """Absence is data. Without the coverage fields a model will reach for the
     nearest numbers it can see and present them as an answer."""
@@ -241,6 +362,61 @@ def test_metric_absent_entirely_says_so(ctx):
     result = tools.dispatch(ctx, "query_healthkit", {"metric": "vo2max"})
     assert result["total_records_for_metric"] == 0
     assert "not substitute a related metric" in result["note"]
+
+
+def _with_probe_rows(ctx, rows):
+    """Insert synthetic lab_result rows for one call, then remove them, so
+    the session-scoped index is unchanged for every other test."""
+    doc = ctx.conn.execute("SELECT document_id FROM lab_result WHERE "
+                           "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    keys = []
+    for i, (value_num, value_text, flag, date) in enumerate(rows):
+        key = f"b5-probe-{i}".encode()
+        keys.append(key)
+        ctx.conn.execute(
+            "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+            "value_num, value_text, unit, flag, collected_date, raw_line, "
+            "extracted_by, via_ocr, dedup_key) VALUES(?,1,'Ferritin','ferritin',"
+            "?,?,'ng/mL',?,?,'x','pdfplumber',0,?)",
+            (doc, value_num, value_text, flag, date, key))
+    ctx.conn.commit()
+    try:
+        yield
+    finally:
+        ctx.conn.executemany("DELETE FROM lab_result WHERE dedup_key=?",
+                             [(k,) for k in keys])
+        ctx.conn.commit()
+
+
+def test_lab_payloads_carry_range_status_beside_out_of_range(ctx):
+    """Sweep finding B5. `out_of_range` keeps its tri-state meaning for the
+    scorers; `range_status` says which of the four situations a null was."""
+    rows = [(118.0, None, None, "2026-04-01"),        # no printed range
+            (None, "see comment", None, "2026-05-01"),  # not a number
+            (None, ">500", "H", "2026-06-01")]          # text, but flagged
+    probe = _with_probe_rows(ctx, rows)
+    next(probe)
+    try:
+        single = tools.dispatch(ctx, "get_lab_trend", {"analyte": "ferritin"})
+        batch = tools.dispatch(ctx, "get_lab_trend", {"analytes": ["ferritin", "ldl"]})
+    finally:
+        next(probe, None)
+
+    points = single["points"][-3:]
+    assert [p["range_status"] for p in points] == [
+        "no_printed_range", "not_numeric", "out_of_range"]
+    assert [p["out_of_range"] for p in points] == [None, None, None]
+    assert "range_status" in single["range_status_note"]
+
+    results = batch["analytes"]["ferritin"]["results"][-3:]
+    assert [r["range_status"] for r in results] == [
+        "no_printed_range", "not_numeric", "out_of_range"]
+    assert [r["out_of_range"] for r in results] == [None, None, None]
+    ldl = batch["analytes"]["ldl"]["results"][-1]
+    assert ldl["range_status"] == "out_of_range" and ldl["out_of_range"] is True
+    assert "range_status" in batch["range_status_note"]
+    # The precomputed block is unchanged in meaning: by parsed range only.
+    assert {f["analyte"] for f in batch["out_of_range_on_latest_report"]} == {"ldl"}
 
 
 def test_get_lab_trend_carries_citations_and_ranges(ctx):
@@ -367,8 +543,17 @@ def test_search_records_returns_citations(ctx):
 
 
 def test_search_records_can_restrict_to_notes(ctx):
+    """Sweep finding D3: `all([])` is true, so this passed on an empty
+    result and on any change that made the filter return nothing. The
+    query is one the fixture answers from both a note and a lab PDF, so
+    the filter has something to exclude, and the result must be
+    non-empty."""
+    unfiltered = tools.dispatch(ctx, "search_records", {"query": "cholesterol"})
+    assert {r["kind"] for r in unfiltered["results"]} >= {"note", "pdf"}, \
+        "the fixture must answer this from both kinds for the filter to be measured"
     result = tools.dispatch(ctx, "search_records",
-                            {"query": "coffee", "kind": "note"})
+                            {"query": "cholesterol", "kind": "note"})
+    assert result["results"], "the filter must return the note hits, not nothing"
     assert all(r["kind"] == "note" for r in result["results"])
 
 
@@ -376,6 +561,29 @@ def test_search_with_no_match_says_so(ctx):
     result = tools.dispatch(ctx, "search_records", {"query": "zzzqqqxyz"})
     assert result["no_matches"] is True
     assert "rather than answering from general knowledge" in result["note"]
+
+
+def test_a_keyword_miss_says_the_words_were_not_found_not_that_the_notes_are_silent(ctx):
+    """Sweep finding B7. With no embeddings the search falls back to
+    keywords, and a keyword miss carried no `method`, so the model could
+    not tell it from a semantic miss and the note told it to say the
+    notes do not cover the subject. "hypertension" misses a note reading
+    "Blood pressure on the high side of normal" and another naming
+    lisinopril for blood pressure; "your notes do not mention any blood
+    pressure concern" is what that invites. The CLI already prints a
+    tag-match hint on the same path; the tool now carries it too."""
+    result = tools.dispatch(ctx, "search_records", {"query": "hypertension"})
+    assert result["no_matches"] is True
+    assert result["method"] == "keyword"
+    assert "contains the words" in result["note"].lower()
+    assert "do not cover" not in result["note"]
+    assert "rather than answering from general knowledge" in result["note"]
+    # A query naming a tag: frontmatter is stripped before chunking, so the
+    # tag is not body text and cannot match here. The payload says so.
+    tagged = tools.dispatch(ctx, "search_records", {"query": "caffeine"})
+    assert tagged["no_matches"] is True
+    assert tagged["tags_matching_query"] == ["caffeine"]
+    assert "caffeine is a tag" in tagged["note"]
 
 
 def test_search_result_count_is_capped(ctx):
@@ -403,6 +611,32 @@ def test_data_inventory_describes_the_index(ctx):
     assert "resting-hr" in inventory["healthkit"]["metrics_available"]
     assert "hba1c" in inventory["labs"]["analytes_available"]
     assert "followup" in inventory["notes"]["tags"]
+
+
+def test_data_inventory_says_when_a_list_is_cut_short(ctx):
+    """Sweep finding B3. Each inventory list was capped with no marker, and
+    the prompt then said "Anything not listed above is not available". An
+    analyte tested once is ordered last and is the first to fall off, so the
+    model could say "your reports do not include a PSA" about an analyte in
+    the index, before any tool call. Each list now carries an `_and_more`
+    count, and the prompt's sentence is conditioned on it."""
+    full = tools.data_inventory(ctx.conn)
+    n_analytes = len(full["labs"]["analytes_available"])
+    n_metrics = len(full["healthkit"]["metrics_available"])
+    assert n_analytes > 2 and n_metrics > 1
+    assert full["labs"]["analytes_and_more"] == 0
+    assert full["healthkit"]["metrics_and_more"] == 0
+    assert full["notes"]["tags_and_more"] == 0
+    assert full["clinical"]["vital_metrics_and_more"] == 0
+
+    cut = tools.data_inventory(ctx.conn, max_analytes=2, max_metrics=1)
+    assert len(cut["labs"]["analytes_available"]) == 2
+    assert cut["labs"]["analytes_and_more"] == n_analytes - 2
+    assert len(cut["healthkit"]["metrics_available"]) == 1
+    assert cut["healthkit"]["metrics_and_more"] == n_metrics - 1
+
+    prompt = orchestrator.Orchestrator(ctx).system_prompt()
+    assert "_and_more" in prompt
 
 
 # --------------------------------------------------------------------------- #
@@ -611,7 +845,7 @@ def test_system_prompt_carries_the_data_inventory(ctx):
     prompt = orch.system_prompt()
     assert "resting-hr" in prompt
     assert "hba1c" in prompt
-    assert "Anything not listed above is not available" in prompt
+    assert "anything not listed above is not available" in prompt
 
 
 def test_system_prompt_states_the_hard_constraints(ctx):
@@ -989,6 +1223,32 @@ def test_the_other_kinds_respect_the_same_since(clinical_ctx):
                             {"kind": "procedures", "since": "2099-01-01"})
     assert result["facts"] == []
     assert "facts_of_other_kinds" not in result
+
+
+def test_a_vitals_miss_tells_never_recorded_from_outside_the_window(clinical_ctx):
+    """Sweep finding B8. A vital that was never in the clinical feed and a
+    vital recorded outside the range asked about produced the same
+    sentence, and "no clinician has recorded your blood pressure" is what
+    the second one invites. The payload now says which it is, with the
+    held metric's own coverage when it is the window that excluded it."""
+    outside = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                             {"metric": "pulse", "start_date": "2099-01-01"})
+    assert outside["measurements"] == []
+    assert outside["no_data_in_range"] is True
+    assert outside["requested_metric_held"] is True
+    assert outside["requested_metric_coverage"]["n"] >= 1
+    assert outside["requested_metric_coverage"]["first"] == "2023-09-15"
+    assert "outside" in outside["note"].lower()
+    assert "2023-09-15" in outside["note"]
+
+    never = tools.dispatch(clinical_ctx, "get_clinical_vitals",
+                           {"metric": "blood pressure"})
+    assert never["measurements"] == []
+    assert never["no_data_in_range"] is True
+    assert never["requested_metric_held"] is False
+    assert never["requested_metric_coverage"] is None
+    assert "never" in never["note"].lower()
+    assert "outside" not in never["note"].lower()
 
 
 def test_a_date_only_vitals_miss_names_what_exists(clinical_ctx):

@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from health_agent import offline_check
+from health_agent.agent import tools as agent_tools
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -104,9 +105,20 @@ def test_the_block_catches_our_own_client(no_network):
     block it must fail, which confirms the guard sees real call paths."""
     from health_agent import ollama_client
 
-    with pytest.raises(Exception) as exc:
+    # Sweep finding D2: `pytest.raises(Exception)` with `exc.value is not
+    # None` accepted every exception, so a `raise NotImplementedError` at
+    # the top of list_models would have passed without the guard being
+    # reached. The guard's own exception has to be the one raised, or the
+    # cause behind the client's own wrapper.
+    with pytest.raises((NetworkAttempted,
+                        ollama_client.OllamaUnavailable)) as exc:
         ollama_client.list_models("http://localhost:11434", timeout=1)
-    assert exc.value is not None
+    chain, seen = exc.value, []
+    while chain is not None:
+        seen.append(chain)
+        chain = chain.__cause__ or chain.__context__
+    assert any(isinstance(e, NetworkAttempted) for e in seen), \
+        f"the guard was never reached: {[type(e).__name__ for e in seen]}"
 
 
 # --------------------------------------------------------------------------- #
@@ -186,16 +198,46 @@ def test_no_telemetry_on_import(no_network):
     Importing every module in the package must not open a socket — this is what
     would catch a dependency that reports usage at import time.
     """
-    import importlib
-    import pkgutil
+    # Sweep finding D4: run in-process, every module was already imported by
+    # the rest of the suite, and importing a cached module executes no code.
+    # The sweep counted zero uncached modules in a full run. A subprocess
+    # with the same socket guard installed before the package is touched is
+    # the only way the import-time claim is measured, which is the shape the
+    # fetcher-isolation test below already uses.
+    import subprocess
 
-    import health_agent
-
-    package_dir = Path(health_agent.__file__).parent
-    for info in pkgutil.walk_packages([str(package_dir)],
-                                      prefix="health_agent."):
-        # offline_check spawns a subprocess only when called, not on import.
-        importlib.import_module(info.name)
+    code = (
+        "import socket, sys, importlib, pkgutil\n"
+        "real = socket.socket\n"
+        "local = {socket.AF_UNIX} if hasattr(socket, 'AF_UNIX') else set()\n"
+        "class Guarded(real):\n"
+        "    def __init__(self, family=socket.AF_INET, *a, **k):\n"
+        "        if family not in local:\n"
+        "            raise AssertionError('network socket at import')\n"
+        "        super().__init__(family, *a, **k)\n"
+        "def blocked(*a, **k):\n"
+        "    raise AssertionError('network connection at import')\n"
+        "socket.socket = Guarded\n"
+        "socket.create_connection = blocked\n"
+        "socket.getaddrinfo = blocked\n"
+        "socket.gethostbyname = blocked\n"
+        "assert not [m for m in sys.modules if m.startswith('health_agent')]\n"
+        "import health_agent\n"
+        "from pathlib import Path\n"
+        "n = 0\n"
+        "for info in pkgutil.walk_packages("
+        "[str(Path(health_agent.__file__).parent)], prefix='health_agent.'):\n"
+        "    importlib.import_module(info.name)\n"
+        "    n += 1\n"
+        "print('IMPORTED:' + str(n))\n"
+    )
+    completed = subprocess.run([sys.executable, "-c", code],
+                               capture_output=True, text=True, timeout=120)
+    assert completed.returncode == 0, completed.stderr
+    imported = int(next(
+        line for line in completed.stdout.splitlines()
+        if line.startswith("IMPORTED:"))[len("IMPORTED:"):])
+    assert imported >= 20, f"only {imported} modules were imported fresh"
 
 
 # --------------------------------------------------------------------------- #
@@ -314,6 +356,23 @@ def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):
     steps = offline_check.run_pipeline(FIXTURES, tmp_path)
     names = [s["step"] for s in steps]
     assert any("search_medical_literature" in n for n in names)
+    assert all(s["ok"] for s in steps)
+
+
+def test_offline_check_pipeline_runs_every_registered_agent_tool(tmp_path):
+    """Every tool the model can call has to be exercised with the network off.
+
+    `get_workouts` was missing for as long as the check existed, so the claim
+    that the whole tool surface runs offline was being made about seven of the
+    eight. Pinning the list to `tools.TOOLS` rather than to a literal means a
+    tool added later cannot quietly reopen the hole: this fails until its step
+    exists."""
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    names = [s["step"] for s in steps]
+    registered = {t.name for t in agent_tools.TOOLS}
+    missing = sorted(t for t in registered
+                     if not any(f"agent tool: {t}" == n for n in names))
+    assert not missing, f"never run with the network off: {missing}"
     assert all(s["ok"] for s in steps)
 
 

@@ -34,8 +34,11 @@ first landing small.
 ## 2. How do Oura and Apple Watch figures of the same metric coexist?
 
 Both record resting heart rate and HRV daily. `source_name` is already a
-dimension on `record` and `daily_metric`, and `multi_source_warning` already
-fires when a period holds more than one source.
+dimension on `record` and `daily_metric`, and `multi_source_warning` fires
+when a period holds more than one source. (Until the 2026-10-31 sweep's C2
+fix it fired for additive aggregates only, so a resting heart rate or HRV
+averaged across a watch and a ring carried no warning at all; an earlier
+version of this memo said otherwise.)
 
 - **a. Another source, nothing special.** Oura rows carry
   `source_name = "Oura"` and the existing machinery reports both.

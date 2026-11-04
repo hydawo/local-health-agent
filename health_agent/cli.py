@@ -31,6 +31,7 @@ from . import (__version__, agent, config, consent, embeddings, labs, metrics,
 from .ingest import fhir, healthkit, notes, readers, records
 from .logging_setup import configure, get_logger
 from .agent.tools import FACT_KIND_ARG as _FACT_KIND_ARG
+from .agent.tools import notes_beside_clinical as _notes_beside_clinical
 from .literature import store as literature_store
 from .store import (queries, sqlite_schema, vector_store, windows,
                     workout_stats)
@@ -725,7 +726,12 @@ def cmd_metric(args: argparse.Namespace, cfg: config.Config) -> int:
 def _print_caveats(result: queries.SeriesResult, args: argparse.Namespace) -> None:
     notes: list[str] = []
     if result.multi_source_periods and not args.source:
-        if result.combine == "sum":
+        if result.agg not in queries.ADDITIVE:
+            how = ("Values shown for those periods are a sample-weighted blend "
+                   "of the devices, not one device's measurement, and the "
+                   "devices may not agree.")
+            fix = "Use --source NAME to see one device, or --show-sources."
+        elif result.combine == "sum":
             how = ("Totals shown ADD every source together (--combine sum), which "
                    "double-counts any period the devices both covered.")
             fix = "Drop --combine sum, or use --source NAME, to avoid that."
@@ -1889,6 +1895,8 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
                              if (n := coverage.get(s)))
             print(f"No {args.kind.strip().lower()} in the index. It holds "
                   f"{held}.")
+            _print_notes_beside_clinical(conn, kind or "",
+                                         args.kind.strip().lower())
             return 0
         print(_table(["kind", "name", "status", "date", "detail"],
                      [[r["kind"], _clip(r["name"], _CLINICAL_NAME_W),
@@ -1898,9 +1906,31 @@ def cmd_clinical(args: argparse.Namespace, cfg: config.Config) -> int:
                       for r in rows]))
         print(f"\n{len(rows):,} record(s). Source: the clinical-records "
               f"folder of your Apple Health export.")
+        _print_notes_beside_clinical(
+            conn, kind or "", args.kind.strip().lower() if args.kind else "")
         return 0
     finally:
         conn.close()
+
+
+def _print_notes_beside_clinical(conn: sqlite3.Connection, kind: str,
+                                 label: str = "") -> None:
+    """The feed is what a health system sent, not what the person takes or
+    reacts to. The agent tool fetches the person's own notes beside every
+    clinical answer; this prints the same search here, so `clinical --kind
+    allergies` cannot show a feed with no penicillin while a note records
+    one."""
+    notes = _notes_beside_clinical(conn, kind)
+    what = f"on {label or kind}" if kind else "on medications and conditions"
+    if not notes:
+        print(f"\nYour own notes hold nothing {what}: a search of them found "
+              f"no passage. The feed above is not the whole of what you take "
+              f"or have been told.")
+        return
+    print(f"\nFrom your own notes {what}, which the feed does not include:")
+    for note in notes:
+        print(f"  {note['citation']}")
+        print(f"    {_clip(note['text'], 110)}")
 
 
 def _vital_value(row: dict) -> str:
@@ -1960,6 +1990,26 @@ def cmd_vitals(args: argparse.Namespace, cfg: config.Config) -> int:
         conn.close()
 
 
+# The star column of the labs table (sweep finding B5). One mark per
+# `range_status` that is not a plain in-range number. The value column prints
+# the value as the report did; the mark says whether it was compared with a
+# printed range, and if not, why not, so "no range printed" cannot read as
+# "within range".
+_RANGE_MARKS = {
+    "out_of_range": " *",
+    "no_printed_range": " ?",
+    "not_numeric": " ~",
+}
+_RANGE_LEGEND = {
+    "out_of_range": "* outside the reference range printed on that report, "
+                    "or flagged by the lab",
+    "no_printed_range": "? no reference range printed on that report, so the "
+                        "value was compared with nothing",
+    "not_numeric": "~ not a number as printed, so the value was compared with "
+                   "nothing",
+}
+
+
 def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
     conn = sqlite_schema.open_for_read(cfg.index_path)
     try:
@@ -1983,7 +2033,7 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
         for point in trend.points:
             value = (f"{point.value_num:g}" if point.value_num is not None
                      else (point.value_text or "-"))
-            marker = " *" if point.out_of_range is True else ""
+            marker = _RANGE_MARKS.get(point.range_status, "")
             rows.append([
                 point.collected_date or "unknown",
                 value + marker,
@@ -1995,8 +2045,16 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
         print(_table(["collected", "value", "unit", "reference", "flag",
                       "source"], rows))
 
-        if any(p.out_of_range for p in trend.points):
-            print("\n* outside the reference range printed on that report")
+        # One legend line per mark that appears, so a table with nothing to
+        # say about ranges says nothing, and a table with no range to compare
+        # against says that rather than nothing.
+        present = {p.range_status for p in trend.points}
+        legend = [_RANGE_LEGEND[status] for status in queries.RANGE_STATUSES
+                  if status in present and status in _RANGE_LEGEND]
+        if legend:
+            print()
+            for line in legend:
+                print(line)
 
         if any(p.via_ocr for p in trend.points):
             print("\n[OCR] read from a scanned page with no text layer. OCR "
@@ -2004,14 +2062,23 @@ def cmd_labs(args: argparse.Namespace, cfg: config.Config) -> int:
                   "as 100-139 — so check these against the original before "
                   "relying on them.")
 
-        numeric = [p.value_num for p in trend.points if p.value_num is not None]
-        if len(numeric) > 1:
-            first, last = numeric[0], numeric[-1]
+        # "latest" is the last point as printed, text or number. Taking the
+        # numeric points only made an older number "latest" over a newer
+        # ">500". The change is measured from the first numeric point, and
+        # only when the latest is a number to measure to.
+        numeric = [p for p in trend.points if p.value_num is not None]
+        last_p = trend.points[-1]
+        if last_p.value_num is not None and len(numeric) > 1:
+            first, last = numeric[0].value_num, last_p.value_num
             delta = last - first
             direction = "up" if delta > 0 else ("down" if delta < 0 else "flat")
             print(f"\nfirst {first:g} -> latest {last:g} "
                   f"({direction} {abs(delta):g}"
                   + (f", {abs(delta) / first * 100:.1f}%" if first else "") + ")")
+        elif last_p.value_num is None and numeric:
+            print(f"\nfirst {numeric[0].value_num:g} -> latest "
+                  f"{last_p.value_text or '-'} (no change computed: the "
+                  f"latest result is not a number)")
 
         if len(trend.units_seen) > 1:
             print(f"\nNote: mixed units across reports "
@@ -2104,6 +2171,7 @@ def _trend_as_dict(trend: queries.LabTrend) -> dict:
                 "ref_text": p.ref_text,
                 "flag": p.flag,
                 "out_of_range": p.out_of_range,
+                "range_status": p.range_status,
                 "via_ocr": p.via_ocr,
                 "citation": p.citation,
                 "source_path": p.path,
@@ -2193,16 +2261,9 @@ def cmd_search(args: argparse.Namespace, cfg: config.Config) -> int:
 
 
 def _tags_matching(conn: sqlite3.Connection, query: str) -> list[str]:
-    """Tags whose name appears among the query's words."""
-    import re
-
-    words = {w.lower() for w in re.findall(r"[A-Za-z0-9/-]{2,}", query)}
-    if not words:
-        return []
-    return [
-        row["tag"] for row in conn.execute("SELECT DISTINCT tag FROM document_tag")
-        if row["tag"] in words
-    ]
+    """Tags whose name appears among the query's words. Shared with the
+    search tool, which prints the same hint on the same miss."""
+    return queries.tags_matching(conn, query)
 
 
 def cmd_embed(args: argparse.Namespace, cfg: config.Config) -> int:

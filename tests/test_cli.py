@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import sqlite3
 import shutil
 from pathlib import Path
 
@@ -202,6 +203,7 @@ def cli_records(tmp_path, capsys):
         return code, captured.out
 
     run.err = ""
+    run.index = index
     run("ingest", str(FIXTURES), "--no-ocr", "--no-embed")
     capsys.readouterr()
     return run
@@ -293,6 +295,29 @@ def test_clinical_filters_by_kind(cli_records):
     assert code == 0
     assert "Left anterior cruciate ligament tear" in out
     assert "ibuprofen" not in out
+
+
+def test_clinical_prints_the_persons_own_notes_beside_the_feed(cli_records):
+    """Sweep finding B9. `clinical --kind allergies` printed the health
+    system's feed only, so the fixture's "Penicillin (rash as a child)"
+    note never appeared under an allergies listing. The agent tool runs a
+    notes companion on every call (rule 1e, performed rather than
+    requested); the CLI surface had no equivalent."""
+    code, out = cli_records("clinical", "--kind", "allergies")
+    assert code == 0
+    assert "Pollen" in out                       # the feed
+    assert "Penicillin" in out                   # the person's own note
+    assert "medications-and-conditions.md" in out
+    assert "notes" in out.lower()
+    # And when the feed has nothing of that kind, the notes still show.
+    conn = sqlite3.connect(cli_records.index)
+    conn.execute("DELETE FROM clinical_fact WHERE kind = 'allergy'")
+    conn.commit()
+    conn.close()
+    code, out = cli_records("clinical", "--kind", "allergies")
+    assert code == 0
+    assert "No allergies in the index" in out
+    assert "Penicillin" in out
 
 
 def test_clinical_rejects_an_unknown_kind(cli_records):
@@ -556,6 +581,87 @@ def test_lab_trend_marks_out_of_range(cli_records):
     assert code == 0
     assert "5.7 *" in out
     assert "outside the reference range" in out
+
+
+def test_lab_trend_marks_a_value_with_no_printed_range(cli_records):
+    """Sweep finding B5. The FHIR LDL of 118 carries no range, and used to
+    print with no mark under a legend that said a star means out of range,
+    which read as "118 and not flagged"."""
+    code, out = cli_records("labs", "ldl")
+    assert code == 0
+    assert "118 ?" in out
+    assert "128 *" in out
+    assert "? no reference range printed on that report" in out
+    assert "* outside the reference range printed on that report" in out
+
+
+def test_lab_trend_marks_a_value_that_is_not_a_number(cli_records):
+    """"see comment" used to print with no mark, which read as within range."""
+    code, out = cli_records("labs", "hba1c")
+    assert code == 0
+    assert "see comment ~" in out
+    assert "~ not a number as printed" in out
+    assert "? no reference range" not in out
+
+
+def test_lab_trend_legend_names_only_the_marks_in_the_table(cli_records):
+    code, out = cli_records("labs", "glucose")
+    assert code == 0
+    assert "* outside" not in out
+    assert "? no reference range" not in out
+    assert "~ not a number" not in out
+
+
+def test_lab_trend_a_flagged_text_value_is_starred(cli_records, tmp_path):
+    """">500" with an H flag is out of range by the lab's own judgement."""
+    conn = sqlite3.connect(tmp_path / "health.db")
+    doc = conn.execute("SELECT document_id FROM lab_result WHERE "
+                       "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, value_text, unit, flag, collected_date, raw_line, "
+        "extracted_by, via_ocr, dedup_key) VALUES(?,1,'LDL','ldl',NULL,"
+        "'>500','mg/dL','H','2026-06-01','x','pdfplumber',0,?)",
+        (doc, b"b5-text-ldl"))
+    conn.commit()
+    conn.close()
+    code, out = cli_records("labs", "ldl")
+    assert ">500 *" in out
+    assert "~ not a number" not in out
+
+
+def test_lab_trend_json_carries_range_status(cli_records):
+    code, out = cli_records("labs", "ldl", "--json")
+    payload = json.loads(out)
+    assert code == 0
+    by_date = {p["collected_date"]: p for p in payload["points"]}
+    assert by_date["2024-11-06"]["range_status"] == "no_printed_range"
+    assert by_date["2024-11-06"]["out_of_range"] is None
+    assert by_date["2026-03-10"]["range_status"] == "out_of_range"
+
+
+def test_lab_trend_first_to_latest_line_does_not_skip_a_text_valued_latest(
+        cli_records, tmp_path):
+    """Sweep finding B2, CLI half. The "first -> latest" line was computed
+    over numeric points only, so a newest result of ">500" vanished and the
+    line named an older number as the latest."""
+    conn = sqlite3.connect(tmp_path / "health.db")
+    doc = conn.execute("SELECT document_id FROM lab_result WHERE "
+                       "analyte_key='ldl' LIMIT 1").fetchone()[0]
+    conn.execute(
+        "INSERT INTO lab_result(document_id, page_no, analyte, analyte_key, "
+        "value_num, value_text, unit, flag, collected_date, raw_line, "
+        "extracted_by, via_ocr, dedup_key) VALUES(?,1,'LDL','ldl',NULL,"
+        "'>500','mg/dL','H','2026-06-01','x','pdfplumber',0,?)",
+        (doc, b"b2-text-ldl"))
+    conn.commit()
+    conn.close()
+    code, out = cli_records("labs", "ldl")
+    assert code == 0
+    line = [l for l in out.splitlines() if l.startswith("first ")]
+    assert line, out
+    assert "latest >500" in line[0], line[0]
+    assert "latest 112" not in out
 
 
 def test_lab_trend_disclaims_interpretation(cli_records):

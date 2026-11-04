@@ -30,6 +30,24 @@ file and page behind every number.
 *Recorded from `demo/demo.sh` against the synthetic fixtures. You can run the
 same thing, and regenerate it with `vhs demo/demo.tape`.*
 
+## How it works, in two pictures
+
+A question goes to one local model, which calls eight read-only tools that read
+three local stores. Nothing inside the dashed box opens a network connection,
+apart from the loopback call to the model.
+
+<a href="docs/diagrams/01-ask-loop.svg"><img alt="The ask loop: a question goes to the orchestrator, which loops between the local model and eight read-only tools reading three local stores. The cloud tier sits outside the machine boundary and is opt-in." src="docs/diagrams/01-ask-loop.svg"></a>
+
+Then the answer is checked before you see it. The guardrail looks for anything
+that reads as a diagnosis, including a denial of one, for advice to start or
+stop a drug, and for a medical claim with no citation behind it.
+
+<a href="docs/diagrams/02-guardrail.svg"><img alt="The answer passes through the guardrail, which can trigger one rewrite. A research block is then appended by a rule the model never sees." src="docs/diagrams/02-guardrail.svg"></a>
+
+Click either one for the full-size version. Two more, covering how your files
+become the index and where the network boundary sits, are in
+[Architecture](#architecture-and-where-the-data-stops).
+
 **Why this exists.** Health assistants generally ask you to send your medical
 records somewhere. This one is an argument that you don't have to. It is also an
 argument that the claim should be *checkable* rather than asserted. `health-agent offline-check`
@@ -40,7 +58,7 @@ how to verify it, and what this tool does **not** protect you from.
 > **Status: v0.1, feature-complete for its scope.** All four source types
 > ingest (an Apple Health export's HealthKit XML and the clinical records
 > beside it, report PDFs, and your own notes), natural-language questions work
-> end to end, accuracy is measured against a 37-question eval set, and the
+> end to end, accuracy is measured against a 38-question eval set, and the
 > privacy claims are falsifiable.
 > Post-release directions are in [`ROADMAP.md`](ROADMAP.md). The largest is
 > literature grounding with evidence-graded citations.
@@ -357,58 +375,17 @@ Everything inside the dashed box happens on your machine. The only two arrows
 that cross it are the local model (loopback, enforced) and the opt-in cloud tier
 (consent-gated).
 
-```mermaid
-flowchart TB
-    subgraph disk["Your data folder (you control this)"]
-        HK["healthkit/export.xml"]
-        REC["records/*.pdf"]
-        NOTE["notes/ (.md .docx photos)"]
-    end
+<a href="docs/diagrams/01-ask-loop.svg"><img alt="The ask loop: a question goes to the orchestrator, which loops between the local model and eight read-only tools reading three local stores. The cloud tier sits outside the machine boundary and is opt-in." src="docs/diagrams/01-ask-loop.svg"></a>
 
-    subgraph machine["YOUR MACHINE"]
-        subgraph ingest["Ingest (no network, in any tier)"]
-            P1["healthkit.py<br/>stream-parse 8M+ records"]
-            P2["records.py<br/>pdfplumber → OCR fallback"]
-            P3["notes.py<br/>frontmatter + headings"]
-        end
+Click any diagram for the full-size version.
 
-        subgraph store["Local index (derived, disposable)"]
-            SQL[("SQLite<br/>records · labs · chunks<br/>daily aggregates")]
-            VEC[("LanceDB<br/>embeddings")]
-        end
+<a href="docs/diagrams/02-guardrail.svg"><img alt="The answer passes through the guardrail, which can trigger one rewrite. A research block is then appended by a rule the model never sees." src="docs/diagrams/02-guardrail.svg"></a>
 
-        Q["store/queries.py<br/>the single read contract"]
-        CLI["CLI<br/>metric · labs · sleep · search"]
-        TOOLS["agent/tools.py<br/>4 tools, capped results"]
-        LOOP["orchestrator.py<br/>iterative tool loop"]
-        GUARD["guardrail.py<br/>output check + disclaimer"]
-    end
+<a href="docs/diagrams/03-ingest.svg"><img alt="Four source types go through four readers into one SQLite index and a vector store, with identifying fields dropped on the way in." src="docs/diagrams/03-ingest.svg"></a>
 
-    OLLAMA["Ollama<br/>loopback only"]
-    CLOUD["Anthropic API"]
+<a href="docs/diagrams/04-network-boundary.svg"><img alt="How a literature pack is built, published and installed, the three modules that can open a socket, and the offline check that proves the local tier." src="docs/diagrams/04-network-boundary.svg"></a>
 
-    HK --> P1
-    REC --> P2
-    NOTE --> P3
-    P1 & P2 & P3 --> SQL
-    SQL --> VEC
-    SQL --> Q
-    VEC --> Q
-    Q --> CLI
-    Q --> TOOLS
-    TOOLS <--> LOOP
-    LOOP --> GUARD
-    LOOP <-.->|"default tier"| OLLAMA
-    LOOP <-.->|"--cloud, after consent"| CLOUD
-
-    style machine fill:#f6f8fa,stroke:#444,stroke-dasharray: 6 4
-    style disk fill:#eef6ee,stroke:#3a3
-    style CLOUD fill:#fdecea,stroke:#c33
-    style OLLAMA fill:#eef3fb,stroke:#36c
-    style GUARD fill:#fff8e1,stroke:#b8860b
-```
-
-Three things the diagram is making explicit:
+Three things the diagrams are making explicit:
 
 **Source files are read, never written.** The index is derived and disposable.
 `reset` deletes it, `ingest` rebuilds it.
@@ -631,7 +608,10 @@ is stored once. Every stored value keeps the source line it came from.
 **Nothing is interpreted.** `labs` marks a value as outside the reference range
 *the lab printed on that report*, and mixed units across labs are shown as
 printed and never converted. Converting without knowing the assay is how you get
-confidently wrong numbers.
+confidently wrong numbers. A value the report printed no range for is marked
+`?`, and a value that is not a number (`see comment`, `>500` without a flag) is
+marked `~`, so the absence of a star never reads as a normal result; the tool
+payload carries the same distinction as `range_status`.
 
 **OCR-derived values are marked.** Scanned reports with no
 text layer go through OCR, which reads result values and H/L flags reliably but

@@ -57,6 +57,36 @@ class SeriesPoint:
     sources: tuple[str, ...]
     per_source: dict[str, float]
     category: str | None = None
+    # Records per source behind `per_source`. `n` is every source's records
+    # added together, which is the wrong count beside a figure that is one
+    # source's; `point_attribution` reads this to say whose it is.
+    per_source_n: dict[str, int] = field(default_factory=dict)
+
+
+def point_attribution(point: "SeriesPoint", agg: str,
+                      combine: str) -> tuple[str | None, int]:
+    """(source, records) behind a point's figure.
+
+    When the combine rule took one source's figure (the largest total, the
+    extreme min or max), that source is named and its own record count
+    returned. When the figure is a blend of sources (a sample-weighted
+    mean, or an explicit sum across devices), no one source owns it and
+    the count is every source's. One source is always its own figure.
+
+    One place, shared by the tool payload and the window comparison, so
+    "6,000 steps, 5 records" cannot be printed where 6,000 is one device's
+    figure and 5 counts both devices' records.
+    """
+    valued = {s: v for s, v in point.per_source.items() if v is not None}
+    if len(valued) <= 1:
+        src = next(iter(valued), None) if valued else (
+            point.sources[0] if len(point.sources) == 1 else None)
+        return src, point.per_source_n.get(src, point.n) if src else point.n
+    if agg == "avg" or combine == "sum":
+        return None, point.n
+    pick = min if agg == "min" else max
+    src = pick(valued, key=lambda s: valued[s])
+    return src, point.per_source_n.get(src, point.n)
 
 
 @dataclass
@@ -731,6 +761,16 @@ def _entry(d) -> dict:
             "reason": d.reason}
 
 
+ACTIVITY_PREFIX = "HKWorkoutActivityType"
+
+
+def activity_name(activity_type: str | None) -> str:
+    """The activity in a reader's words: the HealthKit prefix dropped."""
+    name = activity_type or "workout"
+    return name[len(ACTIVITY_PREFIX):] if name.startswith(ACTIVITY_PREFIX) \
+        else name
+
+
 def workout_series(conn, *, period="week", activity=None, start=None, end=None,
                    indoor=None, source_include=(), source_exclude=(),
                    measures=(), derive_names=(), ratio_of=None,
@@ -779,11 +819,15 @@ def workout_series(conn, *, period="week", activity=None, start=None, end=None,
         sample_counts=sample_counts,
         limit=1_000_000)
     total, first, last = workout_coverage(conn)
-    label = activity or "all workouts"
     if not rows:
-        return WorkoutSeries(label=label, period=period, unit=None,
-                             total_records=total, available_from=first,
-                             available_to=last)
+        # Nothing found, so the label can only be what was asked for.
+        return WorkoutSeries(label=activity or "all workouts", period=period,
+                             unit=None, total_records=total,
+                             available_from=first, available_to=last)
+    # The label is what was found, not the search pattern: "ing" over a run
+    # and a ride is two activities, and a payload reading {"series": "ing",
+    # "workouts": 2} named neither.
+    label = ", ".join(sorted({activity_name(r.activity_type) for r in rows}))
 
     buckets: dict[str, list[WorkoutRow]] = {}
     spans: dict[str, tuple[str, str]] = {}
@@ -935,9 +979,12 @@ def metric_series(
     if combine == "auto":
         combine = "max" if agg in ADDITIVE else "weighted"
 
-    # (period, category) -> source -> accumulator
+    # (period, category) -> source -> accumulator. `sum` starts as None,
+    # like min and max: a category metric's rows carry no numeric value,
+    # and a sum that started at 0.0 made every stand-hour and sleep-stage
+    # total print as 0.0, which the schema docstring forbids.
     buckets: dict[tuple[str, str | None], dict[str | None, dict]] = defaultdict(
-        lambda: defaultdict(lambda: {"n": 0, "sum": 0.0, "dur": 0.0,
+        lambda: defaultdict(lambda: {"n": 0, "sum": None, "dur": 0.0,
                                      "min": None, "max": None})
     )
     spans: dict[str, tuple[str, str]] = {}
@@ -950,7 +997,7 @@ def metric_series(
         acc = buckets[key][row["source_name"]]
         acc["n"] += row["n"] or 0
         if row["sum_value"] is not None:
-            acc["sum"] += row["sum_value"]
+            acc["sum"] = (acc["sum"] or 0.0) + row["sum_value"]
         if row["duration_sec"] is not None:
             acc["dur"] += row["duration_sec"]
         if row["min_value"] is not None:
@@ -966,9 +1013,15 @@ def metric_series(
         buckets.items(), key=lambda item: (item[0][0], item[0][1] or "")
     ):
         per_source: dict[str, float] = {}
+        per_source_n: dict[str, int] = {}
         for src, acc in by_source.items():
             per_source[src or "(unknown)"] = _source_value(acc, agg)
-        if len(by_source) > 1 and agg in ADDITIVE:
+            per_source_n[src or "(unknown)"] = acc["n"]
+        # Any aggregate: an average blended from two devices is presented
+        # as one measurement just as surely as a sum is doubled by them.
+        # Counting additive aggregates only left the default aggregate for
+        # every discrete metric with no warning at all.
+        if len(by_source) > 1:
             multi_source += 1
         value = _combine(by_source, agg, combine)
         total_n = sum(acc["n"] for acc in by_source.values())
@@ -983,6 +1036,7 @@ def metric_series(
                 sources=tuple(sorted(s or "(unknown)" for s in by_source)),
                 per_source=per_source,
                 category=category,
+                per_source_n=per_source_n,
             )
         )
 
@@ -1007,6 +1061,17 @@ def metric_series(
 # --------------------------------------------------------------------------- #
 # Documents and lab results (milestone 2)
 # --------------------------------------------------------------------------- #
+
+# The four situations `out_of_range`'s null used to cover as one (sweep
+# finding B5). `out_of_range` keeps its tri-state meaning because the eval
+# scorers read it; `range_status` is the field that says which null this is.
+RANGE_STATUSES = ("in_range", "out_of_range", "no_printed_range", "not_numeric")
+
+# A flag that says the lab judged the value normal. Anything else a lab prints
+# in the flag column (H, L, A, HH, Critical, Abnormal) is its judgement that
+# the value is not.
+_NORMAL_FLAGS = frozenset({"N", "NORMAL", "NORM", "WNL"})
+
 
 @dataclass
 class LabPoint:
@@ -1059,6 +1124,31 @@ class LabPoint:
         if self.ref_high is not None and self.value_num > self.ref_high:
             return True
         return False
+
+    @property
+    def range_status(self) -> str:
+        """Which of `RANGE_STATUSES` this result is.
+
+        `out_of_range` answers "is the number outside the parsed range?" and
+        says None for four different reasons. This says which: `in_range` and
+        `out_of_range` when a number was compared with a parsed range;
+        `no_printed_range` when a number had no range to compare with,
+        whether the report printed none or printed one that did not parse
+        (by decision, the same situation: nothing to compare against);
+        `not_numeric` when the value is text and was never compared.
+
+        A lab flag is the lab's own judgement and makes the result
+        `out_of_range` whatever else parsed, so ">500 H" is not `not_numeric`
+        and "112 H" with no printed range is not `no_printed_range`. A flag
+        that says normal is not that judgement and is ignored here.
+        """
+        if self.flag and self.flag.strip().upper() not in _NORMAL_FLAGS:
+            return "out_of_range"
+        if self.value_num is None:
+            return "not_numeric"
+        if self.ref_low is None and self.ref_high is None:
+            return "no_printed_range"
+        return "out_of_range" if self.out_of_range else "in_range"
 
 
 @dataclass
@@ -1146,6 +1236,24 @@ def list_tags(conn: sqlite3.Connection, limit: int | None = None) -> list[dict]:
         sql += " LIMIT ?"
         params.append(limit)
     return [dict(r) for r in conn.execute(sql, params)]
+
+
+def tags_matching(conn: sqlite3.Connection, query: str) -> list[str]:
+    """Tags whose name appears among the query's words.
+
+    Frontmatter is stripped before chunking, so a tag is not body text and
+    a search for it misses. The CLI and the search tool both use this to
+    say so rather than letting a miss read as "the notes hold nothing".
+    """
+    import re
+
+    words = {w.lower() for w in re.findall(r"[A-Za-z0-9/-]{2,}", query)}
+    if not words:
+        return []
+    return [
+        row["tag"] for row in conn.execute("SELECT DISTINCT tag FROM document_tag")
+        if row["tag"] in words
+    ]
 
 
 def notes_by_tag(conn: sqlite3.Connection, tag: str) -> list[dict]:
@@ -1619,7 +1727,9 @@ def _source_value(acc: dict, agg: str) -> float | None:
     if agg == "max":
         return acc["max"]
     if agg == "avg":
-        return acc["sum"] / acc["n"] if acc["n"] else None
+        if acc["sum"] is None or not acc["n"]:
+            return None
+        return acc["sum"] / acc["n"]
     raise ValueError(agg)
 
 
@@ -1634,11 +1744,13 @@ def _combine(by_source: dict, agg: str, combine: str) -> float | None:
         return max(values)
     if agg == "avg":
         # Sample-weighted across sources: a source contributing 400 samples
-        # should not be averaged 1:1 with one contributing 3.
-        total_n = sum(a["n"] for a in by_source.values())
+        # should not be averaged 1:1 with one contributing 3. Only sources
+        # that carried a value count; a source with none has no mean.
+        valued = [a for a in by_source.values() if a["sum"] is not None]
+        total_n = sum(a["n"] for a in valued)
         if not total_n:
             return None
-        return sum(a["sum"] for a in by_source.values()) / total_n
+        return sum(a["sum"] for a in valued) / total_n
     # Additive aggregates: sum or max across sources (see module docstring).
     if combine == "sum":
         return sum(values)

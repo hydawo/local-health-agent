@@ -54,6 +54,9 @@ class Signal:
 def _point_evidence(p: LabPoint) -> dict:
     return {
         "value": p.value_num,
+        # What the lab printed when it printed no number: ">500", "see
+        # comment". Carried so a text-valued result can be the latest one.
+        "value_text": p.value_text if p.value_num is None else None,
         "unit": p.unit,
         "date": p.collected_date,
         "range": p.ref_text,
@@ -88,14 +91,40 @@ def _near_limit(latest: LabPoint, previous: LabPoint) -> tuple[str, float] | Non
 
 
 def lab_signals_for(trend: LabTrend) -> list[Signal]:
-    """At most one signal per analyte, from its dated numeric results."""
+    """At most one signal per analyte, from its dated results.
+
+    A result the lab printed as text (">500", "see comment") stays in the
+    ordering. Dropping it made the newest number "latest", and a history
+    ending in ">500" flagged H read as having returned to range. A flagged
+    text result is reported as out of range with the text the lab printed;
+    an unflagged one is not a number, so nothing can be said to have
+    returned to range or to sit near a limit, and the analyte yields no
+    signal.
+    """
     points = [p for p in trend.points
-              if p.value_num is not None and p.collected_date]
+              if (p.value_num is not None or p.value_text) and p.collected_date]
     if not points:
         return []
-    points.sort(key=lambda p: p.collected_date)
-    latest = points[-1]
-    previous = points[-2] if len(points) > 1 else None
+    # One draw can arrive twice, from a scanned report and from the health
+    # system's record, and the two can disagree. `lab_trend` keeps both
+    # rows on purpose. Sorting on the date alone made them "latest" and
+    # "previous", and the sheet printed "160, up from 130" for one draw, in
+    # whichever order the rows were inserted. So the draws are grouped by
+    # date, and a date whose records disagree is never one side of a trend.
+    by_date: dict[str, list[LabPoint]] = {}
+    for p in sorted(points, key=lambda p: p.collected_date):
+        by_date.setdefault(p.collected_date, []).append(p)
+    dates = sorted(by_date)
+    latest_group = by_date[dates[-1]]
+    if _disagree(latest_group):
+        return [Signal(
+            kind="lab_sources_disagree", subject=trend.key, label=trend.label,
+            evidence={"date": dates[-1],
+                      "reported": [_point_evidence(p) for p in latest_group]},
+            caveats=_ocr_caveats(*latest_group),
+        )]
+    latest = latest_group[-1]
+    previous = by_date[dates[-2]][-1] if len(dates) > 1 else None
     latest_out = bool(latest.flag) or latest.out_of_range is True
 
     if latest_out:
@@ -103,17 +132,23 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
             kind="lab_out_of_range", subject=trend.key, label=trend.label,
             evidence={"latest": _point_evidence(latest),
                       "previous": _point_evidence(previous) if previous else None},
-            caveats=_ocr_caveats(*([latest] + ([previous] if previous else []))),
+            caveats=(_ocr_caveats(*([latest] + ([previous] if previous else [])))
+                     + (_disagreement_caveats(by_date[dates[-2]])
+                        if previous else [])),
         )]
+    if latest.value_num is None:
+        return []
 
-    earlier_out = [p for p in points[:-1] if p.flag or p.out_of_range is True]
+    earlier = [p for d in dates[:-1] for p in by_date[d]]
+    earlier_out = [p for p in earlier if p.flag or p.out_of_range is True]
     if earlier_out:
         last_out = earlier_out[-1]
         return [Signal(
             kind="lab_returned_to_range", subject=trend.key, label=trend.label,
             evidence={"latest": _point_evidence(latest),
                       "previous": _point_evidence(last_out)},
-            caveats=_ocr_caveats(latest, last_out),
+            caveats=(_ocr_caveats(latest, last_out)
+                     + _disagreement_caveats(by_date[last_out.collected_date])),
         )]
 
     if previous is not None:
@@ -125,9 +160,26 @@ def lab_signals_for(trend: LabTrend) -> list[Signal]:
                 evidence={"latest": _point_evidence(latest),
                           "previous": _point_evidence(previous),
                           "limit_side": side, "limit": limit},
-                caveats=_ocr_caveats(latest, previous),
+                caveats=(_ocr_caveats(latest, previous)
+                         + _disagreement_caveats(by_date[dates[-2]])),
             )]
     return []
+
+
+def _disagree(group: list[LabPoint]) -> bool:
+    """True when the records of one draw report more than one value."""
+    return len({(p.value_num, p.value_text, p.unit) for p in group}) > 1
+
+
+def _disagreement_caveats(group: list[LabPoint]) -> list[str]:
+    """A note for a draw whose records disagree, when that draw is the
+    earlier side of a comparison. The value shown is one record's; the
+    note names the others rather than hiding them."""
+    if not _disagree(group):
+        return []
+    said = "; ".join(f"{_val(_point_evidence(p))} in {p.citation}" for p in group)
+    return [f"Two records disagree about the {group[0].collected_date} draw "
+            f"({said}); the figure above is one of them."]
 
 
 def lab_signals(conn) -> list[Signal]:
@@ -196,16 +248,38 @@ def _days(n: int) -> str:
     return f"{n} day" if n == 1 else f"{n} days"
 
 
-def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float]]:
-    """(label, unit, {date: value}) for one metric, sleep via nights."""
+def _daily_values(conn, alias: str) -> tuple[str, str | None, dict[str, float],
+                                             dict[str, tuple[str, ...]]]:
+    """(label, unit, {date: value}, {date: sources}) for one metric, sleep
+    via nights.
+
+    The sources travel with the values. Without them a person who moved
+    from a phone to a watch mid-window had the level move with the device,
+    and the sheet reported a change in them, naming no device anywhere.
+    """
     if alias == "sleep":
         nights = queries.sleep_nights(conn)
-        return "Sleep", "s", {n["night"]: n["asleep_seconds"] for n in nights
-                              if n["asleep_seconds"]}
+        kept = [n for n in nights if n["asleep_seconds"]]
+        return ("Sleep", "s", {n["night"]: n["asleep_seconds"] for n in kept},
+                {n["night"]: (n["source"],) for n in kept})
     metric = metrics.resolve(alias)
     series = queries.metric_series(conn, metric, period="day")
-    values = {p.period_start: p.value for p in series.points if p.value is not None}
-    return metric.label, series.unit, values
+    points = [p for p in series.points if p.value is not None]
+    return (metric.label, series.unit,
+            {p.period_start: p.value for p in points},
+            {p.period_start: p.sources for p in points})
+
+
+def _device_caveat(label: str, recent: list[str], prior: list[str]) -> list[str]:
+    """Said on the sheet when the two windows were recorded by different
+    devices, because a change of device can move the level on its own."""
+    if recent == prior:
+        return []
+    return [f"The recent {label.lower()} figures come from "
+            f"{', '.join(recent) or 'an unnamed device'} and the earlier "
+            f"ones from {', '.join(prior) or 'an unnamed device'}. A change "
+            f"of device can move the level on its own, so this may be the "
+            f"device rather than you."]
 
 
 def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], dict | None]:
@@ -214,7 +288,7 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
     window: dict | None = None
     need = max(1, int(window_days * MIN_WINDOW_FRACTION))
     for alias, threshold in SHIFT_THRESHOLDS.items():
-        label, unit, values = _daily_values(conn, alias)
+        label, unit, values, sources = _daily_values(conn, alias)
         if not values:
             gaps.append(f"{label}: none in the export")
             continue
@@ -224,6 +298,10 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
         prior_end = recent_start - timedelta(days=1)
         recent = [v for d, v in values.items() if recent_start.isoformat() <= d <= last.isoformat()]
         prior = [v for d, v in values.items() if prior_start.isoformat() <= d <= prior_end.isoformat()]
+        recent_sources = sorted({s for d, ss in sources.items() for s in ss
+                                 if recent_start.isoformat() <= d <= last.isoformat()})
+        prior_sources = sorted({s for d, ss in sources.items() for s in ss
+                                if prior_start.isoformat() <= d <= prior_end.isoformat()})
         if window is None or last.isoformat() > window["recent_end"]:
             window = {"recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                       "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat()}
@@ -250,7 +328,9 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
                 "recent_start": recent_start.isoformat(), "recent_end": last.isoformat(),
                 "prior_start": prior_start.isoformat(), "prior_end": prior_end.isoformat(),
                 "threshold_text": _threshold_text(alias, unit),
+                "recent_sources": recent_sources, "prior_sources": prior_sources,
             },
+            caveats=_device_caveat(label, recent_sources, prior_sources),
         ))
     return signals, gaps, window
 
@@ -258,8 +338,9 @@ def metric_signals(conn, *, window_days: int) -> tuple[list[Signal], list[str], 
 # Reading order for the rendered sheet: the values furthest from routine
 # come first, near-limit and returned-to-range follow, metric shifts last.
 # Stable within a kind, so `sorted` alone gives a deterministic order.
-_KIND_ORDER = {"lab_out_of_range": 0, "lab_near_limit": 1,
-              "lab_returned_to_range": 2, "metric_shift": 3}
+_KIND_ORDER = {"lab_out_of_range": 0, "lab_sources_disagree": 1,
+              "lab_near_limit": 2, "lab_returned_to_range": 3,
+              "metric_shift": 4}
 
 
 @dataclass
@@ -298,6 +379,7 @@ def gather(conn, *, window_days: int = 30, today: date | None = None) -> Sheet:
 # these templates to it.
 QUESTION_TEMPLATES = {
     "lab_out_of_range": "**Ask whether your {label} needs follow-up.**",
+    "lab_sources_disagree": "**Ask which record of your {label} is right.**",
     "lab_returned_to_range": "**Ask whether your {label} should keep being checked.**",
     "lab_near_limit": "**Ask whether your {label} is worth watching.**",
     "metric_shift": "**Ask about your {label}.**",
@@ -331,6 +413,8 @@ def _sentence_label(label: str) -> str:
 
 def _val(e: dict) -> str:
     unit = f" {e['unit']}" if e.get("unit") and e["unit"] != "%" else (e.get("unit") or "")
+    if e.get("value") is None:
+        return f"{e.get('value_text') or 'no numeric value'}{unit}"
     return f"{_num(e['value'])}{unit}"
 
 
@@ -362,10 +446,19 @@ def _evidence_sentence(s: Signal) -> str:
         else:
             text = (f"It was {_val(latest)} on {latest['date']}{_flagged(latest)}, "
                     f"with no printed range")
-        if prev:
+        if prev and latest.get("value") is not None and prev.get("value") is not None:
             direction = "down" if latest["value"] < prev["value"] else "up"
             text += f", {direction} from {_val(prev)} on {prev['date']}"
+        elif prev:
+            # One side is text, so there is no direction to state.
+            text += f", after {_val(prev)} on {prev['date']}"
         return f"{text} {_cite(latest, prev)}."
+    if s.kind == "lab_sources_disagree":
+        said = " and as ".join(
+            f"{_val(r)}{_flagged(r)} in {', '.join(r['citation'].split(', ')[:2])}"
+            for r in e["reported"])
+        return (f"The {e['date']} draw is recorded as {said}. The two records "
+                f"disagree, and this tool cannot say which is right.")
     if s.kind == "lab_returned_to_range":
         latest, prev = e["latest"], e["previous"]
         range_clause = (f"inside the printed range of {_range(latest)}"
