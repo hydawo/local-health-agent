@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1032 732" width="1032" height="732" role="img" aria-label="Four source types go through four readers into one SQLite index and a vector store.">
+<title>Four source types go through four readers into one SQLite index and a vector store.</title>
+<style>
+  :root{--bg:#f5f7f6;--surface:#ffffff;--fg:#17201d;--muted:#5b6964;--line:#b9c6c1;
+    --accent:#1f6f5c;--accent-soft:#dcefe8;--human:#a2552a;--human-soft:#f8e7dc;
+    --agent:#3d5fa8;--agent-soft:#e3eaf8;--guard:#b3413c;--guard-soft:#f8e3e1;
+    --net:#a8690f;--net-soft:#fbefd9;
+    --body:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#111816;--surface:#18211e;--fg:#e4ebe8;--muted:#9aaba5;--line:#3a4a45;
+    --accent:#5cc3a6;--accent-soft:#1d3a32;--human:#eda077;--human-soft:#3a271c;
+    --agent:#8fb0ee;--agent-soft:#1c2840;--guard:#e07068;--guard-soft:#3a1f1d;
+    --net:#e0a94b;--net-soft:#332912}}
+
+  text{font-family:var(--body);fill:var(--fg)}
+  .t{font-size:15px;font-weight:600}
+  .s{font-size:12px;fill:var(--muted)}
+  .x{font-size:11px;fill:var(--muted)}
+  .m{font-family:var(--mono);font-size:11.5px;fill:var(--fg)}
+  .mn{font-family:var(--mono);font-size:10.5px;fill:var(--fg)}
+  .hd{font-size:11.5px;font-weight:600;letter-spacing:.08em;fill:var(--muted)}
+  .lbl{font-size:11.5px;fill:var(--muted);font-style:italic}
+  .human{fill:var(--human-soft);stroke:var(--human);stroke-width:1.5}
+  .agent{fill:var(--agent-soft);stroke:var(--agent);stroke-width:1.5}
+  .coord{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+  .guard{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.8}
+  .guardd{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.5;stroke-dasharray:6 4}
+  .net{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5}
+  .netd{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5;stroke-dasharray:6 4}
+  .kb{fill:var(--surface);stroke:var(--fg);stroke-width:1.8}
+  .out{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
+  .w{fill:none;stroke:var(--line);stroke-width:1.8}
+  .wd{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:5 4}
+  .wa{fill:none;stroke:var(--accent);stroke-width:2}
+  .wg{fill:none;stroke:var(--agent);stroke-width:1.8}
+  .wgd{fill:none;stroke:var(--guard);stroke-width:1.8;stroke-dasharray:6 4}
+  .wn{fill:none;stroke:var(--net);stroke-width:1.8;stroke-dasharray:6 4}
+  .wnn{fill:none;stroke:var(--net);stroke-width:1.8}
+  .bound{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:8 5}
+  .ah{fill:var(--line)}.aa{fill:var(--accent)}.ag{fill:var(--agent)}
+  .agd{fill:var(--guard)}.an{fill:var(--net)}
+</style>
+<rect x="-16" y="-16" width="1032" height="732" fill="var(--bg)"/>
+<defs>
+      <marker id="c1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+      <marker id="c1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="aa"/></marker>
+    </defs>
+    <text x="30" y="28" class="hd">YOUR DROP FOLDER</text>
+    <text x="330" y="28" class="hd">READERS</text>
+    <text x="720" y="28" class="hd">THE INDEX</text>
+
+    <rect x="20" y="44" width="250" height="80" rx="10" class="human"/>
+    <text x="36" y="70" class="t">&#10084;&#65039; Health export, phone half</text>
+    <text x="36" y="90" class="mn">healthkit/export.xml, .zip</text>
+    <text x="36" y="108" class="x">Apple Health, every sample</text>
+    <rect x="20" y="140" width="250" height="88" rx="10" class="human"/>
+    <text x="36" y="166" class="t">&#127973; Health export, clinic half</text>
+    <text x="36" y="186" class="mn">healthkit/clinical-records/*.json</text>
+    <text x="36" y="204" class="x">FHIR sent by health systems,</text>
+    <text x="36" y="220" class="x">beside the XML in the same export</text>
+    <rect x="20" y="244" width="250" height="80" rx="10" class="human"/>
+    <text x="36" y="270" class="t">&#129514; Lab reports and records</text>
+    <text x="36" y="290" class="mn">records/*.pdf</text>
+    <text x="36" y="308" class="x">Digital or scanned</text>
+    <rect x="20" y="340" width="250" height="80" rx="10" class="human"/>
+    <text x="36" y="366" class="t">&#128221; Notes and photos</text>
+    <text x="36" y="386" class="mn">notes/ .md .txt .docx</text>
+    <text x="36" y="404" class="x">Photos and screenshots: .png .jpg .heic</text>
+
+    <rect x="330" y="44" width="300" height="86" rx="10" class="agent"/>
+    <text x="346" y="70" class="t">Stream parser</text>
+    <text x="346" y="88" class="mn">ingest/healthkit.py</text>
+    <text x="346" y="108" class="x">Reads the XML as a stream, about 13 MB</text>
+    <text x="346" y="124" class="x">3.7 GB, 8.3M records, about 6.8 minutes</text>
+    <rect x="330" y="146" width="300" height="118" rx="10" class="agent"/>
+    <text x="346" y="172" class="t">FHIR parser</text>
+    <text x="346" y="190" class="mn">ingest/fhir.py</text>
+    <text x="346" y="210" class="x">Eight resource types, eight switchable kinds</text>
+    <text x="346" y="226" class="x">LOINC code before the printed name</text>
+    <text x="346" y="242" class="x">One record per savepoint, so one bad</text>
+    <text x="346" y="258" class="x">file cannot cost the other 3,567</text>
+    <rect x="330" y="280" width="300" height="118" rx="10" class="agent"/>
+    <text x="346" y="306" class="t">Lab and record reader</text>
+    <text x="346" y="324" class="mn">ingest/records.py, labs.py</text>
+    <text x="346" y="344" class="x">Text layer first, OCR only as the fallback</text>
+    <text x="346" y="360" class="x">Two passes, ruled tables then text lines</text>
+    <text x="346" y="376" class="x">Names matched to 50 analytes, 142 variants</text>
+    <text x="346" y="392" class="x">Every value keeps its source line</text>
+    <rect x="330" y="414" width="300" height="86" rx="10" class="agent"/>
+    <text x="346" y="440" class="t">Notes reader</text>
+    <text x="346" y="458" class="mn">ingest/notes.py, readers.py</text>
+    <text x="346" y="478" class="x">Word files read like markdown, photos by OCR</text>
+    <text x="346" y="494" class="x">Undated notes stay undated</text>
+
+    <path d="M270 84 L328 86" class="wg" marker-end="url(#c1a)"/>
+    <path d="M270 184 L328 205" class="wg" marker-end="url(#c1a)"/>
+    <path d="M270 284 L328 339" class="wg" marker-end="url(#c1a)"/>
+    <path d="M270 380 L328 457" class="wg" marker-end="url(#c1a)"/>
+
+    <rect x="720" y="44" width="260" height="160" rx="10" class="kb"/>
+    <text x="736" y="70" class="t">&#128451;&#65039; health.db &#183; SQLite</text>
+    <text x="736" y="92" class="mn">record, daily_metric</text>
+    <text x="736" y="108" class="mn">workout, activity_summary</text>
+    <text x="736" y="124" class="mn">document, document_page</text>
+    <text x="736" y="140" class="mn">lab_result, chunk</text>
+    <text x="736" y="156" class="mn">clinical_fact, clinical_vital</text>
+    <text x="736" y="178" class="x">Schema v6. Refuses an older index</text>
+    <text x="736" y="194" class="x">and names ingest --rebuild</text>
+    <rect x="720" y="226" width="260" height="78" rx="10" class="kb"/>
+    <text x="736" y="252" class="t">&#129518; vectors/ &#183; LanceDB</text>
+    <text x="736" y="272" class="x">768-number embeddings of text chunks</text>
+    <text x="736" y="288" class="x">nomic-embed-text through Ollama</text>
+    <path d="M630 86 L718 86" class="wa" marker-end="url(#c1a)"/>
+    <path d="M630 205 C680 205 680 120 718 120" class="wa" marker-end="url(#c1a)"/>
+    <path d="M630 339 C690 339 690 140 718 140" class="wa" marker-end="url(#c1a)"/>
+    <path d="M630 457 C700 457 700 160 718 160" class="wa" marker-end="url(#c1a)"/>
+    <path d="M850 204 L850 224" class="w" marker-end="url(#c1)"/>
+    <text x="860" y="218" class="lbl">chunks embedded</text>
+    <rect x="720" y="330" width="260" height="100" rx="10" class="netd"/>
+    <text x="736" y="356" class="t">&#128218; literature.db</text>
+    <text x="736" y="376" class="x">Filled by literature packs, not by your</text>
+    <text x="736" y="392" class="x">files. Abstracts only, tiers read from</text>
+    <text x="736" y="408" class="x">PubMed metadata (diagram 4)</text>
+
+    <rect x="20" y="452" width="300" height="108" rx="10" class="guard"/>
+    <text x="36" y="478" class="t">&#128274; Identity never lands</text>
+    <text x="36" y="498" class="x">The Patient resource is not read, and no</text>
+    <text x="36" y="514" class="x">subject, encounter, performer or recorder</text>
+    <text x="36" y="530" class="x">field exists on any parsed object, so none</text>
+    <text x="36" y="546" class="x">of it can be stored by mistake later.</text>
+
+    <rect x="20" y="580" width="960" height="100" rx="10" class="out"/>
+    <text x="36" y="604" class="hd">WHAT THE READERS REFUSE TO DO</text>
+    <text x="36" y="630" class="s" style="font-weight:600;fill:var(--fg)">Convert units</text>
+    <text x="36" y="648" class="x">Assay unknown, so no conversion</text>
+    <text x="270" y="630" class="s" style="font-weight:600;fill:var(--fg)">Trend a photographed report</text>
+    <text x="270" y="648" class="x">Searchable text, never a trend</text>
+    <text x="510" y="630" class="s" style="font-weight:600;fill:var(--fg)">Mine notes for lab values</text>
+    <text x="510" y="648" class="x">A journal line is recollection</text>
+    <text x="740" y="630" class="s" style="font-weight:600;fill:var(--fg)">Fetch what a note points at</text>
+    <text x="740" y="648" class="x">A clinical note is a URL, left alone</text>
+    <text x="36" y="670" class="x">Precision over recall. A missing value is a visible gap, a wrong one quietly bends a trend line.</text>
+</svg>

@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1032 532" width="1032" height="532" role="img" aria-label="Lab values reach the model with a four-value range status, so a missing printed range cannot read as normal. The answer text then passes through the guardrail, which can trigger one rewrite pass. A research block is appended by a rule, and the result goes to the person with the answer record kept on the side.">
+<title>Lab values reach the model with a four-value range status, so a missing printed range cannot read as normal. The answer text then passes through the guardrail, which can trigger one rewrite pass. A research block is appended by a rule, and the result goes to the person with the answer record kept on the side.</title>
+<style>
+  :root{--bg:#f5f7f6;--surface:#ffffff;--fg:#17201d;--muted:#5b6964;--line:#b9c6c1;
+    --accent:#1f6f5c;--accent-soft:#dcefe8;--human:#a2552a;--human-soft:#f8e7dc;
+    --agent:#3d5fa8;--agent-soft:#e3eaf8;--guard:#b3413c;--guard-soft:#f8e3e1;
+    --net:#a8690f;--net-soft:#fbefd9;
+    --body:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#111816;--surface:#18211e;--fg:#e4ebe8;--muted:#9aaba5;--line:#3a4a45;
+    --accent:#5cc3a6;--accent-soft:#1d3a32;--human:#eda077;--human-soft:#3a271c;
+    --agent:#8fb0ee;--agent-soft:#1c2840;--guard:#e07068;--guard-soft:#3a1f1d;
+    --net:#e0a94b;--net-soft:#332912}}
+
+  text{font-family:var(--body);fill:var(--fg)}
+  .t{font-size:15px;font-weight:600}
+  .s{font-size:12px;fill:var(--muted)}
+  .x{font-size:11px;fill:var(--muted)}
+  .m{font-family:var(--mono);font-size:11.5px;fill:var(--fg)}
+  .mn{font-family:var(--mono);font-size:10.5px;fill:var(--fg)}
+  .hd{font-size:11.5px;font-weight:600;letter-spacing:.08em;fill:var(--muted)}
+  .lbl{font-size:11.5px;fill:var(--muted);font-style:italic}
+  .human{fill:var(--human-soft);stroke:var(--human);stroke-width:1.5}
+  .agent{fill:var(--agent-soft);stroke:var(--agent);stroke-width:1.5}
+  .coord{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+  .guard{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.8}
+  .guardd{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.5;stroke-dasharray:6 4}
+  .net{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5}
+  .netd{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5;stroke-dasharray:6 4}
+  .kb{fill:var(--surface);stroke:var(--fg);stroke-width:1.8}
+  .out{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
+  .w{fill:none;stroke:var(--line);stroke-width:1.8}
+  .wd{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:5 4}
+  .wa{fill:none;stroke:var(--accent);stroke-width:2}
+  .wg{fill:none;stroke:var(--agent);stroke-width:1.8}
+  .wgd{fill:none;stroke:var(--guard);stroke-width:1.8;stroke-dasharray:6 4}
+  .wn{fill:none;stroke:var(--net);stroke-width:1.8;stroke-dasharray:6 4}
+  .wnn{fill:none;stroke:var(--net);stroke-width:1.8}
+  .bound{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:8 5}
+  .ah{fill:var(--line)}.aa{fill:var(--accent)}.ag{fill:var(--agent)}
+  .agd{fill:var(--guard)}.an{fill:var(--net)}
+</style>
+<rect x="-16" y="-16" width="1032" height="532" fill="var(--bg)"/>
+<defs>
+      <marker id="b1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+      <marker id="b1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="aa"/></marker>
+      <marker id="b1g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ag"/></marker>
+      <marker id="b1d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="agd"/></marker>
+    </defs>
+
+    <rect x="20" y="60" width="250" height="112" rx="10" class="guard"/>
+    <text x="36" y="84" class="t">&#128207; Range status</text>
+    <text x="36" y="102" class="m">store/queries.py</text>
+    <text x="36" y="122" class="x">Every lab value names its range_status:</text>
+    <text x="36" y="137" class="x">in_range, out_of_range, no_printed_range</text>
+    <text x="36" y="152" class="x">or not_numeric, so a value with no printed</text>
+    <text x="36" y="167" class="x">range cannot read as within range.</text>
+    <path d="M115 172 L115 188" class="wgd" marker-end="url(#b1d)"/>
+    <rect x="20" y="190" width="190" height="80" rx="10" class="agent"/>
+    <text x="115" y="218" text-anchor="middle" class="t">🧠 Model's answer</text>
+    <text x="115" y="238" text-anchor="middle" class="x">Text with no more</text>
+    <text x="115" y="254" text-anchor="middle" class="x">tool calls to make</text>
+    <path d="M210 230 L288 230" class="wg" marker-end="url(#b1g)"/>
+    <text x="249" y="220" text-anchor="middle" class="lbl">text</text>
+
+    <rect x="290" y="90" width="330" height="294" rx="12" class="guard"/>
+    <text x="306" y="116" class="t">🛡️ Guardrail</text>
+    <text x="306" y="134" class="m">agent/guardrail.py</text>
+    <text x="306" y="164" class="s" style="font-weight:600;fill:var(--fg)">diagnosis</text>
+    <text x="306" y="180" class="x">Phrasing that reads as a diagnosis, or denies one</text>
+    <text x="306" y="194" class="x">without naming the record the denial rests on</text>
+    <text x="306" y="222" class="s" style="font-weight:600;fill:var(--fg)">treatment</text>
+    <text x="306" y="238" class="x">Advice to start, stop or change a drug</text>
+    <text x="306" y="266" class="s" style="font-weight:600;fill:var(--fg)">unhelpful_refusal</text>
+    <text x="306" y="282" class="x">Declined to look at data it holds</text>
+    <text x="306" y="310" class="s" style="font-weight:600;fill:var(--fg)">uncited_medical_claim</text>
+    <text x="306" y="326" class="x">A general threshold with no PMID</text>
+    <text x="306" y="340" class="x">that the tool returned this turn</text>
+    <text x="306" y="368" class="x">Checked sentence by sentence</text>
+
+    <path d="M400 384 L400 408" class="wgd" marker-end="url(#b1d)"/>
+    <text x="392" y="400" text-anchor="end" class="lbl">flagged</text>
+    <path d="M520 408 L520 386" class="wgd" marker-end="url(#b1d)"/>
+    <text x="530" y="400" class="lbl">recheck</text>
+    <rect x="290" y="410" width="330" height="70" rx="10" class="guardd"/>
+    <text x="455" y="434" text-anchor="middle" class="t">✍️ One rewrite pass</text>
+    <text x="455" y="452" text-anchor="middle" class="x">The model restates the answer without the flagged part.</text>
+    <text x="455" y="467" text-anchor="middle" class="x">If it is still flagged, you see a visible note.</text>
+
+    <path d="M620 165 L668 165" class="wa" marker-end="url(#b1a)"/>
+    <rect x="670" y="90" width="310" height="150" rx="12" class="coord"/>
+    <text x="685" y="116" class="t">📎 Research block</text>
+    <text x="685" y="134" class="m">agent/context.py</text>
+    <text x="685" y="158" class="x">A rule, not a model. Runs after the guard.</text>
+    <text x="685" y="174" class="x">Up to 3 flagged lab analytes, 2 findings each.</text>
+    <text x="685" y="190" class="x">Fixed template of value, flag, title, year,</text>
+    <text x="685" y="206" class="x">evidence tier and PMID.</text>
+    <text x="685" y="226" class="x">Skipped if the model searched itself.</text>
+
+    <rect x="670" y="256" width="310" height="44" rx="8" class="out"/>
+    <text x="825" y="274" text-anchor="middle" class="x">Built after the answer is final. The model never</text>
+    <text x="825" y="289" text-anchor="middle" class="x">sees it, so it cannot turn it into advice.</text>
+    <path d="M825 300 L825 330" class="wa" marker-end="url(#b1a)"/>
+
+    <rect x="670" y="332" width="310" height="100" rx="12" class="kb"/>
+    <text x="825" y="358" text-anchor="middle" class="t">📄 What you get</text>
+    <text x="825" y="378" text-anchor="middle" class="x">Answer with the file and page for each value</text>
+    <text x="825" y="394" text-anchor="middle" class="x">A standing disclaimer on lab answers</text>
+    <text x="825" y="410" text-anchor="middle" class="x">The research block underneath, if any</text>
+
+    <path d="M115 270 L115 328" class="wd" marker-end="url(#b1)"/>
+    <text x="123" y="304" class="lbl">every step logged</text>
+    <rect x="20" y="332" width="230" height="100" rx="10" class="out"/>
+    <text x="135" y="358" text-anchor="middle" class="t">🧾 Answer record</text>
+    <text x="135" y="378" text-anchor="middle" class="x">Tools called, findings returned,</text>
+    <text x="135" y="394" text-anchor="middle" class="x">guard fired, rewrite landed,</text>
+    <text x="135" y="410" text-anchor="middle" class="x">research block. ask --json shows it.</text>
+</svg>
