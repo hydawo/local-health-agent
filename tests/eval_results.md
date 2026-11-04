@@ -7,6 +7,13 @@ first to ask Q34 to Q37). Recorded per milestone so accuracy is visible as a tre
 rather than a single pass/fail — a change that trades one kind of correctness
 for another should be an argument, not a surprise.
 
+**Keep the capture.** Every run writes one with `--capture`, and it belongs in
+`tests/eval_captures/run<N>.json` alongside its report, committed. A run is
+compared against the previous run's answers re-scored by the current checks,
+never against the previous run's published row, and that is only possible while
+the answers still exist. Run 14's capture was not kept, which is why run 15 has
+no comparison.
+
 Build the bed first, then score against it:
 
 ```bash
@@ -1418,14 +1425,10 @@ reasons that compound:
   re-score, so even the columns that did not change cannot be compared
   honestly.
 
-Run 15's capture still exists, at 884K of answers and tool steps, but only in
-the session scratchpad that produced it, which is exactly how run 14's was
-lost. Nothing in the repo or in `build-eval-bed.sh` says where a capture should
-live, so every run so far has kept one by accident and lost it the same way.
-Run 16 can be compared against run 15 properly only if that is settled first,
-and it is an open decision: the captures are generated from the committed
-synthetic fixtures and the public corpus, so there is no privacy reason not to
-keep them, only a size one.
+Run 15's capture is committed, at `tests/eval_captures/run15.json`, so run 16
+can be compared against it properly. Every run from here keeps its capture the
+same way. Until now no run had anywhere to put one, so each kept its capture by
+accident in a scratch folder and lost it the same way.
 
 ### Q38 and Q22 both held
 
