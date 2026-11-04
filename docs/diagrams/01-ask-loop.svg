@@ -1,0 +1,171 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-16 -16 1468 624" width="1468" height="624" role="img" aria-label="The ask loop: a question goes to the orchestrator, which loops between the local model and eight read-only tools that read three local stores. A cloud tier sits outside the machine boundary and is opt-in.">
+<title>The ask loop: a question goes to the orchestrator, which loops between the local model and eight read-only tools that read three local stores. A cloud tier sits outside the machine boundary and is opt-in.</title>
+<style>
+  :root{--bg:#f5f7f6;--surface:#ffffff;--fg:#17201d;--muted:#5b6964;--line:#b9c6c1;
+    --accent:#1f6f5c;--accent-soft:#dcefe8;--human:#a2552a;--human-soft:#f8e7dc;
+    --agent:#3d5fa8;--agent-soft:#e3eaf8;--guard:#b3413c;--guard-soft:#f8e3e1;
+    --net:#a8690f;--net-soft:#fbefd9;
+    --body:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+  @media (prefers-color-scheme:dark){:root{--bg:#111816;--surface:#18211e;--fg:#e4ebe8;--muted:#9aaba5;--line:#3a4a45;
+    --accent:#5cc3a6;--accent-soft:#1d3a32;--human:#eda077;--human-soft:#3a271c;
+    --agent:#8fb0ee;--agent-soft:#1c2840;--guard:#e07068;--guard-soft:#3a1f1d;
+    --net:#e0a94b;--net-soft:#332912}}
+
+  text{font-family:var(--body);fill:var(--fg)}
+  .t{font-size:15px;font-weight:600}
+  .s{font-size:12px;fill:var(--muted)}
+  .x{font-size:11px;fill:var(--muted)}
+  .m{font-family:var(--mono);font-size:11.5px;fill:var(--fg)}
+  .mn{font-family:var(--mono);font-size:10.5px;fill:var(--fg)}
+  .hd{font-size:11.5px;font-weight:600;letter-spacing:.08em;fill:var(--muted)}
+  .lbl{font-size:11.5px;fill:var(--muted);font-style:italic}
+  .human{fill:var(--human-soft);stroke:var(--human);stroke-width:1.5}
+  .agent{fill:var(--agent-soft);stroke:var(--agent);stroke-width:1.5}
+  .coord{fill:var(--accent-soft);stroke:var(--accent);stroke-width:2}
+  .guard{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.8}
+  .guardd{fill:var(--guard-soft);stroke:var(--guard);stroke-width:1.5;stroke-dasharray:6 4}
+  .net{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5}
+  .netd{fill:var(--net-soft);stroke:var(--net);stroke-width:1.5;stroke-dasharray:6 4}
+  .kb{fill:var(--surface);stroke:var(--fg);stroke-width:1.8}
+  .out{fill:var(--surface);stroke:var(--line);stroke-width:1.2}
+  .w{fill:none;stroke:var(--line);stroke-width:1.8}
+  .wd{fill:none;stroke:var(--line);stroke-width:1.5;stroke-dasharray:5 4}
+  .wa{fill:none;stroke:var(--accent);stroke-width:2}
+  .wg{fill:none;stroke:var(--agent);stroke-width:1.8}
+  .wgd{fill:none;stroke:var(--guard);stroke-width:1.8;stroke-dasharray:6 4}
+  .wn{fill:none;stroke:var(--net);stroke-width:1.8;stroke-dasharray:6 4}
+  .wnn{fill:none;stroke:var(--net);stroke-width:1.8}
+  .bound{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:8 5}
+  .ah{fill:var(--line)}.aa{fill:var(--accent)}.ag{fill:var(--agent)}
+  .agd{fill:var(--guard)}.an{fill:var(--net)}
+</style>
+<rect x="-16" y="-16" width="1468" height="624" fill="var(--bg)"/>
+<defs>
+      <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>
+      <marker id="a1a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="aa"/></marker>
+      <marker id="a1g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ag"/></marker>
+      <marker id="a1n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="an"/></marker>
+    </defs>
+
+    <rect x="10" y="100" width="1416" height="484" rx="14" class="bound"/>
+    <text x="26" y="120" class="hd">YOUR MACHINE</text>
+
+    <!-- person and cloud, outside the boundary -->
+    <rect x="520" y="14" width="220" height="64" rx="10" class="human"/>
+    <text x="630" y="40" text-anchor="middle" class="t">&#128100; You</text>
+    <text x="630" y="60" text-anchor="middle" class="mn">health-agent ask "..."</text>
+    <rect x="1176" y="14" width="230" height="72" rx="10" class="netd"/>
+    <text x="1291" y="38" text-anchor="middle" class="t">&#9729;&#65039; Cloud tier, opt-in</text>
+    <text x="1291" y="56" text-anchor="middle" class="x">Anthropic API, only with --cloud</text>
+    <text x="1291" y="72" text-anchor="middle" class="x">after you type yes once</text>
+
+    <path d="M630 78 L630 136" class="wa" marker-end="url(#a1a)"/>
+    <text x="640" y="116" class="lbl">question</text>
+
+    <!-- orchestrator and model -->
+    <rect x="490" y="138" width="280" height="96" rx="10" class="coord"/>
+    <text x="630" y="164" text-anchor="middle" class="t">&#127899;&#65039; Orchestrator</text>
+    <text x="630" y="184" text-anchor="middle" class="x">About 60 lines, no framework</text>
+    <text x="630" y="200" text-anchor="middle" class="x">At most 6 steps per question</text>
+    <text x="630" y="216" text-anchor="middle" class="x">Records every step on the Answer</text>
+
+    <rect x="30" y="138" width="240" height="96" rx="10" class="agent"/>
+    <text x="150" y="164" text-anchor="middle" class="t">&#129504; Local model</text>
+    <text x="150" y="184" text-anchor="middle" class="x">qwen3.6:27b default, about 18 GB</text>
+    <text x="150" y="200" text-anchor="middle" class="x">qwen3.5:9b lite option, 6.6 GB</text>
+    <text x="150" y="216" text-anchor="middle" class="x">Ollama, loopback only</text>
+    <path d="M272 158 L488 158" class="wg" marker-end="url(#a1g)"/>
+    <text x="380" y="150" text-anchor="middle" class="lbl">tool call</text>
+    <path d="M488 196 L272 196" class="wg" marker-end="url(#a1g)"/>
+    <text x="380" y="214" text-anchor="middle" class="lbl">result</text>
+
+    <path d="M770 152 C900 150 1180 120 1266 88" class="wn" marker-end="url(#a1n)"/>
+    <text x="790" y="186" class="lbl">only with --cloud</text>
+
+    <!-- dispatch -->
+    <path d="M630 234 L630 262 M102 262 L1334 262" class="wa"/>
+    <text x="642" y="252" class="lbl">dispatch(name, args)</text>
+    <path d="M102 262 L102 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M278 262 L278 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M454 262 L454 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M630 262 L630 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M806 262 L806 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M982 262 L982 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M1158 262 L1158 288" class="wa" marker-end="url(#a1a)"/>
+    <path d="M1334 262 L1334 288" class="wa" marker-end="url(#a1a)"/>
+
+    <!-- tools -->
+    <rect x="18" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="102" y="312" text-anchor="middle" class="mn">query_healthkit</text>
+    <text x="102" y="332" text-anchor="middle" class="x">Steps, heart rate, sleep,</text>
+    <text x="102" y="347" text-anchor="middle" class="x">weight. One value per period</text>
+    <text x="102" y="362" text-anchor="middle" class="x">plus a precomputed overall</text>
+    <rect x="194" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="278" y="312" text-anchor="middle" class="mn">get_lab_trend</text>
+    <text x="278" y="332" text-anchor="middle" class="x">Dated lab values with the</text>
+    <text x="278" y="347" text-anchor="middle" class="x">printed range, flag, file</text>
+    <text x="278" y="362" text-anchor="middle" class="x">and page. Takes a list.</text>
+    <text x="278" y="377" text-anchor="middle" class="x">A PDF and a FHIR record of</text>
+    <text x="278" y="392" text-anchor="middle" class="x">one draw become one point.</text>
+    <rect x="370" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="454" y="312" text-anchor="middle" class="mn">get_clinical_history</text>
+    <text x="454" y="332" text-anchor="middle" class="x">Diagnoses, prescriptions,</text>
+    <text x="454" y="347" text-anchor="middle" class="x">allergies, immunizations,</text>
+    <text x="454" y="362" text-anchor="middle" class="x">procedures and note</text>
+    <text x="454" y="377" text-anchor="middle" class="x">references, as a health</text>
+    <text x="454" y="392" text-anchor="middle" class="x">system sent them.</text>
+    <rect x="546" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="630" y="312" text-anchor="middle" class="mn">get_clinical_vitals</text>
+    <text x="630" y="332" text-anchor="middle" class="x">Vitals a clinician measured:</text>
+    <text x="630" y="347" text-anchor="middle" class="x">blood pressure, pulse, SpO2.</text>
+    <text x="630" y="362" text-anchor="middle" class="x">Never joined to a watch</text>
+    <text x="630" y="377" text-anchor="middle" class="x">series.</text>
+    <rect x="722" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="806" y="312" text-anchor="middle" class="mn">get_workouts</text>
+    <text x="806" y="332" text-anchor="middle" class="x">Workout totals by activity</text>
+    <text x="806" y="347" text-anchor="middle" class="x">type over a date window</text>
+    <rect x="898" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="982" y="312" text-anchor="middle" class="mn">compare_windows</text>
+    <text x="982" y="332" text-anchor="middle" class="x">Two spans of one metric or</text>
+    <text x="982" y="347" text-anchor="middle" class="x">workout measure, around a</text>
+    <text x="982" y="362" text-anchor="middle" class="x">dated event or two ranges.</text>
+    <text x="982" y="377" text-anchor="middle" class="x">Both sides and a verdict on</text>
+    <text x="982" y="392" text-anchor="middle" class="x">comparability, never a gap.</text>
+    <rect x="1074" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="1158" y="312" text-anchor="middle" class="mn">search_records</text>
+    <text x="1158" y="332" text-anchor="middle" class="x">Notes, PDFs, OCR'd photos.</text>
+    <text x="1158" y="347" text-anchor="middle" class="x">Search by meaning, with a</text>
+    <text x="1158" y="362" text-anchor="middle" class="x">keyword fallback</text>
+    <rect x="1250" y="290" width="168" height="110" rx="10" class="agent"/>
+    <text x="1334" y="312" text-anchor="middle" class="mn">search_medical_literature</text>
+    <text x="1334" y="332" text-anchor="middle" class="x">Findings with PMID, year,</text>
+    <text x="1334" y="347" text-anchor="middle" class="x">journal and evidence tier.</text>
+    <text x="1334" y="362" text-anchor="middle" class="x">Retracted papers flagged.</text>
+
+    <!-- stores -->
+    <text x="28" y="440" class="lbl">tools only read</text>
+    <rect x="20" y="468" width="1000" height="76" rx="10" class="kb"/>
+    <text x="520" y="490" text-anchor="middle" class="t">&#128451;&#65039; health.db &#183; SQLite</text>
+    <text x="520" y="508" text-anchor="middle" class="x">Every metric sample, a daily rollup, workouts, lab results, documents</text>
+    <text x="520" y="523" text-anchor="middle" class="x">and their text chunks, and the clinical facts and clinician-measured</text>
+    <text x="520" y="538" text-anchor="middle" class="x">vitals read from the export's clinical-records folder</text>
+    <rect x="1040" y="468" width="160" height="76" rx="10" class="kb"/>
+    <text x="1120" y="490" text-anchor="middle" class="t">&#129518; vectors/</text>
+    <text x="1120" y="508" text-anchor="middle" class="x">LanceDB embeddings</text>
+    <text x="1120" y="523" text-anchor="middle" class="x">of the text chunks</text>
+    <rect x="1220" y="468" width="198" height="76" rx="10" class="kb"/>
+    <text x="1319" y="490" text-anchor="middle" class="t">&#128218; literature.db + vectors</text>
+    <text x="1319" y="508" text-anchor="middle" class="x">Abstracts, evidence tiers,</text>
+    <text x="1319" y="523" text-anchor="middle" class="x">retraction flags. Filled from</text>
+    <text x="1319" y="538" text-anchor="middle" class="x">packs (diagram 4)</text>
+    <path d="M102 400 L102 466" class="w" marker-end="url(#a1)"/>
+    <path d="M278 400 L278 466" class="w" marker-end="url(#a1)"/>
+    <path d="M454 400 L454 466" class="w" marker-end="url(#a1)"/>
+    <path d="M630 400 L630 466" class="w" marker-end="url(#a1)"/>
+    <path d="M806 400 L806 466" class="w" marker-end="url(#a1)"/>
+    <path d="M982 400 L982 466" class="w" marker-end="url(#a1)"/>
+    <path d="M1158 400 L1158 466" class="w" marker-end="url(#a1)"/>
+    <path d="M1334 400 L1334 466" class="w" marker-end="url(#a1)"/>
+    <text x="718" y="572" text-anchor="middle" class="x">No tool writes anywhere. The model has no ability to write files or make network calls of its own.</text>
+</svg>
