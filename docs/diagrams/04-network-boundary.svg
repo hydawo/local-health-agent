@@ -108,7 +108,7 @@
 
     <rect x="30" y="456" width="940" height="92" rx="10" class="coord"/>
     <text x="46" y="480" class="t">🔒 offline-check</text>
-    <text x="180" y="480" class="x">Runs ingest, OCR, aggregation, lab trends, vector search and seven of the eight agent tools with network sockets denied.</text>
+    <text x="180" y="480" class="x">Runs ingest, OCR, aggregation, lab trends, vector search and all eight agent tools with network sockets denied.</text>
     <text x="46" y="504" class="x">Kernel sandbox where available (sandbox-exec on macOS, unshare on Linux), which also covers native code like the vector store.</text>
     <text x="46" y="522" class="x">A Python-level fallback covers only what goes through Python. The two are reported separately. CI runs the check on macOS and Linux.</text>
 </svg>

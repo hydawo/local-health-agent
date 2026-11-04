@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from health_agent import offline_check
+from health_agent.agent import tools as agent_tools
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -355,6 +356,23 @@ def test_offline_check_pipeline_covers_the_literature_tool(tmp_path):
     steps = offline_check.run_pipeline(FIXTURES, tmp_path)
     names = [s["step"] for s in steps]
     assert any("search_medical_literature" in n for n in names)
+    assert all(s["ok"] for s in steps)
+
+
+def test_offline_check_pipeline_runs_every_registered_agent_tool(tmp_path):
+    """Every tool the model can call has to be exercised with the network off.
+
+    `get_workouts` was missing for as long as the check existed, so the claim
+    that the whole tool surface runs offline was being made about seven of the
+    eight. Pinning the list to `tools.TOOLS` rather than to a literal means a
+    tool added later cannot quietly reopen the hole: this fails until its step
+    exists."""
+    steps = offline_check.run_pipeline(FIXTURES, tmp_path)
+    names = [s["step"] for s in steps]
+    registered = {t.name for t in agent_tools.TOOLS}
+    missing = sorted(t for t in registered
+                     if not any(f"agent tool: {t}" == n for n in names))
+    assert not missing, f"never run with the network off: {missing}"
     assert all(s["ok"] for s in steps)
 
 
