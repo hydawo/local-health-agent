@@ -14,6 +14,14 @@ never against the previous run's published row, and that is only possible while
 the answers still exist. Run 14's capture was not kept, which is why run 15 has
 no comparison.
 
+Only a capture from the fixture bed goes in the repo. The capture records the
+sha256 of every file its index was built from, and
+`tests/test_eval_captures.py` refuses one whose sources are not files committed
+under `tests/fixtures/`, so pointing the eval at a real export and committing
+the result fails the suite instead of publishing someone's values. Run 15
+predates the stamp and its bed is gone, so it is named as the one exception in
+that test rather than given a hash nobody measured.
+
 Build the bed first, then score against it:
 
 ```bash

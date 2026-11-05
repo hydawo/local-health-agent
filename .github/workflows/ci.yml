@@ -83,9 +83,14 @@ jobs:
           # An Apple Health export renamed to something innocuous. Scoped to
           # data-shaped files: source and tests legitimately mention HealthKit
           # identifiers, and flagging those would train people to ignore this.
+          # tests/eval_captures/ is exempt because an eval capture quotes the
+          # metric names the tools returned. The exemption is a path, which on
+          # its own would also wave through a capture taken against a real
+          # export, so tests/test_eval_captures.py checks every committed
+          # capture's recorded source hashes against the committed fixtures.
           if git grep -lI --cached -e 'HKQuantityTypeIdentifier' -e '<!DOCTYPE HealthData' \
              -- '*.xml' '*.txt' '*.csv' '*.json' '*.dat' '*.log' \
-                ':!tests/fixtures/*' | grep .; then
+                ':!tests/fixtures/*' ':!tests/eval_captures/*' | grep .; then
             echo "::error::a tracked data file contains HealthKit records"
             exit 1
           fi
