@@ -1210,7 +1210,11 @@ def score(case: Case, answer) -> dict:
 # `--capture` writes every draw with its payloads; `--rescore` runs the current
 # scorer over them with no model in the loop. A captured file is as sensitive
 # as the index it came from: against a real export it holds that person's
-# values, so it belongs beside the scratch index and not in the repo.
+# values. A run over the committed fixtures holds no such thing, and those
+# captures are kept in tests/eval_captures/ so a later run has answers to
+# compare against; the capture records the hash of every file its index was
+# built from, and tests/test_eval_captures.py refuses one built from anything
+# but the fixtures. A capture from a real index stays beside that index.
 
 def _commit() -> str:
     """The working tree's commit, with a marker when it has uncommitted edits.
@@ -1232,6 +1236,28 @@ def _commit() -> str:
         return head.stdout.strip() + ("-dirty" if dirty.stdout.strip() else "")
     except (OSError, subprocess.SubprocessError):
         return ""
+
+
+def _sources(conn) -> list[dict]:
+    """What the index was built from: one row per ingested file, with its hash.
+
+    A capture is committed to this repo, so something other than a reviewer's
+    memory has to be able to say the answers in it came from the synthetic
+    fixtures and not from somebody's own export. The hash is that statement:
+    `tests/test_eval_captures.py` checks every path here against the committed
+    file at the same path, and a run against a real export records hashes that
+    match nothing in the tree.
+
+    Empty where the table cannot be read, which the test treats as unstamped
+    rather than as clean.
+    """
+    import sqlite3
+    try:
+        rows = conn.execute("SELECT path, kind, sha256 FROM source_file "
+                            "ORDER BY path").fetchall()
+    except sqlite3.Error:
+        return []
+    return [{"path": row[0], "kind": row[1], "sha256": row[2]} for row in rows]
 
 
 def capture_row(case: Case, answer, row: dict) -> dict:
@@ -1314,8 +1340,8 @@ def main() -> int:
                              "so a later scorer change can be applied to "
                              "these answers with --rescore. Holds whatever "
                              "the tools returned, so against a real index it "
-                             "is health data: keep it beside the index, not "
-                             "in the repo.")
+                             "is health data and belongs beside that index. "
+                             "A fixture run goes in tests/eval_captures/.")
     parser.add_argument("--rescore", metavar="PATH",
                         help="score a file written by --capture with today's "
                              "scorer and exit. No model, no index, no network.")
@@ -1423,6 +1449,14 @@ def main() -> int:
             print(f"{prefix} [{marks}] {row['elapsed_sec']}s, "
                   f"{row['steps']} tool call(s)", file=sys.stderr, flush=True)
 
+    # Read while the connections are open, and from both indexes: the window
+    # questions are answered against their own.
+    sources = _sources(conn)
+    if window_conn is not None:
+        for source in _sources(window_conn):
+            if source not in sources:
+                sources.append(source)
+
     conn.close()
     if window_conn is not None:
         window_conn.close()
@@ -1445,6 +1479,11 @@ def main() -> int:
                     # the shell history, and a capture that cannot say what
                     # made it is a re-score waiting to be misread.
                     "commit": started_at_commit,
+                    # Which files the index was built from. A committed
+                    # capture is checked against these hashes, so a capture
+                    # taken against a real export cannot pass as a fixture
+                    # run by sitting in the right folder.
+                    "sources": sources,
                     "elapsed_sec": total_elapsed},
             "draws": captured,
         }, indent=1, default=str))
