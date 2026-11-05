@@ -1468,7 +1468,8 @@ worth citing. The check cannot presently tell a refusal to cite from a failure
 to cite.
 
 Neither is fixed here. Both are scorer work, and changing a scorer mid-audit
-would cost the baseline above its only job.
+would cost the baseline above its only job. Both are fixed, and this run's
+answers re-scored, in "Run 15 re-scored" below.
 
 ### The provenance flag reads dirty on every captured run
 
@@ -1477,4 +1478,89 @@ for the whole run; the flag comes from `run15.log`, `run15.json` and `run15.md`,
 which the run writes into its own worktree before it reads the field. Run 14
 fixed this field being read at the end instead of the beginning. It is still
 telling the reader something untrue, just a smaller thing, and it will do so on
-every run captured this way.
+every run captured this way. Fixed below.
+
+## Run 15 re-scored: the three defects fixed, and a fourth they were hiding
+
+The three defects above are fixed, and run 15's own answers re-scored by the
+fixed checks. No model ran: the capture holds the answers and the payloads, so
+this is the comparison the capture was kept for, and the first time this file
+can show what a scorer change did rather than describe it.
+
+| | run 15, as published | re-scored |
+| --- | --- | --- |
+| number | 36/38 | 36/38 |
+| cited | 33/38 | 33/38 |
+| source named | 18/38 | 14/38 |
+| gap | 37/38 | 37/38 |
+| no diagnosis | 38/38 | 38/38 |
+| tools | 36/38 | 36/38 |
+
+Per draw: number 112/114 either way, cited 104/114 to **107/114**, gap 113/114,
+no diagnosis 114/114, tools 111/114. Source named over the draws of a question
+that has a document, 50/54 to **43/48** — both figures moved, and the
+denominator is the more important half of that.
+
+### What each fix did
+
+**A PMID is a citation, and the scorer now asks the guard what one is.** The
+`cited` column had its own pattern, `\bPMID\s*:?\s*\d+`, which wants `PMID`
+followed straight by digits. Models write `PMIDs 42401080, 42349572,
+42627058`. `guardrail.cited_pmids` has read the plural and the list since it
+was written, and says in its own docstring that two copies of this rule is how
+a scorer and a guard come to disagree. The scorer kept the second copy anyway.
+Q26's draw 1 names five papers and is the draw this recovers.
+
+**A refusal to cite is not a failure to cite.** Q23 asks what the evidence says
+about hip replacement recovery, the corpus holds nothing on it, the search
+hands back femoral bypass grafting and patellar tendinopathy, and the answer
+names what came back and attributes nothing to it. That scored 0/3 for twelve
+runs, and runs 9, 10 and 11 each wrote it down as a permanent floor on the
+column rather than as a defect in it. The exemption is conditioned on the gap
+check having measured something and passed, which means the answer named what
+the corpus does hold out of the payload, and on the question having no document
+behind it, so a lab answer cannot drop its report and collect this. Q23's three
+draws are the rest of the `cited` gain, and the run now prints how many passing
+draws passed this way: 3 of 107.
+
+**The provenance flag reads the tracked tree only.** Every capture said
+`-dirty` because the run writes its log, its report and its capture into the
+worktree and then reads the field. Run 14 fixed this field being read at the
+end of the run; this is the other half. A new untracked module no longer counts
+as a change, which is the narrower of the two wrong answers.
+
+### The fourth defect, which the first one was covering
+
+Taking the PMID pattern out of the file list exposed what it had been doing in
+the column beside `cited`. `source named` is the figure for naming a source
+file, and a PMID is not a file, so four questions were passing it on a paper:
+Q21, Q25, Q30 and one draw of Q33. That is the 18/38 to 14/38 move, and it is
+the column finally measuring what its label says.
+
+Worse, the denominator. The figure printed beside it counts the draws of a
+question "that has one", and that set was every `needs_source` question — which
+includes Q21 and Q25, both pure literature questions whose record is a paper
+and which have no document in existence to name. They were being measured
+against a file that cannot exist. The denominator is now the questions with a
+document behind them, 48 draws rather than 54, and the same `expect_tools`
+reading decides which locator `cited` requires: a PMID for a literature-only
+question, the document for everything else.
+
+That last part is also why one draw of Q33 **lost** `cited`. Q33 has to report
+an LDL of 112 and expects `get_lab_trend`; draw 1 cites a paper and no report.
+A PMID does not locate that value, and the answer had been passing on it.
+
+### What this says about reading any row in this file
+
+Four defects, and the first three were all visible in run 15's own write-up two
+days before they were fixed. Two of them had been written down three times as
+correct behaviour. The useful part is not the +3 draws: it is that `cited`
+moved 104 to 107 and `source named` 18 to 14 **on answers that did not change
+at all**. A row in the table above is a measurement of the scorer as much as of
+the model, and the only honest way to read two rows against each other is to
+re-score the older answers with the newer checks. That is now possible for
+every run from 15 onward, because the captures are committed.
+
+Run 15's re-scored report is at `tests/eval_captures/run15-rescored.md`. The
+published row stays as it was: it is what the checks of the day measured, and
+rewriting it would lose the finding.
