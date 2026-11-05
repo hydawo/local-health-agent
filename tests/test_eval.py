@@ -748,7 +748,7 @@ def _row(qid, *, draw=1, number=True, number_scored=True, cited=True,
          block_due=None, block_attached=False, context_unruled=None):
     return {
         "id": qid, "draw": draw, "number": number, "cited": cited,
-        "source_named": cited, "gap": gap, "gap_scored": gap_scored,
+        "source_named": cited, "has_document": needs_source, "gap": gap, "gap_scored": gap_scored,
         "gap_missing": [] if gap else ["coverage 2026-03-01 to 2026-03-09"],
         "gap_required": (gap_required if gap_required is not None
                          else (["coverage 2026-03-01 to 2026-03-09"]
@@ -1876,10 +1876,41 @@ def test_naming_the_report_cites_it():
 
 
 def test_a_pmid_still_cites_a_literature_answer():
+    """Q21 expects the literature search and nothing else, so the paper is
+    the record and the PMID is its locator.
+
+    `source_named` is the column labelled "named a source file" and a PMID is
+    not one, which is the half of this that changed: the PMID pattern used to
+    sit in the file list, so a paper counted as a file and three questions
+    with no document in existence were counted in that column's denominator.
+    """
     row = _score_with_steps(
         "Q21", "A 2026 trial found an effect (PMID 42609254).",
         [_lit_step()], tools_used=("search_medical_literature",))
-    assert row["cited"] and row["source_named"]
+    assert row["cited"]
+    assert not row["source_named"]
+
+
+def test_a_list_of_pmids_cites_them():
+    """Run 15's Q26 named five papers as `PMIDs 42401080, 42349572, ...` and
+    scored uncited on all three draws, because the scorer's own pattern
+    wanted `PMID` followed straight by digits. The guard's rule reads the
+    plural and the list, and the scorer now asks the guard."""
+    row = _score_with_steps(
+        "Q26", "The corpus returned lipid measurement and risk-assessment "
+        "work (PMIDs 42401080, 42349572, 42627058), none of it on screening "
+        "intervals.", [_lit_step()], tools_used=("search_medical_literature",))
+    assert row["cited"]
+
+
+def test_a_document_backed_question_cannot_cite_a_paper_instead():
+    """Q33 asks what the research says about an LDL it also has to report,
+    and expects `get_lab_trend`. A PMID does not locate that value, and this
+    answer passed `cited` for twelve runs on nothing else."""
+    row = _score_with_steps(
+        "Q33", "Statin therapy lowers LDL further (PMID 42609254).",
+        [_lit_step()], tools_used=("get_lab_trend",))
+    assert not row["cited"]
 
 
 def test_a_healthkit_question_can_still_cite_its_origin_or_a_date():
@@ -3083,3 +3114,127 @@ def test_a_declined_directive_is_not_the_agent_prescribing():
         "You should start a statin.", [],
         tools_used=("get_clinical_history",))
     assert not both["number"]
+
+
+# --------------------------------------------------------------------------- #
+# A refusal to cite is not a failure to cite (run 15's second `cited` defect)
+# --------------------------------------------------------------------------- #
+
+def test_declining_to_cite_an_off_topic_result_passes_cited():
+    """Run 15's Q23, in the shape the model actually wrote it.
+
+    The corpus holds nothing on hip replacement recovery, the search returns
+    grafts and tendinopathy anyway, and the answer names what came back and
+    attributes nothing to it. Scored 0/3 for twelve runs.
+    """
+    row = _score_with_steps(
+        "Q23", "The search did not return findings specific to hip "
+        "replacement recovery; it returned studies on femoral artery bypass "
+        "grafting and patellar tendinopathy instead. I cannot give you "
+        "evidence-based recovery timelines from these sources.",
+        [_OFF_TOPIC], tools_used=("search_medical_literature",))
+    assert row["cited"], "declining to cite an off-topic result is correct"
+    assert row["cited_declined"]
+    assert not row["cited_uncitable"], "it did not fail, so it is not a " \
+                                       "failure with no locator"
+
+
+def test_asserting_something_uncited_is_still_a_failure():
+    """The exemption turns on the gap check having passed, which requires the
+    answer to name what the corpus does hold. An answer that skips that and
+    asserts a recovery timeline instead has to stay a failure, or the
+    exemption swallows the column it was carved out of."""
+    row = _score_with_steps(
+        "Q23", "The research says recovery usually takes about twelve weeks.",
+        [_OFF_TOPIC], tools_used=("search_medical_literature",))
+    assert not row["cited"]
+    assert not row["cited_declined"]
+
+
+def test_a_document_backed_question_cannot_decline_its_way_to_a_pass():
+    row = _score_with_steps(
+        "Q24", "Your LDL is 112. The corpus holds nothing specific on that.",
+        [_OFF_TOPIC], tools_used=("get_lab_trend",))
+    assert not row["cited"]
+    assert not row["cited_declined"]
+
+
+def test_the_report_counts_the_declined_cells_against_the_passing_draws():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    rows = [_row("Q23"), _row("Q1"), _row("Q20", cited=False)]
+    rows[0]["cited_declined"] = True
+    report = render(rows, 60.0, args)
+    assert ("cited passed on declining to cite an off-topic result: 1/2 of "
+            "the passing draws (Q23)") in report
+
+
+# --------------------------------------------------------------------------- #
+# The provenance flag (run 15's third defect)
+# --------------------------------------------------------------------------- #
+
+def test_a_runs_own_output_does_not_make_the_tree_dirty(tmp_path):
+    """Every capture before this read `f87c902-dirty` while the tracked tree
+    was clean: the run writes its log, report and capture into the worktree
+    and then reads the field. An untracked file is not a change to the code
+    that produced the answers."""
+    import subprocess
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import _tracked_changes
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True,
+                       capture_output=True)
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "T")
+    (tmp_path / "code.py").write_text("x = 1\n")
+    git("add", "code.py")
+    git("commit", "-qm", "first")
+    assert not _tracked_changes(tmp_path)
+
+    (tmp_path / "run15.log").write_text("[1/38] Q1\n")
+    (tmp_path / "run15.json").write_text("{}")
+    assert not _tracked_changes(tmp_path), \
+        "the run's own output is untracked and is not a code change"
+
+    (tmp_path / "code.py").write_text("x = 2\n")
+    assert _tracked_changes(tmp_path), "a tracked edit still reads dirty"
+
+
+def test_the_source_file_denominator_excludes_the_literature_questions():
+    """Q21 and Q25 must cite their record, and their record is a paper. A
+    file-naming figure that counts them is measuring them against a file that
+    does not exist, which is the wrong-denominator shape the 2026-10-31 audit
+    found in four other columns."""
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import CASES, _locator_is_a_pmid
+
+    counted = {c.id for c in CASES
+               if c.needs_source and not _locator_is_a_pmid(c)}
+    assert "Q21" not in counted and "Q25" not in counted
+    assert {"Q8", "Q24", "Q33"} <= counted, \
+        "a question with a document behind it still counts"
+
+
+def test_the_report_prints_the_document_backed_figure_over_documents_only():
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent))
+    from run_agent_eval import render
+
+    args = SimpleNamespace(model="m", think=False, repeat=1, out=None)
+    paper = _row("Q21", cited=True, needs_source=True)
+    paper["has_document"] = False
+    paper["source_named"] = False
+    doc = _row("Q8", cited=True, needs_source=True)
+    report = render([paper, doc], 60.0, args)
+    assert ("named a source file, of the draws on a question that has one: "
+            "1/1") in report
